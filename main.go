@@ -1,0 +1,932 @@
+package main
+
+import (
+	"fmt"
+	"os"
+	"runtime"
+	"sort"
+	"strconv"
+	"strings"
+	"syscall"
+	"time"
+)
+
+func init() {
+	// На Windows переключаем консоль в UTF-8, чтобы русские буквы не крокозябрились
+	if runtime.GOOS == "windows" {
+		kernel32 := syscall.NewLazyDLL("kernel32.dll")
+		if setCP := kernel32.NewProc("SetConsoleOutputCP"); setCP != nil {
+			setCP.Call(65001) // CP_UTF8
+		}
+		if setCP := kernel32.NewProc("SetConsoleCP"); setCP != nil {
+			setCP.Call(65001) // CP_UTF8
+		}
+	}
+}
+
+const version = "1.9.0"
+
+func main() {
+	if len(os.Args) < 2 {
+		printUsage()
+		return
+	}
+
+	cfg, err := loadConfig()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Ошибка загрузки конфига: %v\n", err)
+		os.Exit(1)
+	}
+
+	store, err := newStore(cfg.StorePath)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Ошибка открытия хранилища: %v\n", err)
+		os.Exit(1)
+	}
+
+	cmd := os.Args[1]
+	args := os.Args[2:]
+
+	switch cmd {
+	case "add":
+		handleAdd(cfg, store, args)
+	case "search":
+		handleSearch(cfg, store, args)
+	case "recent":
+		handleRecent(store, args)
+	case "add-file":
+		handleAddFile(cfg, store, args)
+	case "config":
+		if err := handleConfig(args); err != nil {
+			fmt.Fprintf(os.Stderr, "Ошибка: %v\n", err)
+			os.Exit(1)
+		}
+	case "stats":
+		handleStats(store)
+	case "index":
+		handleIndex(cfg, store, args)
+	case "source":
+		handleSource(store, args)
+	case "sources":
+		handleSources(store)
+	case "version", "--version", "-v":
+		printVersion()
+	case "help", "--help", "-h":
+		printUsage()
+	case "delete", "rm":
+		handleDelete(store, args)
+	case "edit":
+		handleEdit(cfg, store, args)
+	case "retag":
+		handleRetag(store, args)
+	case "important", "imp":
+		handleImportant(store, args)
+	default:
+		fmt.Fprintf(os.Stderr, "Неизвестная команда: %s\n\n", cmd)
+		printUsage()
+		os.Exit(1)
+	}
+}
+
+func printVersion() {
+	fmt.Printf("mem-tool v%s\n", version)
+	fmt.Println("(c) 2026 Кнап Руслан Юрьевич")
+	fmt.Println("Векторная база знаний для работы с Claude")
+}
+
+func parseFlags(args []string) (positional []string, title string, tags []string, limit int, from, to string, minScore float64, vectorOnly bool, important bool) {
+	limit = 10
+	for i := 0; i < len(args); i++ {
+		switch args[i] {
+		case "-title":
+			if i+1 < len(args) {
+				i++
+				title = args[i]
+			}
+		case "-tags":
+			if i+1 < len(args) {
+				i++
+				tags = strings.Split(args[i], ",")
+				for j := range tags {
+					tags[j] = strings.TrimSpace(tags[j])
+				}
+			}
+		case "-limit":
+			if i+1 < len(args) {
+				i++
+				if n, err := strconv.Atoi(args[i]); err == nil && n > 0 {
+					limit = n
+				}
+			}
+		case "-from":
+			if i+1 < len(args) {
+				i++
+				from = args[i]
+			}
+		case "-to":
+			if i+1 < len(args) {
+				i++
+				to = args[i]
+			}
+		case "-min-score":
+			if i+1 < len(args) {
+				i++
+				if n, err := strconv.ParseFloat(args[i], 64); err == nil && n >= 0 && n <= 1 {
+					minScore = n
+				}
+			}
+		case "-vector-only":
+			vectorOnly = true
+		case "-important":
+			important = true
+		default:
+			positional = append(positional, args[i])
+		}
+	}
+	return
+}
+
+func handleAdd(cfg *Config, store *Store, args []string) {
+	positional, title, tags, _, _, _, _, _, important := parseFlags(args)
+	if len(positional) == 0 {
+		fmt.Fprintln(os.Stderr, "Ошибка: укажи текст для сохранения")
+		fmt.Fprintln(os.Stderr, "Пример: mem add \"какой-то факт\" -title \"Название\" -tags \"термины,проект\" -important")
+		os.Exit(1)
+	}
+
+	text := strings.Join(positional, " ")
+	fmt.Printf(">> Эмбеддинг через %s... ", cfg.Backend)
+
+	embedding, err := getEmbedding(cfg, text)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "\nОшибка: %v\n", err)
+		os.Exit(1)
+	}
+	fmt.Printf("получен вектор %d измерений\n", len(embedding))
+
+	entry, err := store.Add(text, title, tags, cfg.Backend, embedding, important)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Ошибка сохранения: %v\n", err)
+		os.Exit(1)
+	}
+
+	mark := ""
+	if important {
+		mark = " [!]"
+	}
+	fmt.Printf("[OK] Запись #%d сохранена%s\n", entry.ID, mark)
+}
+
+func handleSearch(cfg *Config, store *Store, args []string) {
+	positional, _, tags, limit, from, to, minScore, vectorOnly, _ := parseFlags(args)
+	if len(positional) == 0 {
+		fmt.Fprintln(os.Stderr, "Ошибка: укажи поисковый запрос")
+		fmt.Fprintln(os.Stderr, "Пример: mem search \"IP сервера\" -tags \"инфраструктура\" -from 2026-06-01")
+		os.Exit(1)
+	}
+
+	query := strings.Join(positional, " ")
+	fmt.Printf(">> Поиск через %s... ", cfg.Backend)
+
+	queryVec, err := getEmbedding(cfg, query)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "\nОшибка эмбеддинга: %v\n", err)
+		os.Exit(1)
+	}
+	fmt.Printf("вектор %d измерений\n", len(queryVec))
+
+	results, err := store.Search(queryVec, cfg.Backend, limit)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Ошибка поиска: %v\n", err)
+		os.Exit(1)
+	}
+
+	// Фильтрация по тегам
+	if len(tags) > 0 {
+		var filtered []Entry
+		for _, r := range results {
+			if hasAnyTag(r, tags) {
+				filtered = append(filtered, r)
+			}
+		}
+		results = filtered
+		fmt.Printf("[TAG] Фильтр по тегам: %s\n", strings.Join(tags, ", "))
+	}
+
+	// Фильтрация по дате
+	if from != "" || to != "" {
+		var filtered []Entry
+		for _, r := range results {
+			if matchesDateRange(r, from, to) {
+				filtered = append(filtered, r)
+			}
+		}
+		results = filtered
+		dateRange := ""
+		if from != "" {
+			dateRange = "от " + from
+		}
+		if to != "" {
+			if dateRange != "" {
+				dateRange += " "
+			}
+			dateRange += "до " + to
+		}
+		fmt.Printf("[DATE] Фильтр по дате: %s\n", dateRange)
+	}
+
+	// Гибридный буст: полнотекстовые бонусы к векторным оценкам
+	if !vectorOnly && len(results) > 0 {
+		hybridCount := 0
+		for i := range results {
+			boosted := hybridBoost(results[i], query, results[i].Score)
+			if boosted > results[i].Score {
+				results[i].Score = boosted
+				hybridCount++
+			}
+		}
+		sort.Slice(results, func(i, j int) bool {
+			return results[i].Score > results[j].Score
+		})
+		fmt.Printf("[HYBRID] Гибридный поиск: векторный + полнотекстовый (буст у %d/%d)\n",
+			hybridCount, len(results))
+	} else if vectorOnly && len(results) > 0 {
+		fmt.Printf("[VECTOR] Только векторный поиск\n")
+	}
+
+	// Повторное ранжирование: свежесть + совпадение тегов + важность
+	if len(results) > 0 {
+		rerankCount := reRankResults(results, query)
+		if rerankCount > 0 {
+			sort.Slice(results, func(i, j int) bool {
+				return results[i].Score > results[j].Score
+			})
+			fmt.Printf("[RERANK] Повторное ранжирование: буст у %d/%d записей\n",
+				rerankCount, len(results))
+		}
+	}
+
+	// Фильтрация по порогу релевантности (после всех бустов)
+	if minScore > 0 {
+		var filtered []Entry
+		for _, r := range results {
+			if r.Score >= minScore {
+				filtered = append(filtered, r)
+			}
+		}
+		results = filtered
+		fmt.Printf("[SCORE] Порог релевантности: >= %.0f%%\n", minScore*100)
+	}
+
+	if len(results) == 0 {
+		fmt.Println("[-] Ничего не найдено")
+		return
+	}
+
+	fmt.Println()
+	for i, r := range results {
+		pct := r.Score * 100
+		var bar string
+		switch {
+		case pct > 90:
+			bar = "[*]"
+		case pct > 70:
+			bar = "[~]"
+		default:
+			bar = "[ ]"
+		}
+		// Форматируем дату
+		dateStr := r.Created
+		if t, err := time.Parse(time.RFC3339, r.Created); err == nil {
+			dateStr = t.Format("2006-01-02")
+		}
+
+		title := r.Title
+		if title == "" {
+			title = "(без заголовка)"
+		}
+
+		impMark := ""
+		if r.Important {
+			impMark = " [!]"
+		}
+		fmt.Printf("%s #%d [%.0f%%] %s (%s)%s\n", bar, r.ID, pct, title, dateStr, impMark)
+		fmt.Printf("   %s\n", r.Text)
+
+		// Показываем источник, если это чанк документа
+		if r.SourceFile != "" {
+			ref := r.SourceFile
+			if r.ChunkLabel != "" {
+				ref += " | " + r.ChunkLabel
+			}
+			if r.TotalChunks > 0 {
+				ref += fmt.Sprintf(" | %d/%d", r.ChunkIndex+1, r.TotalChunks)
+			}
+			fmt.Printf("   [FILE] %s\n", ref)
+		}
+
+		if len(r.Tags) > 0 {
+			fmt.Printf("   [TAG] %s\n", strings.Join(r.Tags, ", "))
+		}
+		if i < len(results)-1 {
+			fmt.Println()
+		}
+	}
+}
+
+// hasAnyTag проверяет, содержит ли запись хотя бы один из указанных тегов
+func hasAnyTag(e Entry, filterTags []string) bool {
+	for _, ft := range filterTags {
+		ft = strings.ToLower(strings.TrimSpace(ft))
+		for _, et := range e.Tags {
+			if strings.ToLower(strings.TrimSpace(et)) == ft {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// matchesDateRange проверяет, попадает ли дата создания записи в диапазон
+func matchesDateRange(e Entry, from, to string) bool {
+	t, err := time.Parse(time.RFC3339, e.Created)
+	if err != nil {
+		return true // не можем распарсить — пропускаем
+	}
+
+	if from != "" {
+		fromTime, err := time.Parse("2006-01-02", from)
+		if err == nil && t.Before(fromTime) {
+			return false
+		}
+	}
+
+	if to != "" {
+		// Конец дня to, чтобы записи за эту дату тоже входили
+		toTime, err := time.Parse("2006-01-02", to)
+		if err == nil {
+			toEnd := toTime.Add(24*time.Hour - time.Second)
+			if t.After(toEnd) {
+				return false
+			}
+		}
+	}
+
+	return true
+}
+
+// hybridBoost добавляет полнотекстовые бонусы к векторной оценке:
+// +0.15 если запрос найден в тексте записи
+// +0.30 если запрос найден в заголовке
+// +0.20 если запрос найден в тегах
+// Итоговая оценка не превышает 1.0
+func hybridBoost(e Entry, query string, baseScore float64) float64 {
+	q := strings.ToLower(strings.TrimSpace(query))
+	if q == "" {
+		return baseScore
+	}
+
+	boost := 0.0
+
+	if strings.Contains(strings.ToLower(e.Text), q) {
+		boost += 0.15
+	}
+
+	if strings.Contains(strings.ToLower(e.Title), q) {
+		boost += 0.30
+	}
+
+	for _, tag := range e.Tags {
+		if strings.Contains(strings.ToLower(tag), q) {
+			boost += 0.20
+			break
+		}
+	}
+
+	if boost == 0 {
+		return baseScore
+	}
+
+	result := baseScore + boost
+	if result > 1.0 {
+		result = 1.0
+	}
+	return result
+}
+
+// reRankResults применяет повышающие коэффициенты:
+// - Freshness: записи младше 7 дней → *1.05
+// - TagMatch: теги пересекаются со словами запроса → *1.10
+// - Important: важные записи → *1.15
+// Возвращает количество записей, получивших буст
+func reRankResults(results []Entry, query string) int {
+	if len(results) == 0 {
+		return 0
+	}
+
+	now := time.Now()
+	queryWords := strings.Fields(strings.ToLower(query))
+	count := 0
+
+	for i := range results {
+		boost := 1.0
+		hasBoost := false
+
+		// Freshness boost: записи младше 7 дней
+		if t, err := time.Parse(time.RFC3339, results[i].Created); err == nil {
+			if now.Sub(t) < 7*24*time.Hour {
+				boost *= 1.05
+				hasBoost = true
+			}
+		}
+
+		// Tag match boost: совпадение тегов со словами запроса
+		for _, tag := range results[i].Tags {
+			tagLower := strings.ToLower(tag)
+			for _, word := range queryWords {
+				if tagLower == word || strings.Contains(tagLower, word) || strings.Contains(word, tagLower) {
+					boost *= 1.10
+					hasBoost = true
+					goto nextEntry
+				}
+			}
+		}
+
+	nextEntry:
+		// Important boost: важные записи поднимаем на 15%
+		if results[i].Important {
+			boost *= 1.15
+			hasBoost = true
+		}
+
+		if hasBoost {
+			newScore := results[i].Score * boost
+			if newScore > 1.0 {
+				newScore = 1.0
+			}
+			results[i].Score = newScore
+			count++
+		}
+	}
+
+	return count
+}
+
+func handleRecent(store *Store, args []string) {
+	_, _, _, limit, _, _, _, _, _ := parseFlags(args)
+
+	entries, err := store.Recent(limit)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Ошибка: %v\n", err)
+		os.Exit(1)
+	}
+
+	if len(entries) == 0 {
+		fmt.Println("[-] База пуста. Начни с: mem add \"какой-то факт\"")
+		return
+	}
+
+	fmt.Printf(">> Последние %d записей:\n\n", len(entries))
+	for i, e := range entries {
+		display := e.Title
+		if display == "" {
+			display = e.Text
+			if len([]rune(display)) > 120 {
+				display = string([]rune(display)[:120]) + "..."
+			}
+		}
+		ref := ""
+		if e.SourceFile != "" {
+			ref = fmt.Sprintf(" [%s]", e.SourceFile)
+		}
+		tagStr := ""
+		if len(e.Tags) > 0 {
+			tagStr = " (" + strings.Join(e.Tags, ", ") + ")"
+		}
+		impMark := ""
+		if e.Important {
+			impMark = " [!]"
+		}
+		fmt.Printf("  #%d%s%s%s  %s\n", e.ID, tagStr, ref, impMark, display)
+		if i < len(entries)-1 {
+			fmt.Println()
+		}
+	}
+}
+
+func handleAddFile(cfg *Config, store *Store, args []string) {
+	positional, title, tags, _, _, _, _, _, important := parseFlags(args)
+	if len(positional) == 0 {
+		fmt.Fprintln(os.Stderr, "Ошибка: укажи путь к файлу")
+		fmt.Fprintln(os.Stderr, "Пример: mem add-file ./notes.txt -tags \"документация\"")
+		os.Exit(1)
+	}
+
+	path := positional[0]
+	data, err := os.ReadFile(path)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Ошибка чтения файла %s: %v\n", path, err)
+		os.Exit(1)
+	}
+
+	text := strings.TrimSpace(string(data))
+	if text == "" {
+		fmt.Fprintln(os.Stderr, "Ошибка: файл пуст")
+		os.Exit(1)
+	}
+
+	displayText := text
+	if len([]rune(displayText)) > 500 {
+		displayText = string([]rune(displayText)[:500]) + "..."
+	}
+
+	fmt.Printf("[FILE] Файл: %s (%d символов)\n", path, len(text))
+
+	// Используем чанкинг для больших файлов
+	chunks := ChunkDocument(text, cfg.Chunking.MaxSize, cfg.Chunking.Overlap, cfg.Chunking.Strategy)
+	if len(chunks) > 1 {
+		fmt.Printf("[CUT] Разбито на %d чанков (max %d символов, стратегия: %s)\n",
+			len(chunks), cfg.Chunking.MaxSize, cfg.Chunking.Strategy)
+
+		fileName := path
+		if idx := strings.LastIndexAny(fileName, "/\\"); idx >= 0 {
+			fileName = fileName[idx+1:]
+		}
+
+		for i, chunk := range chunks {
+			fmt.Printf("   [%d/%d] Эмбеддинг... ", i+1, len(chunks))
+			embedding, err := getEmbedding(cfg, chunk.Text)
+			if err != nil {
+				fmt.Printf("[ERR] %v\n", err)
+				continue
+			}
+			fmt.Printf("вектор %d [OK]\n", len(embedding))
+
+			chunkTitle := fileName
+			if chunk.Label != "" {
+				chunkTitle = fileName + ": " + chunk.Label
+			}
+			_, err = store.AddChunk(chunk.Text, chunkTitle, tags, cfg.Backend, embedding,
+				fileName, chunk.Label, chunk.Index, len(chunks), important)
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "   [ERR] Ошибка: %v\n", err)
+			}
+		}
+		fmt.Printf("[OK] Файл сохранён как %d чанков\n", len(chunks))
+	} else {
+		// Маленький файл — один эмбеддинг, как раньше
+		fmt.Printf(">> Эмбеддинг через %s... ", cfg.Backend)
+		embedding, err := getEmbedding(cfg, text)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "\nОшибка: %v\n", err)
+			os.Exit(1)
+		}
+		fmt.Printf("получен вектор %d измерений\n", len(embedding))
+
+		entry, err := store.Add(displayText, title, tags, cfg.Backend, embedding, important)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Ошибка сохранения: %v\n", err)
+			os.Exit(1)
+		}
+		mark := ""
+		if important {
+			mark = " [!]"
+		}
+		fmt.Printf("[OK] Файл сохранён как запись #%d%s\n", entry.ID, mark)
+	}
+}
+
+func handleIndex(cfg *Config, store *Store, args []string) {
+	if len(args) == 0 {
+		fmt.Fprintln(os.Stderr, "Ошибка: укажи путь к файлу или папке")
+		fmt.Fprintln(os.Stderr, "Пример: mem index C:\\МоиДокументы\\")
+		os.Exit(1)
+	}
+
+	path := args[0]
+	results, err := IndexDirectory(cfg, store, path)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Ошибка: %v\n", err)
+		os.Exit(1)
+	}
+
+	// Подводим итог
+	total := 0
+	errors := 0
+	for _, r := range results {
+		total += r.Chunks
+		if r.Err != nil {
+			errors++
+		}
+	}
+
+}
+
+func handleSource(store *Store, args []string) {
+	if len(args) == 0 {
+		fmt.Fprintln(os.Stderr, "Ошибка: укажи номер записи")
+		fmt.Fprintln(os.Stderr, "Пример: mem source 15")
+		os.Exit(1)
+	}
+
+	id, err := strconv.ParseInt(args[0], 10, 64)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Ошибка: '%s' не число\n", args[0])
+		os.Exit(1)
+	}
+
+	entry, err := store.GetByID(id)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Ошибка: %v\n", err)
+		os.Exit(1)
+	}
+
+	impMark := ""
+	if entry.Important {
+		impMark = " [!]"
+	}
+	title := entry.Title
+	if title == "" {
+		title = "(без заголовка)"
+	}
+	fmt.Printf("[NOTE] Запись #%d: %s%s\n", entry.ID, title, impMark)
+	fmt.Println(strings.Repeat("---", 20))
+
+	if entry.SourceFile != "" {
+		fmt.Printf("[FILE] Файл:     %s\n", entry.SourceFile)
+		if entry.ChunkLabel != "" {
+			fmt.Printf("[SEC]  Раздел:   %s\n", entry.ChunkLabel)
+		}
+		if entry.TotalChunks > 0 {
+			fmt.Printf("[CHUNK] Чанк:     %d/%d\n", entry.ChunkIndex+1, entry.TotalChunks)
+		}
+		fmt.Println(strings.Repeat("---", 20))
+	}
+
+	fmt.Printf("\n%s\n\n", entry.Text)
+
+	if len(entry.Tags) > 0 {
+		fmt.Printf("[TAG]  Теги: %s\n", strings.Join(entry.Tags, ", "))
+	}
+	fmt.Printf("[DATE] Дата: %s\n", entry.Created)
+	fmt.Printf("[CFG]  Бэкенд: %s (%d измерений)\n", entry.Backend, entry.Dims)
+}
+
+func handleSources(store *Store) {
+	IndexSummary(store)
+}
+
+func handleStats(store *Store) {
+	stats := store.Stats()
+
+	fmt.Println("[STATS] Статистика базы памяти")
+	fmt.Println(strings.Repeat("--", 25))
+	fmt.Printf("  Всего записей: %d\n", stats["total_entries"])
+	fmt.Printf("  Из них чанков: %d\n", stats["doc_chunks"])
+	fmt.Printf("  Расположение:  %s\n", stats["store_location"])
+	if byBackend, ok := stats["by_backend"].(map[string]int); ok {
+		fmt.Println("  По бэкендам:")
+		for backend, count := range byBackend {
+			fmt.Printf("    %s: %d\n", backend, count)
+		}
+	}
+}
+
+// handleDelete удаляет запись по ID
+func handleDelete(store *Store, args []string) {
+	if len(args) == 0 {
+		fmt.Fprintln(os.Stderr, "Ошибка: укажи номер записи для удаления")
+		fmt.Fprintln(os.Stderr, "Пример: mem delete 15")
+		os.Exit(1)
+	}
+
+	id, err := strconv.ParseInt(args[0], 10, 64)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Ошибка: '%s' не число\n", args[0])
+		os.Exit(1)
+	}
+
+	if err := store.DeleteById(id); err != nil {
+		fmt.Fprintf(os.Stderr, "Ошибка: %v\n", err)
+		os.Exit(1)
+	}
+
+	fmt.Printf("[OK] Запись #%d удалена\n", id)
+}
+
+// handleEdit изменяет текст и/или заголовок записи
+func handleEdit(cfg *Config, store *Store, args []string) {
+	if len(args) == 0 {
+		fmt.Fprintln(os.Stderr, "Ошибка: укажи номер записи и новый текст")
+		fmt.Fprintln(os.Stderr, "Пример: mem edit 15 \"новый текст\"")
+		fmt.Fprintln(os.Stderr, "Пример: mem edit 15 -title \"Новый заголовок\"")
+		os.Exit(1)
+	}
+
+	id, err := strconv.ParseInt(args[0], 10, 64)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Ошибка: '%s' не число\n", args[0])
+		os.Exit(1)
+	}
+
+	// Парсим остальные аргументы (после ID)
+	rest := args[1:]
+	positionals, editTitle, _, _, _, _, _, _, _ := parseFlags(rest)
+	editText := strings.Join(positionals, " ")
+
+	if editText == "" && editTitle == "" {
+		fmt.Fprintln(os.Stderr, "Ошибка: укажи новый текст или заголовок (-title)")
+		fmt.Fprintln(os.Stderr, "Пример: mem edit 15 \"новый текст\"")
+		os.Exit(1)
+	}
+
+	// Получаем текущую запись
+	entry, err := store.GetByID(id)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Ошибка: %v\n", err)
+		os.Exit(1)
+	}
+
+	// Если текст не указан — оставляем старый
+	if editText == "" {
+		editText = entry.Text
+	}
+	// Если заголовок не указан — оставляем старый
+	if editTitle == "" {
+		editTitle = entry.Title
+	}
+
+	// Если текст изменился — пересчитываем эмбеддинг
+	if editText != entry.Text {
+		fmt.Printf(">> Новый эмбеддинг через %s... ", cfg.Backend)
+		embedding, err := getEmbedding(cfg, editText)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "\nОшибка эмбеддинга: %v\n", err)
+			os.Exit(1)
+		}
+		fmt.Printf("вектор %d измерений\n", len(embedding))
+
+		if err := store.UpdateById(id, editText, editTitle, entry.Tags, embedding); err != nil {
+			fmt.Fprintf(os.Stderr, "Ошибка: %v\n", err)
+			os.Exit(1)
+		}
+	} else {
+		// Текст не менялся — эмбеддинг остаётся прежним
+		if err := store.UpdateById(id, editText, editTitle, entry.Tags, nil); err != nil {
+			fmt.Fprintf(os.Stderr, "Ошибка: %v\n", err)
+			os.Exit(1)
+		}
+	}
+
+	fmt.Printf("[OK] Запись #%d обновлена\n", id)
+}
+
+// handleRetag изменяет теги записи
+func handleRetag(store *Store, args []string) {
+	if len(args) == 0 {
+		fmt.Fprintln(os.Stderr, "Ошибка: укажи номер записи и новые теги")
+		fmt.Fprintln(os.Stderr, "Пример: mem retag 15 -tags \"новый,тег\"")
+		os.Exit(1)
+	}
+
+	id, err := strconv.ParseInt(args[0], 10, 64)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Ошибка: '%s' не число\n", args[0])
+		os.Exit(1)
+	}
+
+	_, _, newTags, _, _, _, _, _, _ := parseFlags(args[1:])
+	if len(newTags) == 0 {
+		fmt.Fprintln(os.Stderr, "Ошибка: укажи -tags \"новые,теги\"")
+		fmt.Fprintln(os.Stderr, "Пример: mem retag 15 -tags \"сервер,ubuntu\"")
+		os.Exit(1)
+	}
+
+	// Получаем текущую запись, чтобы сохранить текст и заголовок
+	entry, err := store.GetByID(id)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Ошибка: %v\n", err)
+		os.Exit(1)
+	}
+
+	if err := store.UpdateById(id, entry.Text, entry.Title, newTags, nil); err != nil {
+		fmt.Fprintf(os.Stderr, "Ошибка: %v\n", err)
+		os.Exit(1)
+	}
+
+	fmt.Printf("[OK] Теги записи #%d обновлены: %s\n", id, strings.Join(newTags, ", "))
+}
+
+// handleImportant переключает флаг важности записи
+func handleImportant(store *Store, args []string) {
+	if len(args) == 0 {
+		fmt.Fprintln(os.Stderr, "Ошибка: укажи номер записи")
+		fmt.Fprintln(os.Stderr, "Пример: mem important 15")
+		os.Exit(1)
+	}
+
+	id, err := strconv.ParseInt(args[0], 10, 64)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Ошибка: '%s' не число\n", args[0])
+		os.Exit(1)
+	}
+
+	entry, err := store.ToggleImportant(id)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Ошибка: %v\n", err)
+		os.Exit(1)
+	}
+
+	status := "⭐ важная"
+	if !entry.Important {
+		status = "обычная"
+	}
+	fmt.Printf("[OK] Запись #%d помечена как %s\n", id, status)
+}
+
+func printUsage() {
+	printVersion()
+	fmt.Println()
+	fmt.Println(`Использование:
+  mem add <текст> [-title "Название"] [-tags "тег1,тег2"] [-important]
+      Сохранить новую запись в базу. -important — пометить как важную.
+
+  mem search <запрос> [-limit N] [-tags "тег1,тег2"] [-from 2026-01-01] [-to 2026-07-01] [-min-score 0.5] [-vector-only]
+      Найти записи, похожие по смыслу.
+      По умолчанию гибридный поиск + реранжирование (свежесть, теги, важность).
+      -vector-only — отключить полнотекстовый буст, только векторы.
+
+  mem recent [-limit N]
+      Показать последние записи
+
+  mem add-file <путь_к_файлу> [-tags "тег1,тег2"] [-important]
+      Сохранить содержимое файла в базу (с чанкингом)
+
+  mem index <путь_к_папке_или_файлу>
+      Проиндексировать все файлы в папке (.txt, .md, .pdf, .csv, .json)
+
+  mem source <id>
+      Показать детали записи (источник, контекст)
+
+  mem sources
+      Список всех проиндексированных документов
+
+  mem delete <id>
+      Удалить запись из базы
+
+  mem edit <id> <новый текст> [-title "Новый заголовок"]
+      Изменить текст и/или заголовок записи
+
+  mem retag <id> -tags "новые,теги"
+      Изменить теги записи
+
+  mem important <id>
+      Переключить флаг важности записи
+
+  mem config
+      Показать текущую конфигурацию
+
+  mem config set-backend <ollama|polza>
+      Переключить бэкенд эмбеддингов
+
+  mem config set-chunk-size <символов>
+      Размер чанка (100-10000, умолч. 1000)
+
+  mem config set-chunk-overlap <символов>
+      Перекрытие чанков (0-1000, умолч. 100)
+
+  mem config set-chunk-strategy <paragraph|sentence|fixed>
+      Стратегия разбивки документа на чанки
+
+  mem config set-polza-key <api_key>
+      Установить API ключ Polza AI
+
+  mem config set-polza-model <model>
+      Установить модель Polza AI
+
+  mem config set-ollama-model <model>
+      Установить модель Ollama (по умолч. bge-m3)
+
+  mem stats
+      Статистика базы
+
+  mem sources
+      Список проиндексированных документов
+
+Примеры:
+  mem add "Сервер: 157.22.196.67"
+  mem add "Важный пароль" -important
+  mem search "IP сервера" -tags "инфраструктура"
+  mem search "архитектура" -from 2026-07-01 -to 2026-07-26
+  mem search "сервер" -min-score 0.5 -vector-only
+  mem add-file ./документация.txt
+  mem index ./проекты/
+  mem edit 1 "Обновлённый текст сервера"
+  mem retag 5 -tags "сервер,ubuntu,важно"
+  mem important 5
+  mem delete 12
+  mem config set-chunk-size 800
+  mem config set-chunk-strategy sentence
+
+Больше информации: mem version`)
+}

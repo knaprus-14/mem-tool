@@ -27,9 +27,9 @@ func memConfigPath() string {
 	return filepath.Join(memDirName, "config.json")
 }
 
-// memStorePath возвращает путь к .mem/store.jsonl
+// memStorePath возвращает путь к .mem/store.db (SQLite-база)
 func memStorePath() string {
-	return filepath.Join(memDirName, "store.jsonl")
+	return filepath.Join(memDirName, "store.db")
 }
 
 // memMetaPath возвращает путь к .mem/meta.json
@@ -64,8 +64,9 @@ func defaultLocalConfig() *Config {
 	}
 }
 
-// initMem создаёт .mem/ с пустой базой (config.json, store.jsonl, meta.json)
-// Если .mem/ уже существует — возвращает ошибку
+// initMem создаёт .mem/ с дефолтным config.json и meta.json.
+// SQLite-база store.db создаётся автоматически при первом openStore.
+// Если .mem/ уже существует — возвращает ошибку.
 func initMem() error {
 	if memExists() {
 		return fmt.Errorf(".mem/ уже существует в текущей папке")
@@ -87,14 +88,6 @@ func initMem() error {
 		os.RemoveAll(memDirName)
 		return fmt.Errorf("не удалось записать %s: %w", memConfigPath(), err)
 	}
-
-	// Создаём пустой store.jsonl
-	f, err := os.Create(memStorePath())
-	if err != nil {
-		os.RemoveAll(memDirName)
-		return fmt.Errorf("не удалось создать %s: %w", memStorePath(), err)
-	}
-	f.Close()
 
 	// Пишем meta.json с именем = basename(cwd) и датой создания
 	cwd, _ := os.Getwd()

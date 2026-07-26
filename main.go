@@ -25,7 +25,7 @@ func init() {
 	}
 }
 
-const version = "1.10.0"
+const version = "1.11.0"
 
 // cmdRequiresDB — команды, для работы которых нужна локальная база .mem/
 var cmdRequiresDB = map[string]bool{
@@ -149,7 +149,7 @@ func handleInit() {
 	cwd, _ := os.Getwd()
 	fmt.Println("[OK] Создана локальная база .mem/")
 	fmt.Println("  ├── config.json — настройки (бэкенд, модель, чанкинг)")
-	fmt.Println("  ├── store.jsonl — записи (создаётся при первом add)")
+	fmt.Println("  ├── store.db    — записи (SQLite, создаётся при первом add)")
 	fmt.Println("  └── meta.json   — метаданные (имя базы, дата создания)")
 	fmt.Printf("  Имя базы: %s\n", filepath.Base(cwd))
 	fmt.Println()

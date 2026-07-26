@@ -45,13 +45,14 @@ type Store struct {
 	next int64
 }
 
-func newStore(dir string) (*Store, error) {
-	if err := os.MkdirAll(dir, 0700); err != nil {
+func newStore(path string) (*Store, error) {
+	// Создаём родительскую директорию, если её нет
+	if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
 		return nil, err
 	}
 	s := &Store{
-		dir:  dir,
-		path: filepath.Join(dir, "store.jsonl"),
+		dir:  filepath.Dir(path),
+		path: path,
 	}
 	if err := s.load(); err != nil {
 		return nil, err

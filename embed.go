@@ -25,15 +25,15 @@ type ollamaEmbedResponse struct {
 	Embedding []float32 `json:"embedding"`
 }
 
-func embedOllama(cfg *Config, text string) ([]float32, error) {
+func embedOllama(s *EmbedSettings, text string) ([]float32, error) {
 	// Защита от превышения контекста модели
 	if utf8.RuneCountInString(text) > maxEmbedChars {
 		text = string([]rune(text)[:maxEmbedChars])
 	}
 
-	url := cfg.Ollama.BaseURL + "/api/embeddings"
+	url := s.Ollama.BaseURL + "/api/embeddings"
 	req := ollamaEmbedRequest{
-		Model:  cfg.Ollama.Model,
+		Model:  s.Ollama.Model,
 		Prompt: text,
 	}
 	body, _ := json.Marshal(req)
@@ -79,8 +79,8 @@ type polzaEmbedResponse struct {
 	} `json:"usage"`
 }
 
-func embedPolza(cfg *Config, text string) ([]float32, error) {
-	if cfg.Polza.APIKey == "" {
+func embedPolza(s *EmbedSettings, text string) ([]float32, error) {
+	if s.Polza.APIKey == "" {
 		return nil, fmt.Errorf("polza: не указан API ключ. Настрой: mem config set-polza-key <key>")
 	}
 
@@ -89,9 +89,9 @@ func embedPolza(cfg *Config, text string) ([]float32, error) {
 		text = string([]rune(text)[:maxEmbedChars])
 	}
 
-	url := cfg.Polza.BaseURL + "/embeddings"
+	url := s.Polza.BaseURL + "/embeddings"
 	req := polzaEmbedRequest{
-		Model: cfg.Polza.Model,
+		Model: s.Polza.Model,
 		Input: text,
 	}
 	body, _ := json.Marshal(req)
@@ -101,7 +101,7 @@ func embedPolza(cfg *Config, text string) ([]float32, error) {
 		return nil, fmt.Errorf("polza: ошибка запроса: %w", err)
 	}
 	httpReq.Header.Set("Content-Type", "application/json")
-	httpReq.Header.Set("Authorization", "Bearer "+cfg.Polza.APIKey)
+	httpReq.Header.Set("Authorization", "Bearer "+s.Polza.APIKey)
 
 	client := &http.Client{}
 	resp, err := client.Do(httpReq)
@@ -129,13 +129,21 @@ func embedPolza(cfg *Config, text string) ([]float32, error) {
 
 // === Общий интерфейс ===
 
-func getEmbedding(cfg *Config, text string) ([]float32, error) {
-	switch cfg.Backend {
+// EmbedSettings — настройки эмбеддинга, отвязанные от глобального Config.
+// Позволяет использовать разные модели для разных баз.
+type EmbedSettings struct {
+	Backend string
+	Ollama  OllamaConfig
+	Polza   PolzaConfig
+}
+
+func getEmbedding(s *EmbedSettings, text string) ([]float32, error) {
+	switch s.Backend {
 	case "ollama":
-		return embedOllama(cfg, text)
+		return embedOllama(s, text)
 	case "polza":
-		return embedPolza(cfg, text)
+		return embedPolza(s, text)
 	default:
-		return nil, fmt.Errorf("неизвестный бэкенд: %s (используй ollama или polza)", cfg.Backend)
+		return nil, fmt.Errorf("неизвестный бэкенд: %s (используй ollama или polza)", s.Backend)
 	}
 }

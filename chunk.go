@@ -91,7 +91,34 @@ func chunkByParagraph(text string, maxSize, overlap int) []Chunk {
 			subSize := 0
 			for _, sent := range sentences {
 				sent = strings.TrimSpace(sent)
+				if sent == "" {
+					continue
+				}
 				sentSize := utf8.RuneCountInString(sent)
+
+				// Если предложение само больше maxSize — режем фиксированно
+				if sentSize > maxSize {
+					// Сначала сбрасываем накопленное в subBuilder
+					if subBuilder.Len() > 0 {
+						chunks = append(chunks, Chunk{
+							Text:  strings.TrimSpace(subBuilder.String()),
+							Label: firstLine(subBuilder.String()),
+							Index: chunkIdx,
+						})
+						chunkIdx++
+						subBuilder.Reset()
+						subSize = 0
+					}
+					// Фиксированная нарезка этого предложения
+					subChunks := chunkByFixed(sent, maxSize, 0)
+					for _, sc := range subChunks {
+						sc.Index = chunkIdx
+						chunkIdx++
+						chunks = append(chunks, sc)
+					}
+					continue
+				}
+
 				if subSize+sentSize > maxSize && subBuilder.Len() > 0 {
 					chunks = append(chunks, Chunk{
 						Text:  strings.TrimSpace(subBuilder.String()),
@@ -172,6 +199,27 @@ func chunkBySentence(text string, maxSize, overlap int) []Chunk {
 			continue
 		}
 		sentSize := utf8.RuneCountInString(sent)
+
+		// Если предложение больше maxSize — режем фиксированно
+		if sentSize > maxSize {
+			if current.Len() > 0 {
+				chunks = append(chunks, Chunk{
+					Text:  strings.TrimSpace(current.String()),
+					Label: firstLine(current.String()),
+					Index: chunkIdx,
+				})
+				chunkIdx++
+				current.Reset()
+				currentSize = 0
+			}
+			subChunks := chunkByFixed(sent, maxSize, 0)
+			for _, sc := range subChunks {
+				sc.Index = chunkIdx
+				chunkIdx++
+				chunks = append(chunks, sc)
+			}
+			continue
+		}
 
 		if currentSize+sentSize+1 > maxSize && current.Len() > 0 {
 			chunks = append(chunks, Chunk{

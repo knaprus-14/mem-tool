@@ -6,7 +6,13 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"unicode/utf8"
 )
+
+// maxEmbedChars — максимальное количество символов (рун) для одного эмбеддинга.
+// bge-m3 через Ollama имеет лимит ~2000 токенов для embedding endpoint.
+// Ставим 2000 как безопасный предел.
+const maxEmbedChars = 2000
 
 // === Ollama ===
 
@@ -20,6 +26,11 @@ type ollamaEmbedResponse struct {
 }
 
 func embedOllama(cfg *Config, text string) ([]float32, error) {
+	// Защита от превышения контекста модели
+	if utf8.RuneCountInString(text) > maxEmbedChars {
+		text = string([]rune(text)[:maxEmbedChars])
+	}
+
 	url := cfg.Ollama.BaseURL + "/api/embeddings"
 	req := ollamaEmbedRequest{
 		Model:  cfg.Ollama.Model,
@@ -71,6 +82,11 @@ type polzaEmbedResponse struct {
 func embedPolza(cfg *Config, text string) ([]float32, error) {
 	if cfg.Polza.APIKey == "" {
 		return nil, fmt.Errorf("polza: не указан API ключ. Настрой: mem config set-polza-key <key>")
+	}
+
+	// Защита от превышения контекста модели
+	if utf8.RuneCountInString(text) > maxEmbedChars {
+		text = string([]rune(text)[:maxEmbedChars])
 	}
 
 	url := cfg.Polza.BaseURL + "/embeddings"

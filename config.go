@@ -6,7 +6,6 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
-	"strings"
 )
 
 type OllamaConfig struct {
@@ -26,26 +25,12 @@ type ChunkConfig struct {
 	Strategy string `json:"chunk_strategy"` // "paragraph", "sentence", "fixed"
 }
 
-// DatabaseConfig — настройки, специфичные для одной базы данных.
-// Любое пустое/нулевое поле наследуется из глобального Config.
-type DatabaseConfig struct {
-	Backend  string `json:"backend,omitempty"`  // "ollama" или "polza"; пусто = глобальный
-	Ollama   OllamaConfig `json:"ollama,omitempty"`
-	Polza    PolzaConfig  `json:"polza,omitempty"`
-	Chunking ChunkConfig  `json:"chunking,omitempty"`
-}
-
 type Config struct {
 	Backend   string       `json:"backend"` // "ollama" or "polza"
 	Ollama    OllamaConfig `json:"ollama"`
 	Polza     PolzaConfig  `json:"polza"`
 	StorePath string       `json:"store_path"`
 	Chunking  ChunkConfig  `json:"chunking"`
-
-	// === Множественные базы (v1.10) ===
-	DatabasesDir string                     `json:"databases_dir"` // каталог для новых баз
-	CurrentDB    string                     `json:"current_db"`     // имя активной базы ("default" = старая)
-	Databases    map[string]DatabaseConfig  `json:"databases"`     // per-db настройки по имени
 }
 
 func defaultConfig() *Config {
@@ -69,9 +54,6 @@ func defaultConfig() *Config {
 			Overlap:  100,
 			Strategy: "paragraph",
 		},
-		DatabasesDir: filepath.Join(storePath, "databases"),
-		CurrentDB:    "default",
-		Databases:    map[string]DatabaseConfig{},
 	}
 }
 
@@ -81,112 +63,6 @@ func configPath() (string, error) {
 		return "", err
 	}
 	return filepath.Join(home, ".mem", "config.json"), nil
-}
-
-// databasesDir возвращает каталог, где хранятся все именованные базы.
-// Создаёт каталог, если его ещё нет.
-func databasesDir(cfg *Config) (string, error) {
-	dir := cfg.DatabasesDir
-	if dir == "" {
-		home, err := os.UserHomeDir()
-		if err != nil {
-			return "", err
-		}
-		dir = filepath.Join(home, ".mem", "databases")
-		cfg.DatabasesDir = dir
-	}
-	if err := os.MkdirAll(dir, 0700); err != nil {
-		return "", err
-	}
-	return dir, nil
-}
-
-// dbFilePath возвращает путь к JSONL-файлу для именованной базы.
-// "default" → старая база cfg.StorePath/store.jsonl (обратная совместимость).
-// Любое другое имя → databasesDir/<safeName>.jsonl.
-func dbFilePath(cfg *Config, name string) (string, error) {
-	if name == "" || name == "default" {
-		return filepath.Join(cfg.StorePath, "store.jsonl"), nil
-	}
-	dir, err := databasesDir(cfg)
-	if err != nil {
-		return "", err
-	}
-	return filepath.Join(dir, safeFileName(name)+".jsonl"), nil
-}
-
-// safeFileName нормализует имя базы для использования в имени файла:
-// - заменяет пробелы и спецсимволы на '_'
-// - оставляет латиницу, цифры, _, -, кириллицу
-func safeFileName(name string) string {
-	var b strings.Builder
-	for _, r := range name {
-		switch {
-		case r >= 'a' && r <= 'z',
-			r >= 'A' && r <= 'Z',
-			r >= '0' && r <= '9',
-			r == '_', r == '-',
-			r >= 0x0400 && r <= 0x04FF: // кириллица
-			b.WriteRune(r)
-		default:
-			b.WriteRune('_')
-		}
-	}
-	out := strings.Trim(b.String(), "_")
-	if out == "" {
-		out = "db"
-	}
-	return out
-}
-
-// isValidDBName проверяет, что имя базы допустимо (не пустое, не "default",
-// не содержит только спецсимволов).
-func isValidDBName(name string) bool {
-	name = strings.TrimSpace(name)
-	if name == "" || name == "default" {
-		return false
-	}
-	return true
-}
-
-// mergeDBConfig возвращает эффективные настройки для именованной базы:
-// per-db поля перекрывают глобальные, остальное наследуется.
-func mergeDBConfig(cfg *Config, name string) (string, OllamaConfig, PolzaConfig, ChunkConfig) {
-	backend := cfg.Backend
-	ollama := cfg.Ollama
-	polza := cfg.Polza
-	chunk := cfg.Chunking
-
-	if dbCfg, ok := cfg.Databases[name]; ok {
-		if dbCfg.Backend != "" {
-			backend = dbCfg.Backend
-		}
-		if dbCfg.Ollama.Model != "" || dbCfg.Ollama.BaseURL != "" {
-			if dbCfg.Ollama.Model != "" {
-				ollama.Model = dbCfg.Ollama.Model
-			}
-			if dbCfg.Ollama.BaseURL != "" {
-				ollama.BaseURL = dbCfg.Ollama.BaseURL
-			}
-		}
-		if dbCfg.Polza.APIKey != "" || dbCfg.Polza.Model != "" || dbCfg.Polza.BaseURL != "" {
-			if dbCfg.Polza.APIKey != "" {
-				polza.APIKey = dbCfg.Polza.APIKey
-			}
-			if dbCfg.Polza.Model != "" {
-				polza.Model = dbCfg.Polza.Model
-			}
-			if dbCfg.Polza.BaseURL != "" {
-				polza.BaseURL = dbCfg.Polza.BaseURL
-			}
-		}
-		if dbCfg.Chunking.Strategy != "" {
-			chunk.Strategy = dbCfg.Chunking.Strategy
-			chunk.MaxSize = dbCfg.Chunking.MaxSize
-			chunk.Overlap = dbCfg.Chunking.Overlap
-		}
-	}
-	return backend, ollama, polza, chunk
 }
 
 func loadConfig() (*Config, error) {

@@ -24,15 +24,10 @@ func init() {
 	}
 }
 
-const version = "1.10.0"
+const version = "1.9.0"
 
 func main() {
-	args := os.Args[1:]
-
-	// Извлекаем глобальный --db <name> из начала args (если есть)
-	args, dbOverride := parseGlobalDBFlag(args)
-
-	if len(args) == 0 {
+	if len(os.Args) < 2 {
 		printUsage()
 		return
 	}
@@ -43,77 +38,49 @@ func main() {
 		os.Exit(1)
 	}
 
-	// Резолвим активную базу
-	dbName := dbOverride
-	if dbName == "" {
-		dbName = cfg.CurrentDB
-	}
-	if dbName == "" {
-		dbName = "default"
-	}
-
-	// "config" и "db" работают без открытия Store
-	cmd := args[0]
-	cmdArgs := args[1:]
-
-	switch cmd {
-	case "config":
-		if err := handleConfig(cmdArgs); err != nil {
-			fmt.Fprintf(os.Stderr, "Ошибка: %v\n", err)
-			os.Exit(1)
-		}
-		return
-	case "db":
-		if err := handleDb(cmdArgs); err != nil {
-			fmt.Fprintf(os.Stderr, "Ошибка: %v\n", err)
-			os.Exit(1)
-		}
-		return
-	case "version", "--version", "-v":
-		printVersion()
-		return
-	case "help", "--help", "-h":
-		printUsage()
-		return
-	}
-
-	// Все остальные команды требуют открытую базу
-	db, err := resolveDB(cfg, dbName)
+	store, err := newStore(cfg.StorePath)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "Ошибка: %v\n", err)
+		fmt.Fprintf(os.Stderr, "Ошибка открытия хранилища: %v\n", err)
 		os.Exit(1)
 	}
-	store, err := newStore(db.Path)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "Ошибка открытия хранилища %s: %v\n", db.Path, err)
-		os.Exit(1)
-	}
+
+	cmd := os.Args[1]
+	args := os.Args[2:]
 
 	switch cmd {
 	case "add":
-		handleAdd(cfg, db, store, cmdArgs)
+		handleAdd(cfg, store, args)
 	case "search":
-		handleSearch(cfg, db, store, cmdArgs)
+		handleSearch(cfg, store, args)
 	case "recent":
-		handleRecent(store, cmdArgs)
+		handleRecent(store, args)
 	case "add-file":
-		handleAddFile(cfg, db, store, cmdArgs)
+		handleAddFile(cfg, store, args)
+	case "config":
+		if err := handleConfig(args); err != nil {
+			fmt.Fprintf(os.Stderr, "Ошибка: %v\n", err)
+			os.Exit(1)
+		}
 	case "stats":
 		handleStats(store)
 	case "index":
-		handleIndex(cfg, db, store, cmdArgs)
+		handleIndex(cfg, store, args)
 	case "source":
-		handleSource(store, cmdArgs)
+		handleSource(store, args)
 	case "sources":
 		handleSources(store)
+	case "version", "--version", "-v":
+		printVersion()
+	case "help", "--help", "-h":
+		printUsage()
 	case "delete", "rm":
-		handleDelete(store, cmdArgs)
+		handleDelete(store, args)
 	case "edit":
-		handleEdit(cfg, db, store, cmdArgs)
+		handleEdit(cfg, store, args)
 	case "retag":
-		handleRetag(store, cmdArgs)
+		handleRetag(store, args)
 	case "important", "imp":
-		handleImportant(store, cmdArgs)
+		handleImportant(store, args)
 	default:
 		fmt.Fprintf(os.Stderr, "Неизвестная команда: %s\n\n", cmd)
 		printUsage()
@@ -179,7 +146,7 @@ func parseFlags(args []string) (positional []string, title string, tags []string
 	return
 }
 
-func handleAdd(cfg *Config, db *ResolvedDB, store *Store, args []string) {
+func handleAdd(cfg *Config, store *Store, args []string) {
 	positional, title, tags, _, _, _, _, _, important := parseFlags(args)
 	if len(positional) == 0 {
 		fmt.Fprintln(os.Stderr, "Ошибка: укажи текст для сохранения")
@@ -188,16 +155,16 @@ func handleAdd(cfg *Config, db *ResolvedDB, store *Store, args []string) {
 	}
 
 	text := strings.Join(positional, " ")
-	fmt.Printf(">> Эмбеддинг через %s... ", db.Backend)
+	fmt.Printf(">> Эмбеддинг через %s... ", cfg.Backend)
 
-	embedding, err := getEmbedding(&db.Embed, text)
+	embedding, err := getEmbedding(cfg, text)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "\nОшибка: %v\n", err)
 		os.Exit(1)
 	}
 	fmt.Printf("получен вектор %d измерений\n", len(embedding))
 
-	entry, err := store.Add(text, title, tags, db.Backend, embedding, important)
+	entry, err := store.Add(text, title, tags, cfg.Backend, embedding, important)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Ошибка сохранения: %v\n", err)
 		os.Exit(1)
@@ -207,10 +174,10 @@ func handleAdd(cfg *Config, db *ResolvedDB, store *Store, args []string) {
 	if important {
 		mark = " [!]"
 	}
-	fmt.Printf("[OK] Запись #%d сохранена%s (база: %s)\n", entry.ID, mark, db.Name)
+	fmt.Printf("[OK] Запись #%d сохранена%s\n", entry.ID, mark)
 }
 
-func handleSearch(cfg *Config, db *ResolvedDB, store *Store, args []string) {
+func handleSearch(cfg *Config, store *Store, args []string) {
 	positional, _, tags, limit, from, to, minScore, vectorOnly, _ := parseFlags(args)
 	if len(positional) == 0 {
 		fmt.Fprintln(os.Stderr, "Ошибка: укажи поисковый запрос")
@@ -219,16 +186,16 @@ func handleSearch(cfg *Config, db *ResolvedDB, store *Store, args []string) {
 	}
 
 	query := strings.Join(positional, " ")
-	fmt.Printf(">> Поиск в базе [%s] через %s... ", db.Name, db.Backend)
+	fmt.Printf(">> Поиск через %s... ", cfg.Backend)
 
-	queryVec, err := getEmbedding(&db.Embed, query)
+	queryVec, err := getEmbedding(cfg, query)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "\nОшибка эмбеддинга: %v\n", err)
 		os.Exit(1)
 	}
 	fmt.Printf("вектор %d измерений\n", len(queryVec))
 
-	results, err := store.Search(queryVec, db.Backend, limit)
+	results, err := store.Search(queryVec, cfg.Backend, limit)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Ошибка поиска: %v\n", err)
 		os.Exit(1)
@@ -547,7 +514,7 @@ func handleRecent(store *Store, args []string) {
 	}
 }
 
-func handleAddFile(cfg *Config, db *ResolvedDB, store *Store, args []string) {
+func handleAddFile(cfg *Config, store *Store, args []string) {
 	positional, title, tags, _, _, _, _, _, important := parseFlags(args)
 	if len(positional) == 0 {
 		fmt.Fprintln(os.Stderr, "Ошибка: укажи путь к файлу")
@@ -576,10 +543,10 @@ func handleAddFile(cfg *Config, db *ResolvedDB, store *Store, args []string) {
 	fmt.Printf("[FILE] Файл: %s (%d символов)\n", path, len(text))
 
 	// Используем чанкинг для больших файлов
-	chunks := ChunkDocument(text, db.Chunking.MaxSize, db.Chunking.Overlap, db.Chunking.Strategy)
+	chunks := ChunkDocument(text, cfg.Chunking.MaxSize, cfg.Chunking.Overlap, cfg.Chunking.Strategy)
 	if len(chunks) > 1 {
 		fmt.Printf("[CUT] Разбито на %d чанков (max %d символов, стратегия: %s)\n",
-			len(chunks), db.Chunking.MaxSize, db.Chunking.Strategy)
+			len(chunks), cfg.Chunking.MaxSize, cfg.Chunking.Strategy)
 
 		fileName := path
 		if idx := strings.LastIndexAny(fileName, "/\\"); idx >= 0 {
@@ -588,7 +555,7 @@ func handleAddFile(cfg *Config, db *ResolvedDB, store *Store, args []string) {
 
 		for i, chunk := range chunks {
 			fmt.Printf("   [%d/%d] Эмбеддинг... ", i+1, len(chunks))
-			embedding, err := getEmbedding(&db.Embed, chunk.Text)
+			embedding, err := getEmbedding(cfg, chunk.Text)
 			if err != nil {
 				fmt.Printf("[ERR] %v\n", err)
 				continue
@@ -599,24 +566,24 @@ func handleAddFile(cfg *Config, db *ResolvedDB, store *Store, args []string) {
 			if chunk.Label != "" {
 				chunkTitle = fileName + ": " + chunk.Label
 			}
-			_, err = store.AddChunk(chunk.Text, chunkTitle, tags, db.Backend, embedding,
+			_, err = store.AddChunk(chunk.Text, chunkTitle, tags, cfg.Backend, embedding,
 				fileName, chunk.Label, chunk.Index, len(chunks), important)
 			if err != nil {
 				fmt.Fprintf(os.Stderr, "   [ERR] Ошибка: %v\n", err)
 			}
 		}
-		fmt.Printf("[OK] Файл сохранён как %d чанков (база: %s)\n", len(chunks), db.Name)
+		fmt.Printf("[OK] Файл сохранён как %d чанков\n", len(chunks))
 	} else {
 		// Маленький файл — один эмбеддинг, как раньше
-		fmt.Printf(">> Эмбеддинг через %s... ", db.Backend)
-		embedding, err := getEmbedding(&db.Embed, text)
+		fmt.Printf(">> Эмбеддинг через %s... ", cfg.Backend)
+		embedding, err := getEmbedding(cfg, text)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "\nОшибка: %v\n", err)
 			os.Exit(1)
 		}
 		fmt.Printf("получен вектор %d измерений\n", len(embedding))
 
-		entry, err := store.Add(displayText, title, tags, db.Backend, embedding, important)
+		entry, err := store.Add(displayText, title, tags, cfg.Backend, embedding, important)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "Ошибка сохранения: %v\n", err)
 			os.Exit(1)
@@ -625,11 +592,11 @@ func handleAddFile(cfg *Config, db *ResolvedDB, store *Store, args []string) {
 		if important {
 			mark = " [!]"
 		}
-		fmt.Printf("[OK] Файл сохранён как запись #%d%s (база: %s)\n", entry.ID, mark, db.Name)
+		fmt.Printf("[OK] Файл сохранён как запись #%d%s\n", entry.ID, mark)
 	}
 }
 
-func handleIndex(cfg *Config, db *ResolvedDB, store *Store, args []string) {
+func handleIndex(cfg *Config, store *Store, args []string) {
 	if len(args) == 0 {
 		fmt.Fprintln(os.Stderr, "Ошибка: укажи путь к файлу или папке")
 		fmt.Fprintln(os.Stderr, "Пример: mem index C:\\МоиДокументы\\")
@@ -637,7 +604,7 @@ func handleIndex(cfg *Config, db *ResolvedDB, store *Store, args []string) {
 	}
 
 	path := args[0]
-	results, err := IndexDirectory(db, store, path)
+	results, err := IndexDirectory(cfg, store, path)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Ошибка: %v\n", err)
 		os.Exit(1)
@@ -748,7 +715,7 @@ func handleDelete(store *Store, args []string) {
 }
 
 // handleEdit изменяет текст и/или заголовок записи
-func handleEdit(cfg *Config, db *ResolvedDB, store *Store, args []string) {
+func handleEdit(cfg *Config, store *Store, args []string) {
 	if len(args) == 0 {
 		fmt.Fprintln(os.Stderr, "Ошибка: укажи номер записи и новый текст")
 		fmt.Fprintln(os.Stderr, "Пример: mem edit 15 \"новый текст\"")
@@ -791,8 +758,8 @@ func handleEdit(cfg *Config, db *ResolvedDB, store *Store, args []string) {
 
 	// Если текст изменился — пересчитываем эмбеддинг
 	if editText != entry.Text {
-		fmt.Printf(">> Новый эмбеддинг через %s... ", db.Backend)
-		embedding, err := getEmbedding(&db.Embed, editText)
+		fmt.Printf(">> Новый эмбеддинг через %s... ", cfg.Backend)
+		embedding, err := getEmbedding(cfg, editText)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "\nОшибка эмбеддинга: %v\n", err)
 			os.Exit(1)
@@ -940,34 +907,6 @@ func printUsage() {
   mem config set-ollama-model <model>
       Установить модель Ollama (по умолч. bge-m3)
 
-  mem db
-      Показать список всех баз и текущую активную
-
-  mem db create <имя> [--backend ollama|polza] [--model <m>] [--chunk-strategy paragraph|sentence|fixed] [--chunk-size N]
-      Создать новую базу. Без флагов — интерактивный режим (спросит параметры).
-
-  mem db list
-      Список всех баз с маркером текущей
-
-  mem db use <имя>
-      Переключиться на базу (запоминается в конфиге)
-
-  mem db rename <старое> <новое>
-      Переименовать базу (файл переименовывается)
-
-  mem db delete <имя>
-      Удалить базу вместе со всеми записями (с подтверждением)
-
-  mem db info
-      Путь и настройки текущей базы
-
-  mem db config <имя> [set-backend ... | set-model ... | set-chunk-strategy ... | set-chunk-size ...]
-      Показать или изменить per-db настройки (бэкенд, модель, чанкинг)
-
-  --db <имя>
-      Глобальный флаг: одноразово использовать указанную базу
-      Пример: mem --db личное search "заметка"
-
   mem stats
       Статистика базы
 
@@ -988,9 +927,6 @@ func printUsage() {
   mem delete 12
   mem config set-chunk-size 800
   mem config set-chunk-strategy sentence
-  mem db create работа --backend polza --model text-embedding-3-small
-  mem db use работа
-  mem --db личное add "мой дневник"
 
 Больше информации: mem version`)
 }

@@ -25,15 +25,15 @@ type ollamaEmbedResponse struct {
 	Embedding []float32 `json:"embedding"`
 }
 
-func embedOllama(s *EmbedSettings, text string) ([]float32, error) {
+func embedOllama(cfg *Config, text string) ([]float32, error) {
 	// Защита от превышения контекста модели
 	if utf8.RuneCountInString(text) > maxEmbedChars {
 		text = string([]rune(text)[:maxEmbedChars])
 	}
 
-	url := s.Ollama.BaseURL + "/api/embeddings"
+	url := cfg.Ollama.BaseURL + "/api/embeddings"
 	req := ollamaEmbedRequest{
-		Model:  s.Ollama.Model,
+		Model:  cfg.Ollama.Model,
 		Prompt: text,
 	}
 	body, _ := json.Marshal(req)
@@ -79,8 +79,8 @@ type polzaEmbedResponse struct {
 	} `json:"usage"`
 }
 
-func embedPolza(s *EmbedSettings, text string) ([]float32, error) {
-	if s.Polza.APIKey == "" {
+func embedPolza(cfg *Config, text string) ([]float32, error) {
+	if cfg.Polza.APIKey == "" {
 		return nil, fmt.Errorf("polza: не указан API ключ. Настрой: mem config set-polza-key <key>")
 	}
 
@@ -89,9 +89,9 @@ func embedPolza(s *EmbedSettings, text string) ([]float32, error) {
 		text = string([]rune(text)[:maxEmbedChars])
 	}
 
-	url := s.Polza.BaseURL + "/embeddings"
+	url := cfg.Polza.BaseURL + "/embeddings"
 	req := polzaEmbedRequest{
-		Model: s.Polza.Model,
+		Model: cfg.Polza.Model,
 		Input: text,
 	}
 	body, _ := json.Marshal(req)
@@ -101,7 +101,7 @@ func embedPolza(s *EmbedSettings, text string) ([]float32, error) {
 		return nil, fmt.Errorf("polza: ошибка запроса: %w", err)
 	}
 	httpReq.Header.Set("Content-Type", "application/json")
-	httpReq.Header.Set("Authorization", "Bearer "+s.Polza.APIKey)
+	httpReq.Header.Set("Authorization", "Bearer "+cfg.Polza.APIKey)
 
 	client := &http.Client{}
 	resp, err := client.Do(httpReq)
@@ -129,21 +129,13 @@ func embedPolza(s *EmbedSettings, text string) ([]float32, error) {
 
 // === Общий интерфейс ===
 
-// EmbedSettings — настройки эмбеддинга, отвязанные от глобального Config.
-// Позволяет использовать разные модели для разных баз.
-type EmbedSettings struct {
-	Backend string
-	Ollama  OllamaConfig
-	Polza   PolzaConfig
-}
-
-func getEmbedding(s *EmbedSettings, text string) ([]float32, error) {
-	switch s.Backend {
+func getEmbedding(cfg *Config, text string) ([]float32, error) {
+	switch cfg.Backend {
 	case "ollama":
-		return embedOllama(s, text)
+		return embedOllama(cfg, text)
 	case "polza":
-		return embedPolza(s, text)
+		return embedPolza(cfg, text)
 	default:
-		return nil, fmt.Errorf("неизвестный бэкенд: %s (используй ollama или polza)", s.Backend)
+		return nil, fmt.Errorf("неизвестный бэкенд: %s (используй ollama или polza)", cfg.Backend)
 	}
 }

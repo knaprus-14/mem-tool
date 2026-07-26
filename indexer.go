@@ -26,7 +26,7 @@ var supportedExts = map[string]bool{
 }
 
 // IndexDirectory индексирует все поддерживаемые файлы в директории
-func IndexDirectory(db *ResolvedDB, store *Store, dirPath string) ([]IndexResult, error) {
+func IndexDirectory(cfg *Config, store *Store, dirPath string) ([]IndexResult, error) {
 	absPath, err := filepath.Abs(dirPath)
 	if err != nil {
 		return nil, fmt.Errorf("неверный путь: %w", err)
@@ -39,7 +39,7 @@ func IndexDirectory(db *ResolvedDB, store *Store, dirPath string) ([]IndexResult
 
 	if !info.IsDir() {
 		// Это файл, а не папка
-		result, err := IndexFile(db, store, absPath)
+		result, err := IndexFile(cfg, store, absPath)
 		if err != nil {
 			return []IndexResult{{FilePath: absPath, Err: err}}, nil
 		}
@@ -70,7 +70,7 @@ func IndexDirectory(db *ResolvedDB, store *Store, dirPath string) ([]IndexResult
 			return nil
 		}
 
-		result, iErr := IndexFile(db, store, path)
+		result, iErr := IndexFile(cfg, store, path)
 		if iErr != nil {
 			result.Err = iErr
 		}
@@ -108,7 +108,7 @@ func IndexDirectory(db *ResolvedDB, store *Store, dirPath string) ([]IndexResult
 }
 
 // IndexFile индексирует один файл: читает, чанкует, эмбеддит, сохраняет
-func IndexFile(db *ResolvedDB, store *Store, filePath string) (IndexResult, error) {
+func IndexFile(cfg *Config, store *Store, filePath string) (IndexResult, error) {
 	result := IndexResult{FilePath: filePath}
 
 	absPath, err := filepath.Abs(filePath)
@@ -131,7 +131,7 @@ func IndexFile(db *ResolvedDB, store *Store, filePath string) (IndexResult, erro
 	}
 
 	// Разбиваем на чанки
-	chunks := ChunkDocument(text, db.Chunking.MaxSize, db.Chunking.Overlap, db.Chunking.Strategy)
+	chunks := ChunkDocument(text, cfg.Chunking.MaxSize, cfg.Chunking.Overlap, cfg.Chunking.Strategy)
 	if len(chunks) == 0 {
 		result.Skipped = true
 		return result, nil
@@ -148,14 +148,14 @@ func IndexFile(db *ResolvedDB, store *Store, filePath string) (IndexResult, erro
 	for _, chunk := range chunks {
 		fmt.Printf("  [%d/%d] Эмбеддинг... ", chunk.Index+1, len(chunks))
 
-		embedding, err := getEmbedding(&db.Embed, chunk.Text)
+		embedding, err := getEmbedding(cfg, chunk.Text)
 		if err != nil {
 			fmt.Printf("[ERR] %v\n", err)
 			continue
 		}
 		fmt.Printf("вектор %d\n", len(embedding))
 
-		_, err = store.AddChunk(chunk.Text, fileName, tags, db.Backend, embedding,
+		_, err = store.AddChunk(chunk.Text, fileName, tags, cfg.Backend, embedding,
 			fileName, chunk.Label, chunk.Index, len(chunks), false)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "  [ERR] Ошибка сохранения: %v\n", err)

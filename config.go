@@ -26,56 +26,31 @@ type ChunkConfig struct {
 }
 
 type Config struct {
-	Backend   string       `json:"backend"` // "ollama" or "polza"
-	Ollama    OllamaConfig `json:"ollama"`
-	Polza     PolzaConfig  `json:"polza"`
-	StorePath string       `json:"store_path"`
-	Chunking  ChunkConfig  `json:"chunking"`
+	Backend  string       `json:"backend"` // "ollama" or "polza"
+	Ollama   OllamaConfig `json:"ollama"`
+	Polza    PolzaConfig  `json:"polza"`
+	Chunking ChunkConfig  `json:"chunking"`
 }
 
+// defaultConfig возвращает дефолтный конфиг (для совместимости —
+// реальный дефолт живёт в dbpath.go:defaultLocalConfig)
 func defaultConfig() *Config {
-	home, _ := os.UserHomeDir()
-	storePath := filepath.Join(home, ".mem")
-
-	return &Config{
-		Backend: "ollama",
-		Ollama: OllamaConfig{
-			BaseURL: "http://localhost:11434",
-			Model:   "bge-m3",
-		},
-		Polza: PolzaConfig{
-			BaseURL: "https://polza.ai/api/v1",
-			APIKey:  "",
-			Model:   "openai/text-embedding-3-small",
-		},
-		StorePath: storePath,
-		Chunking: ChunkConfig{
-			MaxSize:  1000,
-			Overlap:  100,
-			Strategy: "paragraph",
-		},
-	}
+	return defaultLocalConfig()
 }
 
-func configPath() (string, error) {
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return "", err
-	}
-	return filepath.Join(home, ".mem", "config.json"), nil
+// configPath возвращает путь к локальному .mem/config.json
+func configPath() string {
+	return memConfigPath()
 }
 
 func loadConfig() (*Config, error) {
-	path, err := configPath()
-	if err != nil {
-		return nil, err
-	}
+	path := configPath()
 	cfg := defaultConfig()
 
 	data, err := os.ReadFile(path)
 	if err != nil {
 		if os.IsNotExist(err) {
-			return cfg, nil
+			return nil, fmt.Errorf("конфиг не найден: %s (сначала выполните `mem init`)", path)
 		}
 		return nil, err
 	}
@@ -87,10 +62,7 @@ func loadConfig() (*Config, error) {
 }
 
 func saveConfig(cfg *Config) error {
-	path, err := configPath()
-	if err != nil {
-		return err
-	}
+	path := configPath()
 	if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
 		return err
 	}

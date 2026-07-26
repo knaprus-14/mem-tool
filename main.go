@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 	"os"
+	"path/filepath"
 	"runtime"
 	"sort"
 	"strconv"
@@ -24,12 +25,66 @@ func init() {
 	}
 }
 
-const version = "1.9.0"
+const version = "1.10.0"
+
+// cmdRequiresDB — команды, для работы которых нужна локальная база .mem/
+var cmdRequiresDB = map[string]bool{
+	"add": true, "add-file": true, "index": true,
+	"config": true,
+	"search": true, "recent": true, "stats": true,
+	"source": true, "sources": true,
+	"delete": true, "rm": true,
+	"edit": true, "retag": true,
+	"important": true, "imp": true,
+}
+
+// cmdCanAutocreate — команды, которые могут автоматически создать .mem/
+var cmdCanAutocreate = map[string]bool{
+	"add": true, "add-file": true, "index": true, "config": true,
+}
 
 func main() {
 	if len(os.Args) < 2 {
 		printUsage()
 		return
+	}
+
+	cmd := os.Args[1]
+	args := os.Args[2:]
+
+	// Команды, не требующие базы — обрабатываем сразу
+	switch cmd {
+	case "init":
+		handleInit()
+		return
+	case "version", "--version", "-v":
+		printVersion()
+		return
+	case "help", "--help", "-h":
+		printUsage()
+		return
+	}
+
+	// Все остальные команды требуют локальную базу
+	if !cmdRequiresDB[cmd] {
+		fmt.Fprintf(os.Stderr, "Неизвестная команда: %s\n\n", cmd)
+		printUsage()
+		os.Exit(1)
+	}
+
+	// Проверяем/создаём базу
+	if !memExists() {
+		if cmdCanAutocreate[cmd] {
+			if err := initMem(); err != nil {
+				fmt.Fprintf(os.Stderr, "Ошибка автосоздания .mem/: %v\n", err)
+				os.Exit(1)
+			}
+			fmt.Println("[INIT] Создана новая локальная база: .mem/")
+		} else {
+			fmt.Fprintf(os.Stderr, "Ошибка: .mem/ не найдена в текущей папке\n")
+			fmt.Fprintf(os.Stderr, "  Сначала выполните `mem init` или добавьте запись через `mem add`\n")
+			os.Exit(1)
+		}
 	}
 
 	cfg, err := loadConfig()
@@ -38,14 +93,11 @@ func main() {
 		os.Exit(1)
 	}
 
-	store, err := newStore(cfg.StorePath)
+	store, err := newStore(memDir())
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Ошибка открытия хранилища: %v\n", err)
 		os.Exit(1)
 	}
-
-	cmd := os.Args[1]
-	args := os.Args[2:]
 
 	switch cmd {
 	case "add":
@@ -69,10 +121,6 @@ func main() {
 		handleSource(store, args)
 	case "sources":
 		handleSources(store)
-	case "version", "--version", "-v":
-		printVersion()
-	case "help", "--help", "-h":
-		printUsage()
 	case "delete", "rm":
 		handleDelete(store, args)
 	case "edit":
@@ -86,6 +134,29 @@ func main() {
 		printUsage()
 		os.Exit(1)
 	}
+}
+
+// handleInit создаёт локальную базу .mem/ в текущей папке
+func handleInit() {
+	if memExists() {
+		fmt.Fprintf(os.Stderr, "Ошибка: .mem/ уже существует в текущей папке\n")
+		os.Exit(1)
+	}
+	if err := initMem(); err != nil {
+		fmt.Fprintf(os.Stderr, "Ошибка: %v\n", err)
+		os.Exit(1)
+	}
+	cwd, _ := os.Getwd()
+	fmt.Println("[OK] Создана локальная база .mem/")
+	fmt.Println("  ├── config.json — настройки (бэкенд, модель, чанкинг)")
+	fmt.Println("  ├── store.jsonl — записи (создаётся при первом add)")
+	fmt.Println("  └── meta.json   — метаданные (имя базы, дата создания)")
+	fmt.Printf("  Имя базы: %s\n", filepath.Base(cwd))
+	fmt.Println()
+	fmt.Println("Теперь можно работать:")
+	fmt.Println("  mem add \"текст\"          — добавить запись")
+	fmt.Println("  mem search \"запрос\"      — найти")
+	fmt.Println("  mem recent                — последние записи")
 }
 
 func printVersion() {
@@ -847,9 +918,17 @@ func handleImportant(store *Store, args []string) {
 func printUsage() {
 	printVersion()
 	fmt.Println()
-	fmt.Println(`Использование:
+	fmt.Println(`Каждая команда работает с локальной базой .mem/ в текущей папке.
+В разных папках — разные базы. Настройки эмбеддингов тоже per-project.
+
+Использование:
+  mem init
+      Создать новую локальную базу .mem/ в текущей папке
+      (опционально — база создаётся автоматически при первом add/index/config)
+
   mem add <текст> [-title "Название"] [-tags "тег1,тег2"] [-important]
       Сохранить новую запись в базу. -important — пометить как важную.
+      Если .mem/ нет — создаст автоматически.
 
   mem search <запрос> [-limit N] [-tags "тег1,тег2"] [-from 2026-01-01] [-to 2026-07-01] [-min-score 0.5] [-vector-only]
       Найти записи, похожие по смыслу.
@@ -884,10 +963,10 @@ func printUsage() {
       Переключить флаг важности записи
 
   mem config
-      Показать текущую конфигурацию
+      Показать текущую конфигурацию (локальную, из .mem/config.json)
 
   mem config set-backend <ollama|polza>
-      Переключить бэкенд эмбеддингов
+      Переключить бэкенд эмбеддингов (только для текущей базы)
 
   mem config set-chunk-size <символов>
       Размер чанка (100-10000, умолч. 1000)
@@ -914,8 +993,8 @@ func printUsage() {
       Список проиндексированных документов
 
 Примеры:
-  mem add "Сервер: 157.22.196.67"
-  mem add "Важный пароль" -important
+  cd ~/projects/myapp && mem add "Сервер: 157.22.196.67"
+  cd ~/projects/other && mem add "Другой факт"
   mem search "IP сервера" -tags "инфраструктура"
   mem search "архитектура" -from 2026-07-01 -to 2026-07-26
   mem search "сервер" -min-score 0.5 -vector-only

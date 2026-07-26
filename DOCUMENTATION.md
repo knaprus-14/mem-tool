@@ -1,8 +1,8 @@
 # mem-tool — Векторная база знаний
 
-**Версия:** 1.9.0  
+**Версия:** 1.10.0  
 **Автор:** Кнап Руслан Юрьевич  
-**Дата:** 2026-07-26 (исправление: 2026-07-27)  
+**Дата:** 2026-07-26 (локальный режим)  
 **Лицензия:** Proprietary (все права принадлежат автору)
 
 ---
@@ -115,6 +115,28 @@ Re-ranking не радикально меняет порядок, а лишь «
 - Важные записи получают буст ×1.15 в реранжировании
 - Отображаются с маркером `[!]` везде: search, source, recent
 
+### Версия 1.10 — Локальный режим (per-project базы)
+
+**Проблема:** до v1.10 база жила в глобальной `~/.mem/store.jsonl`. Если запустить две копии `mem` параллельно в разных проектах — они работали с одной и той же базой, записи из разных проектов смешивались.
+
+**Решение:** каждая директория = своя изолированная база `./.mem/`. Хранится прямо в текущей папке, без подъёма вверх по дереву. Несколько копий `mem` в разных папках работают параллельно и не мешают друг другу.
+
+**Структура `.mem/`:**
+```
+.mem/
+├── config.json    # настройки (backend, model, chunking, api_key) — per-project
+├── store.jsonl    # записи (текст + эмбеддинги)
+└── meta.json      # метаданные базы (имя, дата создания)
+```
+
+**Команда `mem init`:** создаёт `.mem/` в текущей папке. Если `.mem/` уже есть — ошибка. Также база создаётся **автоматически** при первом `mem add`/`add-file`/`index`/`config`, если её нет.
+
+**Настройки эмбеддингов тоже per-project:** `mem config set-backend polza` в одной папке не влияет на другую. Каждый проект настраивает свою базу независимо.
+
+**Откат v1.10.0 (именованные базы):** была попытка сделать `mem db create/use/list` с глобальными именованными базами в `~/.mem/databases/` — откачена коммитом `2747afe`. Оказалась неудобной для параллельной работы. Локальный режим — проще и понятнее: cwd сам определяет, с какой базой работать.
+
+**Команды без базы:** `mem version`, `mem help` — работают всегда. Остальные требуют `.mem/` в cwd (с автосозданием или без).
+
 ---
 
 ## Архитектура
@@ -215,8 +237,10 @@ mem config set-chunk-strategy sentence
 ```powershell
 cd E:\Programming\claude\mem-tool
 go build -o mem.exe .
-copy mem.exe C:\Users\ZMII\bin\mem
+Copy-Item -Force mem.exe C:\Users\ZMII\mem.exe
 ```
+
+**Путь установки:** `C:\Users\ZMII\mem.exe` (домашняя директория). Также для совместимости можно положить в `C:\Users\ZMII\bin\mem.exe`.
 
 ### Проверка
 ```powershell
@@ -224,14 +248,17 @@ mem version
 ```
 Должно вывести:
 ```
-mem-tool v1.9.0
+mem-tool v1.10.0
 (c) 2026 Кнап Руслан Юрьевич
 Векторная база знаний для работы с Claude
 ```
 
 ### Файлы
-- `C:\Users\ZMII\.mem\store.jsonl` — база знаний (JSONL)
-- `C:\Users\ZMII\.mem\config.json` — конфигурация
+- `./.mem/store.jsonl` — записи (JSONL), относительно текущей папки
+- `./.mem/config.json` — настройки (backend, model, chunking, api_key)
+- `./.mem/meta.json` — метаданные базы (имя, дата создания)
+
+Каждая папка имеет свою изолированную базу `./.mem/`. Нет глобального хранилища.
 
 ---
 
@@ -400,30 +427,65 @@ mem config set-chunk-strategy sentence   # стратегия чанкинга
 
 Показать справку.
 
+### `mem init`
+
+Создать новую локальную базу `.mem/` в текущей папке.
+
+```powershell
+cd ~/projects/my-new-project
+mem init
+```
+
+После выполнения создаётся:
+```
+.mem/
+├── config.json    # настройки (backend, model, chunking, api_key)
+├── store.jsonl    # записи (создаётся при первом add)
+└── meta.json      # метаданные (имя базы, дата создания)
+```
+
+**Опционально:** база создаётся автоматически при первом `mem add`/`add-file`/`index`/`config`, если её нет. Команда `mem init` нужна, если хочется создать базу заранее (например, до первого добавления записи).
+
+Если `.mem/` уже существует — ошибка.
+
+---
+
 ---
 
 ## Конфигурация
 
-Файл: `C:\Users\ZMII\.mem\config.json`
+**Файлы:**
+- `./.mem/config.json` — настройки базы (per-project)
+- `./.mem/store.jsonl` — записи (per-project)
+- `./.mem/meta.json` — метаданные (имя, дата создания)
+
+Содержимое `config.json` (создаётся при `mem init` или автосоздании):
 
 ```json
 {
   "backend": "ollama",
-  "store_path": "C:\\Users\\ZMII\\.mem",
   "ollama": {
-    "model": "bge-m3",
-    "url": "http://localhost:11434"
+    "base_url": "http://localhost:11434",
+    "model": "bge-m3"
   },
   "polza": {
+    "base_url": "https://polza.ai/api/v1",
     "api_key": "",
-    "model": "text-embedding-3-small",
-    "url": "https://api.polza.com/v1"
+    "model": "openai/text-embedding-3-small"
   },
   "chunking": {
-    "max_size": 1000,
-    "overlap": 100,
-    "strategy": "paragraph"
+    "chunk_max_size": 1000,
+    "chunk_overlap": 100,
+    "chunk_strategy": "paragraph"
   }
+}
+```
+
+Содержимое `meta.json`:
+```json
+{
+  "name": "имя-проекта",
+  "created_at": "2026-07-26T23:00:00Z"
 }
 ```
 
@@ -432,9 +494,15 @@ mem config set-chunk-strategy sentence   # стратегия чанкинга
 | Параметр | По умолчанию | Описание |
 |----------|-------------|----------|
 | `backend` | `ollama` | Бэкенд эмбеддингов: `ollama` или `polza` |
-| `chunking.max_size` | 1000 | Максимальный размер чанка в символах (100–10000) |
-| `chunking.overlap` | 100 | Перекрытие между чанками (0–1000) |
-| `chunking.strategy` | `paragraph` | Стратегия: `paragraph`, `sentence`, `fixed` |
+| `ollama.base_url` | `http://localhost:11434` | URL Ollama API |
+| `ollama.model` | `bge-m3` | Модель эмбеддингов Ollama |
+| `polza.api_key` | (пусто) | API-ключ Polza AI (per-project!) |
+| `polza.model` | `openai/text-embedding-3-small` | Модель Polza AI |
+| `chunking.chunk_max_size` | 1000 | Макс. размер чанка в символах (100–10000) |
+| `chunking.chunk_overlap` | 100 | Перекрытие между чанками (0–1000) |
+| `chunking.chunk_strategy` | `paragraph` | Стратегия: `paragraph`, `sentence`, `fixed` |
+
+**Важно:** настройки действуют только в текущей папке. В разных проектах — разные `config.json`, разные API-ключи, разные модели.
 
 ---
 

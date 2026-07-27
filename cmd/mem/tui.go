@@ -36,6 +36,9 @@ var tuiStyles = struct {
 	Result:    lipgloss.NewStyle().Foreground(lipgloss.Color("252")),
 }
 
+// busyText — текст в статус-строке, пока крутится спиннер.
+const busyText = "выполняю..."
+
 // tuiModel — состояние TUI.
 type tuiModel struct {
 	width      int
@@ -48,7 +51,6 @@ type tuiModel struct {
 	popupIdx   int
 	popupItems []commandMenuEntry
 	busy       bool
-	busyText   string
 	cfg        *Config
 	store      *Store
 	quitting   bool
@@ -56,7 +58,6 @@ type tuiModel struct {
 
 // execResultMsg — результат выполнения команды.
 type execResultMsg struct {
-	line   string
 	output string
 	err    error
 }
@@ -91,8 +92,8 @@ func newTuiModel(cfg *Config, store *Store) tuiModel {
 	return m
 }
 
-// printHeader добавляет приветствие в вывод TUI.
-func (m *tuiModel) printHeader() {
+// headerLine возвращает динамическую строку заголовка (статистика, бэкенд, модель).
+func (m *tuiModel) headerLine() string {
 	stats := m.store.Stats()
 	total := stats["total_entries"]
 	backend := m.cfg.Backend
@@ -103,10 +104,15 @@ func (m *tuiModel) printHeader() {
 	if model == "" {
 		model = "(по умолчанию)"
 	}
-	m.appendBlock(tuiStyles.Header.Render(
-		fmt.Sprintf("mem · поисковая база · %d записей · backend: %s · %s", total, backend, model)))
+	return tuiStyles.Header.Render(fmt.Sprintf(
+		"mem · поисковая база · %d записей · backend: %s · %s", total, backend, model))
+}
+
+// printHeader добавляет приветствие в viewport (для /clear).
+func (m *tuiModel) printHeader() {
+	m.appendBlock(m.headerLine())
 	m.appendBlock(tuiStyles.Status.Render("Введите запрос, /help для списка команд, Esc/Ctrl-D для выхода."))
-	m.appendBlock(tuiStyles.Separator.Render(strings.Repeat("─", 60)))
+	m.appendBlock(tuiStyles.Separator.Render(strings.Repeat("─", m.viewportWidth())))
 }
 
 // Init — инициализация модели.
@@ -136,7 +142,6 @@ func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case execResultMsg:
 		// Результат выполнения команды
 		m.busy = false
-		m.busyText = ""
 		if msg.err != nil {
 			m.appendBlock(tuiStyles.Status.Render("Ошибка: " + msg.err.Error()))
 		}
@@ -232,54 +237,18 @@ func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return m, tea.Batch(tiCmd, vpCmd, spCmd)
 }
 
-// executeCommand синхронно выполняет команду (для /clear, /help, /exit и т.п.)
-func (m *tuiModel) executeCommand(line string) {
-	m.appendBlock(tuiStyles.UserLine.Render("> " + line))
-
-	var cmd string
-	if strings.HasPrefix(line, "/") {
-		parts := strings.Fields(line)
-		if len(parts) == 0 {
-			return
-		}
-		cmd = strings.ToLower(strings.TrimPrefix(parts[0], "/"))
-	} else {
-		cmd = "search"
-	}
-
-	switch cmd {
-	case "clear":
-		m.output = nil
-		m.viewport.SetContent("")
-		m.printHeader()
-		return
-	case "help", "?":
-		m.printHelp()
-		return
-	case "exit", "quit", "q":
-		m.quitting = true
-		return
-	default:
-		// Асинхронные команды идут через runCommandAsync
-		m.appendBlock(tuiStyles.Status.Render(fmt.Sprintf("Неизвестная команда: /%s. Введите /help.", cmd)))
-		return
-	}
-}
-
-// runCommandAsync запускает команду асинхронно, возвращая tea.Cmd.
-// Пока команда выполняется, в TUI крутится спиннер.
+// runCommandAsync запускает команду: sync (/clear, /help, /exit) сразу,
+// остальные — асинхронно в горутине через tea.Cmd.
+// Пока асинхронная команда выполняется, в TUI крутится спиннер.
 func (m *tuiModel) runCommandAsync(line string) tea.Cmd {
 	m.appendBlock(tuiStyles.UserLine.Render("> " + line))
-	m.busy = true
-	m.busyText = "выполняю..."
 
-	// Парсим команду (копия логики из executeCommand)
+	// Парсим команду
 	var cmd string
 	var args []string
 	if strings.HasPrefix(line, "/") {
 		parts := strings.Fields(line)
 		if len(parts) == 0 {
-			m.busy = false
 			return nil
 		}
 		cmd = strings.ToLower(strings.TrimPrefix(parts[0], "/"))
@@ -289,11 +258,37 @@ func (m *tuiModel) runCommandAsync(line string) tea.Cmd {
 		args = []string{line}
 	}
 
-	// Локальные копии (для горутины)
+	// Sync-команды выполняются сразу, без горутины и спиннера
+	switch cmd {
+	case "clear":
+		m.output = nil
+		m.viewport.SetContent("")
+		m.printHeader()
+		return nil
+	case "help", "?":
+		m.printHelp()
+		return nil
+	case "exit", "quit", "q":
+		m.quitting = true
+		return tea.Quit
+	}
+
+	// Асинхронные команды — спиннер + горутина
+	m.busy = true
+
+	// Локальные копии указателей (для горутины, чтобы не залипала m целиком)
 	cfg := m.cfg
 	store := m.store
 
-	return func() tea.Msg {
+	return func() (msg tea.Msg) {
+		// recover превращает панику хендлера в обычный err,
+		// иначе TUI залипнет в busy=true навсегда.
+		defer func() {
+			if r := recover(); r != nil {
+				msg = execResultMsg{err: fmt.Errorf("паника в обработчике: %v", r)}
+			}
+		}()
+
 		var result string
 		var err error
 
@@ -327,7 +322,8 @@ func (m *tuiModel) runCommandAsync(line string) tea.Cmd {
 		default:
 			err = fmt.Errorf("неизвестная команда: /%s", cmd)
 		}
-		return execResultMsg{line: line, output: result, err: err}
+		msg = execResultMsg{output: result, err: err}
+		return
 	}
 }
 
@@ -360,7 +356,7 @@ func (m tuiModel) View() string {
 		return tuiStyles.Status.Render("До встречи!\n")
 	}
 
-	header := tuiStyles.Header.Render("mem · TUI")
+	header := m.headerLine()
 	viewportView := tuiStyles.Frame.
 		Width(m.viewportWidth()).
 		Height(m.viewportHeight()).
@@ -376,7 +372,7 @@ func (m tuiModel) View() string {
 	status := tuiStyles.Status.Render("Enter: выполнить · /<TAB>: команды · Esc/Ctrl-D: выход · ↑/↓/PgUp/PgDn: прокрутка")
 
 	if m.busy {
-		status = m.spinner.View() + " " + m.busyText
+		status = m.spinner.View() + " " + busyText
 	}
 
 	return fmt.Sprintf("%s\n%s\n%s%s\n%s\n%s\n%s",

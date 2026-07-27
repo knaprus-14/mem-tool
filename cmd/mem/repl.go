@@ -116,6 +116,8 @@ func dispatchReplLine(cfg *Config, store *Store, line string) {
 		// \x1b[2J — clear screen, \x1b[H — cursor home
 		fmt.Print("\x1b[2J\x1b[H")
 		printReplHeader(cfg, store)
+	case "clear-history":
+		clearReplHistory()
 	case "help", "?":
 		printReplHelp()
 	case "exit", "quit", "q":
@@ -125,6 +127,21 @@ func dispatchReplLine(cfg *Config, store *Store, line string) {
 		fmt.Fprintf(os.Stderr, "Неизвестная команда: /%s\n", cmd)
 		fmt.Fprintln(os.Stderr, "Введите /help для списка команд")
 	}
+}
+
+// clearReplHistory удаляет файл .mem/history.txt.
+// readline автоматически создаст его заново при следующем вводе.
+func clearReplHistory() {
+	path := memHistoryPath()
+	if err := os.Remove(path); err != nil {
+		if os.IsNotExist(err) {
+			fmt.Fprintln(os.Stderr, ui.Tag("История уже пуста."))
+			return
+		}
+		fmt.Fprintf(os.Stderr, "Ошибка очистки истории: %v\n", err)
+		return
+	}
+	fmt.Println(ui.Success("История очищена: %s", ui.Tag(path)))
 }
 
 // printReplHeader печатает приветствие REPL: статистика + последние 5 записей.
@@ -184,6 +201,7 @@ func printReplHelp() {
 	fmt.Printf("  %s          Список документов\n", ui.ID("/sources"))
 	fmt.Printf("  %s           Конфигурация\n", ui.ID("/config"))
 	fmt.Printf("  %s            Очистить экран\n", ui.ID("/clear"))
+	fmt.Printf("  %s        Очистить историю ввода\n", ui.ID("/clear-history"))
 	fmt.Printf("  %s            Помощь\n", ui.ID("/help"))
 	fmt.Printf("  %s            Выйти (Ctrl-D тоже)\n", ui.ID("/exit"))
 	fmt.Println()

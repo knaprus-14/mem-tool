@@ -63,7 +63,7 @@ func init() {
 	}
 }
 
-const version = "1.13.2"
+const version = "1.14.0"
 
 // cmdRequiresDB — команды, для работы которых нужна локальная база .mem/
 var cmdRequiresDB = map[string]bool{
@@ -102,34 +102,27 @@ func parseColorFlag(args []string) (string, []string) {
 }
 
 func main() {
-	if len(os.Args) < 2 {
-		printUsage()
-		return
-	}
-
 	// Сначала парсим --color/--no-color из произвольной позиции
 	colorMode, args0 := parseColorFlag(os.Args[1:])
 	ui.Init(colorMode)
 
-	if len(args0) == 0 {
-		// mem без команды → проверяем наличие .mem/, запускаем REPL
-		if !memExists() {
-			fmt.Fprintln(os.Stderr, "Ошибка: .mem/ не найдена в текущей папке")
-			fmt.Fprintln(os.Stderr, "  Сначала выполните `mem init` или добавьте запись через `mem add`")
-			fmt.Fprintln(os.Stderr, "  Или запустите `mem --help` для списка команд")
-			os.Exit(1)
+	if len(os.Args) < 2 || len(args0) == 0 {
+		// mem без аргументов → если .mem/ есть, запускаем REPL; иначе — help
+		if memExists() {
+			cfg, err := loadConfig()
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "Ошибка загрузки конфига: %v\n", err)
+				os.Exit(1)
+			}
+			store, err := newStore(memDir())
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "Ошибка открытия хранилища: %v\n", err)
+				os.Exit(1)
+			}
+			runRepl(cfg, store)
+			return
 		}
-		cfg, err := loadConfig()
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "Ошибка загрузки конфига: %v\n", err)
-			os.Exit(1)
-		}
-		store, err := newStore(memDir())
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "Ошибка открытия хранилища: %v\n", err)
-			os.Exit(1)
-		}
-		runRepl(cfg, store)
+		printUsage()
 		return
 	}
 
@@ -1244,6 +1237,12 @@ func printUsage() {
   mem stats
       Статистика базы
 
+  mem
+      Без аргументов — запуск интерактивного REPL (см. ниже)
+
+  mem repl
+      То же самое — явный запуск REPL
+
 Глобальные флаги (перед командой):
   --color=always|never|auto   Включить/выключить цвета в выводе
   --no-color                  То же, что --color=never
@@ -1266,6 +1265,15 @@ func printUsage() {
   mem delete 12
   mem config set-chunk-size 800
   mem config set-chunk-strategy sentence
+
+Интерактивный REPL:
+  Запускается командой mem (без аргументов) или mem repl.
+  Внизу — prompt mem>, сверху — заголовок и последние 5 записей.
+  Текст без / — сокращение для /search.
+  Up/Down — история запросов (хранится в .mem/history.txt).
+  Tab — дополнение /-команд (/se<TAB> → /search).
+  Ctrl-D или /exit — выход.
+  Полный список /-команд: введите /help в REPL.
 
 Больше информации: README.md и DOCUMENTATION.md`)
 }

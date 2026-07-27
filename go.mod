@@ -8,6 +8,7 @@ require (
 )
 
 require (
+	github.com/chzyer/readline v1.5.1 // indirect
 	github.com/dustin/go-humanize v1.0.1 // indirect
 	github.com/fatih/color v1.19.0 // indirect
 	github.com/google/uuid v1.6.0 // indirect

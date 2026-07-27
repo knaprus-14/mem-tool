@@ -75,6 +75,7 @@ var cmdRequiresDB = map[string]bool{
 	"delete": true, "rm": true,
 	"edit": true, "retag": true,
 	"important": true, "imp": true,
+	"repl": true,
 }
 
 // cmdCanAutocreate — команды, которые могут автоматически создать .mem/
@@ -111,7 +112,24 @@ func main() {
 	ui.Init(colorMode)
 
 	if len(args0) == 0 {
-		printUsage()
+		// mem без команды → проверяем наличие .mem/, запускаем REPL
+		if !memExists() {
+			fmt.Fprintln(os.Stderr, "Ошибка: .mem/ не найдена в текущей папке")
+			fmt.Fprintln(os.Stderr, "  Сначала выполните `mem init` или добавьте запись через `mem add`")
+			fmt.Fprintln(os.Stderr, "  Или запустите `mem --help` для списка команд")
+			os.Exit(1)
+		}
+		cfg, err := loadConfig()
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Ошибка загрузки конфига: %v\n", err)
+			os.Exit(1)
+		}
+		store, err := newStore(memDir())
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Ошибка открытия хранилища: %v\n", err)
+			os.Exit(1)
+		}
+		runRepl(cfg, store)
 		return
 	}
 
@@ -197,6 +215,8 @@ func main() {
 		handleRetag(store, args)
 	case "important", "imp":
 		handleImportant(store, args)
+	case "repl":
+		runRepl(cfg, store)
 	default:
 		fmt.Fprintf(os.Stderr, "Неизвестная команда: %s\n\n", cmd)
 		printUsage()

@@ -1,8 +1,8 @@
 # mem-tool — Векторная база знаний
 
-**Версия:** 1.15.8
+**Версия:** 1.15.9
 **Автор:** Кнап Руслан Юрьевич
-**Дата:** 2026-07-28 (код-ревью: критичные баги закрыты)
+**Дата:** 2026-07-28 (код-ревью: TUI качество)
 **Лицензия:** Proprietary (все права принадлежат автору)
 
 ---
@@ -276,6 +276,24 @@ mem> _
 - **Фикс 4: `Add`/`AddChunk`/`UpdateById` копируют `tags` и `embedding`.**
   - **Было:** `entry.Tags = tags` / `entry.Embedding = embedding` сохраняло caller-слайсы прямо в кэш `Store`. Если caller мутирует свой слайс после вызова — кэш меняется без блокировки → рассинхрон с БД.
   - **Стало:** перед сохранением делается копия `tagsCopy := append([]string(nil), tags...)`, `embCopy := append([]float32(nil), embedding...)`. В кэш попадает копия, БД сериализуется из копии, caller-слайс остаётся независимым.
+
+**v1.15.9 — код-ревью: качество TUI (best practices, performance):**
+- Закрывает 5 средних находок из код-ревью (TUI-стек).
+- **Фикс 5: spinner тикает только когда `m.busy=true`.**
+  - **Было:** `Init() tea.Cmd { return tea.Batch(textarea.Blink, spinner.Tick) }` — deprecated package-level `spinner.Tick` тикал 10 FPS непрерывно, даже когда TUI простаивал (трата CPU).
+  - **Стало:** `Init()` возвращает только `textarea.Blink`. Spin запускается в `Update` в ветке `enter` (когда пользователь сабмитит команду) через `tea.Batch(cmd, m.spinner.Tick)`. Sync-команды (`/clear`, `/help`, `/exit`) по-прежнему не трогают спиннер.
+- **Фикс 6: bounded buffer для `m.output`.**
+  - **Было:** `m.output []string` рос неограниченно при длинных сессиях — каждая команда добавляла блок, и `strings.Join(m.output, "\n")` в `View` становился O(n²).
+  - **Стало:** добавлена константа `maxOutputLines = 500`. В `appendBlock` после append: если `len(m.output) > maxOutputLines` — отбрасываем самые старые блоки. Память ограничена, `View` остаётся быстрым.
+- **Фикс 7: `View()` через `lipgloss.JoinVertical`.**
+  - **Было:** `return fmt.Sprintf("%s\n%s\n%s%s\n%s\n%s\n%s", header, sep, viewportView, popupView, sep, taView, status)` — `fmt.Sprintf` со склейкой через `\n` мог сломать layout, если элемент сам содержит переводы строк.
+  - **Стало:** `lipgloss.JoinVertical(lipgloss.Top, header, sep, viewportView+popupView, sep, taView, status)` — стандартный lipgloss-способ склеить вертикальный layout. Корректно обрабатывает встроенные `\n` в каждом элементе.
+- **Фикс 8: cleanup alt-screen при panic в `runTui`.**
+  - **Было:** `runTui` не имел защиты от panic — если `tea.Cmd` паниковал, TUI оставался в alt-screen mode, и терминал пользователя оставался «грязным» до `reset`.
+  - **Стало:** в `runTui` добавлен `defer func() { recover() + ReleaseTerminal() }` — при panic явно вызывается `p.ReleaseTerminal()` для возврата терминала в нормальный режим, затем panic продолжает распространяться. В этой версии bubbletea нет метода `Program.Release()` (он появится позже), используется доступный `ReleaseTerminal()`.
+- **Фикс 9: Enter не конфликтует с InsertNewline.**
+  - **Было:** `ta.KeyMap.InsertNewline.SetEnabled(true)` — textarea реагировал на Enter как на newline, и тот же Enter сабмитил команду. Видно было вспышку `\n` в textarea перед сабмитом.
+  - **Стало:** `ta.KeyMap.InsertNewline = key.NewBinding(key.WithKeys("ctrl+j"))` — InsertNewline перебинжен на `ctrl+j`. Enter — только сабмит. Ctrl+J — для вставки реального newline (если когда-нибудь понадобится для multiline prompt).
 
 ### Версия 1.13 — Цветной вывод и команда `mem show`
 

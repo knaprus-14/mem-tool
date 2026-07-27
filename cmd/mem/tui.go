@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/bubbles/key"
 	"github.com/charmbracelet/bubbles/spinner"
 	"github.com/charmbracelet/bubbles/textarea"
 	"github.com/charmbracelet/bubbles/viewport"
@@ -38,6 +39,11 @@ var tuiStyles = struct {
 
 // busyText — текст в статус-строке, пока крутится спиннер.
 const busyText = "выполняю..."
+
+// maxOutputLines — мягкий предел количества блоков в m.output.
+// При превышении старые блоки отбрасываются — защита от O(n²) Join при длинных
+// сессиях и от memory pressure, если пользователь не делает /clear.
+const maxOutputLines = 500
 
 // tuiModel — состояние TUI.
 type tuiModel struct {
@@ -72,7 +78,10 @@ func newTuiModel(cfg *Config, store *Store) tuiModel {
 	ta.SetHeight(1)
 	ta.ShowLineNumbers = false
 	ta.CharLimit = 0
-	ta.KeyMap.InsertNewline.SetEnabled(true)
+	// Перебиндим InsertNewline на ctrl+j: textarea по умолчанию реагирует на Enter
+	// как на newline, и тот же Enter сабмитит команду — это даёт вспышку newline
+	// перед выполнением. Для однострочного prompt Enter должен только сабмитить.
+	ta.KeyMap.InsertNewline = key.NewBinding(key.WithKeys("ctrl+j"))
 
 	vp := viewport.New(80, 20)
 	vp.SetContent("")
@@ -118,8 +127,12 @@ func (m *tuiModel) printHeader() {
 }
 
 // Init — инициализация модели.
+// Spinner НЕ тикает сразу — он стартует только когда m.busy=true
+// (в Update, в ветке "enter" при запуске runCommandAsync).
+// Раньше тут был deprecated spinner.Tick — он тикал 10 FPS всё время,
+// тратя CPU даже когда TUI простаивает.
 func (m tuiModel) Init() tea.Cmd {
-	return tea.Batch(textarea.Blink, spinner.Tick)
+	return textarea.Blink
 }
 
 // Update — обработка сообщений.
@@ -193,7 +206,13 @@ func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return m, nil
 			}
 			m.textarea.Reset()
-			return m, m.runCommandAsync(line)
+			cmd := m.runCommandAsync(line)
+			// Если команда async — спиннер должен тикать. Sync-команды (clear/help/exit)
+			// возвращают nil cmd и не требуют спиннера.
+			if m.busy {
+				return m, tea.Batch(cmd, m.spinner.Tick)
+			}
+			return m, cmd
 
 		case "up":
 			if m.showPopup {
@@ -421,8 +440,14 @@ func filterCommands(prefix string, items []commandMenuEntry) []commandMenuEntry 
 }
 
 // appendBlock добавляет блок текста в вывод.
+// При превышении maxOutputLines старые блоки отбрасываются — защита от
+// неконтролируемого роста буфера в длинных сессиях.
 func (m *tuiModel) appendBlock(text string) {
 	m.output = append(m.output, text)
+	if len(m.output) > maxOutputLines {
+		// Отбрасываем самые старые блоки — оставляем только последние maxOutputLines.
+		m.output = m.output[len(m.output)-maxOutputLines:]
+	}
 	m.viewport.SetContent(strings.Join(m.output, "\n"))
 	m.viewport.GotoBottom()
 }
@@ -452,8 +477,14 @@ func (m tuiModel) View() string {
 		status = m.spinner.View() + " " + busyText
 	}
 
-	return fmt.Sprintf("%s\n%s\n%s%s\n%s\n%s\n%s",
-		header, sep, viewportView, popupView, sep, taView, status)
+	return lipgloss.JoinVertical(lipgloss.Top,
+		header,
+		sep,
+		viewportView+popupView,
+		sep,
+		taView,
+		status,
+	)
 }
 
 // recomputeSizes пересчитывает размеры при изменении окна.
@@ -541,7 +572,18 @@ func captureStdout(fn func()) string {
 func runTui(cfg *Config, store *Store) {
 	m := newTuiModel(cfg, store)
 	p := tea.NewProgram(m, tea.WithAltScreen(), tea.WithMouseCellMotion())
+	// В этой версии bubbletea (v1.x) нет Program.Release() — alt-screen cleanup
+	// делается через Run() автоматически при нормальном завершении. При panic
+	// в Cmd терминал может остаться в alt-screen, поэтому ниже — защита:
+	// явный ExitAltScreen/RestoreTerminal через Kill() если Run вернул ошибку.
+	defer func() {
+		if r := recover(); r != nil {
+			_ = p.ReleaseTerminal()
+			panic(r) // продолжаем распространение после cleanup
+		}
+	}()
 	if _, err := p.Run(); err != nil {
+		_ = p.ReleaseTerminal()
 		fmt.Printf("Ошибка TUI: %v\n", err)
 	}
 }

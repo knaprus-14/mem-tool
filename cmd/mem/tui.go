@@ -233,8 +233,15 @@ func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// Динамический popup: показать/скрыть по содержимому textarea
 		val := m.textarea.Value()
 		if strings.HasPrefix(val, "/") && !strings.Contains(val, " ") {
-			m.showPopup = true
-			m.popupIdx = 0
+			if m.isExactCommand(val) {
+				// Пользователь ввёл команду целиком (/clear, /help и т.д.) —
+				// popup не нужен, иначе Enter перехватит его и подставит
+				// первый элемент (/search) вместо того, что ввёл пользователь.
+				m.showPopup = false
+			} else {
+				m.showPopup = true
+				m.popupIdx = 0
+			}
 		} else {
 			m.showPopup = false
 		}
@@ -354,6 +361,31 @@ func (m *tuiModel) printHelp() {
 // commandMenu возвращает список команд для help и popup.
 func (m *tuiModel) commandMenu() []commandMenuEntry {
 	return commandMenu
+}
+
+// isExactCommand возвращает true, если val — это "/<cmd>" где <cmd> — точное
+// имя команды из commandMenu (без алиасов и плейсхолдеров вида "<id>").
+// В этом случае popup не нужен: пользователь уже ввёл команду целиком,
+// Enter должен её выполнить, а не подменять на первый элемент popup'а.
+func (m *tuiModel) isExactCommand(val string) bool {
+	parts := strings.Fields(val)
+	if len(parts) != 1 {
+		return false
+	}
+	name := strings.ToLower(strings.TrimPrefix(parts[0], "/"))
+	if name == "" {
+		return false
+	}
+	for _, item := range m.popupItems {
+		cmdName := item.name
+		if i := strings.IndexByte(cmdName, ' '); i >= 0 {
+			cmdName = cmdName[:i]
+		}
+		if cmdName == name {
+			return true
+		}
+	}
+	return false
 }
 
 // appendBlock добавляет блок текста в вывод.

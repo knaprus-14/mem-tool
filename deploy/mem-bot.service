@@ -1,0 +1,36 @@
+# /etc/systemd/system/mem-bot.service
+# Telegram-бот для mem-tool. Автозапуск при перезагрузке VDS.
+# Токен читается из /opt/mem-bot/.env (chmod 600, owner=membot:membot)
+
+[Unit]
+Description=mem-bot — Telegram interface for mem-tool
+After=network.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=membot
+Group=membot
+WorkingDirectory=/opt/mem-bot
+ExecStart=/opt/mem-bot/mem-bot.exe
+Restart=always
+RestartSec=5
+EnvironmentFile=/opt/mem-bot/.env
+
+# Sandboxing
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/opt/mem-bot/data
+
+# Лимиты
+LimitNOFILE=65536
+MemoryMax=512M
+
+# Логи
+StandardOutput=append:/var/log/mem-bot/bot.log
+StandardError=append:/var/log/mem-bot/bot.log
+
+[Install]
+WantedBy=multi-user.target

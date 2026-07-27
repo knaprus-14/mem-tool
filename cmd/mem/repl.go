@@ -26,6 +26,7 @@ var replCommands = []string{
 // Цикл:
 //   - читаем строку через readline (Up/Down — история)
 //   - если строка начинается с "/" — это команда (например, /search IP)
+//   - если строка = "/" (одна) — псевдо-popup со списком команд
 //   - иначе — это сокращение для /search <строка>
 //   - пустая строка — игнорируется
 //   - EOF / Ctrl-D — выход
@@ -33,8 +34,15 @@ func runRepl(cfg *Config, store *Store) {
 	printReplHeader(cfg, store)
 	fmt.Println()
 
+	// Prompt: линия сверху (отделяет результат предыдущей команды от ввода)
+	// + сам prompt "mem> ". ANSI \x1b[2m — dim (серый), \x1b[0m — сброс.
+	// readline v1.5.1 не поддерживает callback для Prompt — только строку,
+	// поэтому линия рисуется в самом prompt и появляется перед каждой строкой ввода.
+	promptLine := "\x1b[2m" + strings.Repeat("─", 60) + "\x1b[0m\n"
+	prompt := promptLine + "mem> "
+
 	rl, err := readline.NewEx(&readline.Config{
-		Prompt:          "mem> ",
+		Prompt:          prompt,
 		HistoryFile:     memHistoryPath(),
 		InterruptPrompt: "^C",
 		EOFPrompt:       "exit",
@@ -56,6 +64,12 @@ func runRepl(cfg *Config, store *Store) {
 
 		line = strings.TrimSpace(line)
 		if line == "" {
+			continue
+		}
+
+		// Псевдо-popup: ввели только "/" — показать список команд
+		if line == "/" {
+			printCommandMenu()
 			continue
 		}
 
@@ -206,4 +220,65 @@ func printReplHelp() {
 	fmt.Printf("  %s            Выйти (Ctrl-D тоже)\n", ui.ID("/exit"))
 	fmt.Println()
 	fmt.Println(ui.Tag("Tab дополняет команды и подставляет из истории."))
+}
+
+// commandMenuEntry — описание одной команды для /-меню.
+type commandMenuEntry struct {
+	name string
+	desc string
+}
+
+// commandMenu — список команд для псевдо-popup при вводе "/" + Enter.
+var commandMenu = []commandMenuEntry{
+	{"search <q>", "поиск (или просто текст)"},
+	{"add <текст>", "сохранить новую запись"},
+	{"recent", "последние N записей"},
+	{"show <id>", "показать запись целиком"},
+	{"important <id>", "переключить важность"},
+	{"tags <id> ...", "изменить теги"},
+	{"edit <id> ...", "изменить запись"},
+	{"delete <id>", "удалить запись"},
+	{"stats", "статистика базы"},
+	{"sources", "список документов"},
+	{"config", "конфигурация"},
+	{"clear", "очистить экран"},
+	{"clear-history", "очистить историю ввода"},
+	{"help", "список /-команд"},
+	{"exit", "выйти (Ctrl-D тоже)"},
+}
+
+// printCommandMenu показывает псевдо-popup со списком доступных команд.
+// Вызывается при вводе "/" + Enter.
+func printCommandMenu() {
+	fmt.Println()
+	fmt.Println(ui.Header("/-команды (нажмите /<команда> или Esc+Enter для отмены)"))
+	fmt.Println(ui.Separator())
+
+	// Печатаем в две колонки для компактности
+	maxName := 0
+	for _, e := range commandMenu {
+		if len(e.name) > maxName {
+			maxName = len(e.name)
+		}
+	}
+	half := (len(commandMenu) + 1) / 2
+	for i := 0; i < half; i++ {
+		left := commandMenu[i]
+		leftStr := fmt.Sprintf("  %s  %s",
+			ui.ID("/"+left.name),
+			ui.Tag(left.desc),
+		)
+		var rightStr string
+		if i+half < len(commandMenu) {
+			right := commandMenu[i+half]
+			rightStr = fmt.Sprintf("    %s  %s",
+				ui.ID("/"+right.name),
+				ui.Tag(right.desc),
+			)
+		}
+		// Выравнивание
+		fmt.Printf("%-*s%s\n", maxName+20, leftStr, rightStr)
+	}
+	fmt.Println(ui.Separator())
+	fmt.Println(ui.Tag("Подсказка: Tab дополняет, ↑/↓ история, Ctrl-D выход."))
 }

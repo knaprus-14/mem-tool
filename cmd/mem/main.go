@@ -63,7 +63,7 @@ func init() {
 	}
 }
 
-const version = "1.14.0"
+const version = "1.14.1"
 
 // cmdRequiresDB — команды, для работы которых нужна локальная база .mem/
 var cmdRequiresDB = map[string]bool{
@@ -1268,10 +1268,11 @@ func printUsage() {
 
 Интерактивный REPL:
   Запускается командой mem (без аргументов) или mem repl.
-  Внизу — prompt mem>, сверху — заголовок и последние 5 записей.
+  Внизу — prompt mem>, сверху — горизонтальная линия (рамка).
   Текст без / — сокращение для /search.
   Up/Down — история запросов (хранится в .mem/history.txt).
-  Tab — дополнение /-команд (/se<TAB> → /search).
+  Tab — дополнение /-команд (/se<TAB> → /search, /<TAB> — все команды).
+  / + Enter — псевдо-popup со списком всех команд.
   Ctrl-D или /exit — выход.
   Полный список /-команд: введите /help в REPL.
 

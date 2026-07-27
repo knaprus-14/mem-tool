@@ -51,6 +51,21 @@ func (c *MemCompleter) Do(line []rune, pos int) ([][]rune, int) {
 		return nil, 0
 	}
 
+	// Пустая строка или только "/" — все команды. readline покажет их списком.
+	if prefix == "" || prefix == "/" {
+		// Возвращаем ВСЕ команды сразу (readline умеет показывать несколько вариантов).
+		// Если prefix == "/", нужно вернуть суффикс без "/".
+		out := make([][]rune, len(c.cmds))
+		for i, cmd := range c.cmds {
+			if prefix == "/" {
+				out[i] = []rune(cmd[1:]) // без ведущего "/"
+			} else {
+				out[i] = []rune(cmd[1:]) // пустая строка — тоже с ведущим слэшем
+			}
+		}
+		return out, 0
+	}
+
 	// Иначе — пытаемся дополнить команду.
 	// Если строка не начинается с "/" — добавляем его ко всем вариантам.
 	var candidates []string

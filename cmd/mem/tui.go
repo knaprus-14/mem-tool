@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/bubbles/spinner"
 	"github.com/charmbracelet/bubbles/textarea"
 	"github.com/charmbracelet/bubbles/viewport"
 	"github.com/charmbracelet/lipgloss"
@@ -41,13 +42,23 @@ type tuiModel struct {
 	height     int
 	viewport   viewport.Model
 	textarea   textarea.Model
+	spinner    spinner.Model
 	output     []string
 	showPopup  bool
 	popupIdx   int
 	popupItems []commandMenuEntry
+	busy       bool
+	busyText   string
 	cfg        *Config
 	store      *Store
 	quitting   bool
+}
+
+// execResultMsg — результат выполнения команды.
+type execResultMsg struct {
+	line   string
+	output string
+	err    error
 }
 
 // newTuiModel создаёт начальную модель TUI.
@@ -64,9 +75,14 @@ func newTuiModel(cfg *Config, store *Store) tuiModel {
 	vp := viewport.New(80, 20)
 	vp.SetContent("")
 
+	sp := spinner.New()
+	sp.Spinner = spinner.Dot
+	sp.Style = lipgloss.NewStyle().Foreground(lipgloss.Color("63"))
+
 	m := tuiModel{
 		viewport:   vp,
 		textarea:   ta,
+		spinner:    sp,
 		popupItems: commandMenu,
 		cfg:        cfg,
 		store:      store,
@@ -95,7 +111,7 @@ func (m *tuiModel) printHeader() {
 
 // Init — инициализация модели.
 func (m tuiModel) Init() tea.Cmd {
-	return textarea.Blink
+	return tea.Batch(textarea.Blink, spinner.Tick)
 }
 
 // Update — обработка сообщений.
@@ -103,17 +119,31 @@ func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	var (
 		tiCmd tea.Cmd
 		vpCmd tea.Cmd
+		spCmd tea.Cmd
 	)
 
-	prevVal := m.textarea.Value()
 	m.textarea, tiCmd = m.textarea.Update(msg)
 	m.viewport, vpCmd = m.viewport.Update(msg)
+	m.spinner, spCmd = m.spinner.Update(msg)
 
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
 		m.width = msg.Width
 		m.height = msg.Height
 		m.recomputeSizes()
+		return m, nil
+
+	case execResultMsg:
+		// Результат выполнения команды
+		m.busy = false
+		m.busyText = ""
+		if msg.err != nil {
+			m.appendBlock(tuiStyles.Status.Render("Ошибка: " + msg.err.Error()))
+		}
+		if msg.output != "" {
+			m.appendBlock(msg.output)
+		}
+		m.appendBlock(tuiStyles.Separator.Render(strings.Repeat("─", m.viewportWidth())))
 		return m, nil
 
 	case tea.KeyMsg:
@@ -149,9 +179,8 @@ func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if line == "" {
 				return m, nil
 			}
-			m.executeCommand(line)
 			m.textarea.Reset()
-			return m, nil
+			return m, m.runCommandAsync(line)
 
 		case "up":
 			if m.showPopup {
@@ -192,7 +221,6 @@ func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 		// Динамический popup: показать/скрыть по содержимому textarea
 		val := m.textarea.Value()
-		_ = prevVal
 		if strings.HasPrefix(val, "/") && !strings.Contains(val, " ") {
 			m.showPopup = true
 			m.popupIdx = 0
@@ -201,57 +229,25 @@ func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 	}
 
-	return m, tea.Batch(tiCmd, vpCmd)
+	return m, tea.Batch(tiCmd, vpCmd, spCmd)
 }
 
-// executeCommand выполняет одну строку ввода: парсит /-команду или текст
-// (как сокращение для /search), вызывает соответствующий хендлер,
-// перехватывая его вывод в stdout, и добавляет результат в viewport.
+// executeCommand синхронно выполняет команду (для /clear, /help, /exit и т.п.)
 func (m *tuiModel) executeCommand(line string) {
 	m.appendBlock(tuiStyles.UserLine.Render("> " + line))
 
 	var cmd string
-	var args []string
 	if strings.HasPrefix(line, "/") {
 		parts := strings.Fields(line)
 		if len(parts) == 0 {
 			return
 		}
 		cmd = strings.ToLower(strings.TrimPrefix(parts[0], "/"))
-		args = parts[1:]
 	} else {
 		cmd = "search"
-		args = []string{line}
 	}
 
-	var result string
 	switch cmd {
-	case "search":
-		result = captureStdout(func() { handleSearch(m.cfg, m.store, args) })
-	case "add":
-		result = captureStdout(func() { handleAdd(m.cfg, m.store, args) })
-	case "recent":
-		result = captureStdout(func() { handleRecent(m.store, args) })
-	case "show", "get", "view", "source":
-		result = captureStdout(func() { handleShow(m.store, args) })
-	case "important", "imp":
-		result = captureStdout(func() { handleImportant(m.store, args) })
-	case "tags", "retag":
-		result = captureStdout(func() { handleRetag(m.store, args) })
-	case "edit":
-		result = captureStdout(func() { handleEdit(m.cfg, m.store, args) })
-	case "delete", "rm":
-		result = captureStdout(func() { handleDelete(m.store, args) })
-	case "stats":
-		result = captureStdout(func() { handleStats(m.store) })
-	case "sources":
-		result = captureStdout(func() { handleSources(m.store) })
-	case "config":
-		result = captureStdout(func() {
-			if err := handleConfig(args); err != nil {
-				fmt.Fprintf(os.Stderr, "Ошибка: %v\n", err)
-			}
-		})
 	case "clear":
 		m.output = nil
 		m.viewport.SetContent("")
@@ -262,17 +258,77 @@ func (m *tuiModel) executeCommand(line string) {
 		return
 	case "exit", "quit", "q":
 		m.quitting = true
-		// Возвращаем через View, не сразу
 		return
 	default:
+		// Асинхронные команды идут через runCommandAsync
 		m.appendBlock(tuiStyles.Status.Render(fmt.Sprintf("Неизвестная команда: /%s. Введите /help.", cmd)))
 		return
 	}
+}
 
-	if result != "" {
-		m.appendBlock(result)
+// runCommandAsync запускает команду асинхронно, возвращая tea.Cmd.
+// Пока команда выполняется, в TUI крутится спиннер.
+func (m *tuiModel) runCommandAsync(line string) tea.Cmd {
+	m.appendBlock(tuiStyles.UserLine.Render("> " + line))
+	m.busy = true
+	m.busyText = "выполняю..."
+
+	// Парсим команду (копия логики из executeCommand)
+	var cmd string
+	var args []string
+	if strings.HasPrefix(line, "/") {
+		parts := strings.Fields(line)
+		if len(parts) == 0 {
+			m.busy = false
+			return nil
+		}
+		cmd = strings.ToLower(strings.TrimPrefix(parts[0], "/"))
+		args = parts[1:]
+	} else {
+		cmd = "search"
+		args = []string{line}
 	}
-	m.appendBlock(tuiStyles.Separator.Render(strings.Repeat("─", 60)))
+
+	// Локальные копии (для горутины)
+	cfg := m.cfg
+	store := m.store
+
+	return func() tea.Msg {
+		var result string
+		var err error
+
+		switch cmd {
+		case "search":
+			result = captureStdout(func() { handleSearch(cfg, store, args) })
+		case "add":
+			result = captureStdout(func() { handleAdd(cfg, store, args) })
+		case "recent":
+			result = captureStdout(func() { handleRecent(store, args) })
+		case "show", "get", "view", "source":
+			result = captureStdout(func() { handleShow(store, args) })
+		case "important", "imp":
+			result = captureStdout(func() { handleImportant(store, args) })
+		case "tags", "retag":
+			result = captureStdout(func() { handleRetag(store, args) })
+		case "edit":
+			result = captureStdout(func() { handleEdit(cfg, store, args) })
+		case "delete", "rm":
+			result = captureStdout(func() { handleDelete(store, args) })
+		case "stats":
+			result = captureStdout(func() { handleStats(store) })
+		case "sources":
+			result = captureStdout(func() { handleSources(store) })
+		case "config":
+			result = captureStdout(func() {
+				if e := handleConfig(args); e != nil {
+					err = e
+				}
+			})
+		default:
+			err = fmt.Errorf("неизвестная команда: /%s", cmd)
+		}
+		return execResultMsg{line: line, output: result, err: err}
+	}
 }
 
 // printHelp показывает список команд.
@@ -318,6 +374,10 @@ func (m tuiModel) View() string {
 	sep := tuiStyles.Separator.Render(strings.Repeat("─", m.viewportWidth()))
 	taView := m.textarea.View()
 	status := tuiStyles.Status.Render("Enter: выполнить · /<TAB>: команды · Esc/Ctrl-D: выход · ↑/↓/PgUp/PgDn: прокрутка")
+
+	if m.busy {
+		status = m.spinner.View() + " " + m.busyText
+	}
 
 	return fmt.Sprintf("%s\n%s\n%s%s\n%s\n%s\n%s",
 		header, sep, viewportView, popupView, sep, taView, status)

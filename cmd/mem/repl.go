@@ -38,6 +38,7 @@ func runRepl(cfg *Config, store *Store) {
 		HistoryFile:     memHistoryPath(),
 		InterruptPrompt: "^C",
 		EOFPrompt:       "exit",
+		AutoComplete:    NewMemCompleter(),
 	})
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Ошибка запуска REPL: %v\n", err)

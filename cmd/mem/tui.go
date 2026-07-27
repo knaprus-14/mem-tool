@@ -5,6 +5,7 @@ import (
 	"io"
 	"os"
 	"strings"
+	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/bubbles/key"
@@ -58,6 +59,9 @@ type tuiModel struct {
 	popupItems []commandMenuEntry // полный список команд (для /help)
 	popupFiltered []commandMenuEntry // отфильтрованный по префиксу ввода (для popup)
 	busy       bool
+	cancelled  bool          // пользователь нажал Esc во время busy=true
+	ctrlCPending bool        // первый Ctrl+C уже нажат, ждём второго
+	ctrlCTime    time.Time   // время последнего Ctrl+C (для проверки окна 2 сек)
 	cfg        *Config
 	store      *Store
 	quitting   bool
@@ -68,6 +72,10 @@ type execResultMsg struct {
 	output string
 	err    error
 }
+
+// ctrlCResetMsg — сбрасывает флаг ctrlCPending через 2 секунды после первого нажатия.
+// Без этого случайное первое нажатие блокировало бы выход навсегда.
+type ctrlCResetMsg struct{}
 
 // newTuiModel создаёт начальную модель TUI.
 func newTuiModel(cfg *Config, store *Store) tuiModel {
@@ -122,7 +130,7 @@ func (m *tuiModel) headerLine() string {
 // printHeader добавляет приветствие в viewport (для /clear и стартового экрана).
 // Динамический заголовок (headerLine) НЕ выводится — он уже отрисован в View() сверху.
 func (m *tuiModel) printHeader() {
-	m.appendBlock(tuiStyles.Status.Render("Введите запрос, /help для списка команд, Esc/Ctrl-D для выхода."))
+	m.appendBlock(tuiStyles.Status.Render("Введите запрос или /help. Esc — отменить/выйти, Ctrl+C×2 — выход."))
 	m.appendBlock(tuiStyles.Separator.Render(strings.Repeat("─", m.viewportWidth())))
 }
 
@@ -154,9 +162,30 @@ func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.recomputeSizes()
 		return m, nil
 
+	case spinner.TickMsg:
+		// Тикаем спиннер только пока busy=true. Когда busy=false (результат пришёл)
+		// — возвращаем nil, цепочка обрывается, CPU не тратится.
+		// Раньше spinner.Update вызывался безусловно для каждого msg в начале Update,
+		// и цепочка TickMsg терялась при return внутри switch — спиннер зависал.
+		var spCmd tea.Cmd
+		m.spinner, spCmd = m.spinner.Update(msg)
+		if m.busy {
+			return m, spCmd
+		}
+		return m, nil
+
 	case execResultMsg:
 		// Результат выполнения команды
 		m.busy = false
+		if m.cancelled {
+			// Пользователь нажал Esc во время выполнения — игнорируем результат.
+			// Горутина всё равно доработала (хендлеры не принимают ctx), но мы
+			// не показываем её вывод.
+			m.cancelled = false
+			m.appendBlock(tuiStyles.Status.Render("Отменено пользователем"))
+			m.appendBlock(tuiStyles.Separator.Render(strings.Repeat("─", m.viewportWidth())))
+			return m, nil
+		}
 		if msg.err != nil {
 			m.appendBlock(tuiStyles.Status.Render("Ошибка: " + msg.err.Error()))
 		}
@@ -166,11 +195,25 @@ func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.appendBlock(tuiStyles.Separator.Render(strings.Repeat("─", m.viewportWidth())))
 		return m, nil
 
+	case ctrlCResetMsg:
+		// Окно ожидания второго Ctrl+C истекло — сбрасываем флаг.
+		m.ctrlCPending = false
+		return m, nil
+
 	case tea.KeyMsg:
 		switch msg.String() {
 		case "ctrl+c":
-			m.quitting = true
-			return m, tea.Quit
+			// Двойной Ctrl+C в течение 2 секунд — выход.
+			// Одинарный — показываем предупреждение и ставим таймер на сброс.
+			if m.ctrlCPending && time.Since(m.ctrlCTime) < 2*time.Second {
+				m.quitting = true
+				return m, tea.Quit
+			}
+			m.ctrlCPending = true
+			m.ctrlCTime = time.Now()
+			m.appendBlock(tuiStyles.Status.Render(
+				"Чтобы выйти, нажмите Ctrl+C ещё раз (в течение 2 секунд)"))
+			return m, tea.Tick(2*time.Second, func(time.Time) tea.Msg { return ctrlCResetMsg{} })
 
 		case "ctrl+d":
 			m.quitting = true
@@ -180,6 +223,14 @@ func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if m.showPopup {
 				m.showPopup = false
 				m.textarea.SetValue("")
+				return m, nil
+			}
+			if m.busy {
+				// Отмена текущей операции — НЕ выход из TUI. Горутина в runCommandAsync
+				// не может быть прервана (хендлеры не принимают ctx), но мы игнорируем
+				// её результат и продолжаем крутить спиннер с текстом «Отменяю...».
+				m.cancelled = true
+				m.appendBlock(tuiStyles.Status.Render("Отменяю... (дождитесь завершения операции)"))
 				return m, nil
 			}
 			m.quitting = true
@@ -471,7 +522,7 @@ func (m tuiModel) View() string {
 
 	sep := tuiStyles.Separator.Render(strings.Repeat("─", m.viewportWidth()))
 	taView := m.textarea.View()
-	status := tuiStyles.Status.Render("Enter: выполнить · /<TAB>: команды · Esc/Ctrl-D: выход · ↑/↓/PgUp/PgDn: прокрутка")
+	status := tuiStyles.Status.Render("Enter: выполнить · Esc: отменить/выйти · Ctrl+C×2: выход · /<TAB>: команды")
 
 	if m.busy {
 		status = m.spinner.View() + " " + busyText

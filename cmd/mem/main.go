@@ -63,7 +63,7 @@ func init() {
 	}
 }
 
-const version = "1.15.6"
+const version = "1.15.7"
 
 // cmdRequiresDB — команды, для работы которых нужна локальная база .mem/
 var cmdRequiresDB = map[string]bool{

@@ -49,7 +49,8 @@ type tuiModel struct {
 	output     []string
 	showPopup  bool
 	popupIdx   int
-	popupItems []commandMenuEntry
+	popupItems []commandMenuEntry // полный список команд (для /help)
+	popupFiltered []commandMenuEntry // отфильтрованный по префиксу ввода (для popup)
 	busy       bool
 	cfg        *Config
 	store      *Store
@@ -81,12 +82,13 @@ func newTuiModel(cfg *Config, store *Store) tuiModel {
 	sp.Style = lipgloss.NewStyle().Foreground(lipgloss.Color("63"))
 
 	m := tuiModel{
-		viewport:   vp,
-		textarea:   ta,
-		spinner:    sp,
-		popupItems: commandMenu,
-		cfg:        cfg,
-		store:      store,
+		viewport:       vp,
+		textarea:       ta,
+		spinner:        sp,
+		popupItems:     commandMenu,
+		popupFiltered:  commandMenu,
+		cfg:            cfg,
+		store:          store,
 	}
 	m.printHeader()
 	return m
@@ -176,7 +178,7 @@ func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			// иначе пользователь допишет аргумент после плейсхолдера и
 			// парсер передаст «<id>» в хендлер как ID — будет «не число».
 			if m.showPopup {
-				name := m.popupItems[m.popupIdx].name
+				name := m.popupFiltered[m.popupIdx].name
 				if i := strings.IndexByte(name, ' '); i >= 0 {
 					name = name[:i]
 				}
@@ -233,14 +235,21 @@ func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// Динамический popup: показать/скрыть по содержимому textarea
 		val := m.textarea.Value()
 		if strings.HasPrefix(val, "/") && !strings.Contains(val, " ") {
+			prefix := strings.ToLower(strings.TrimPrefix(val, "/"))
 			if m.isExactCommand(val) {
 				// Пользователь ввёл команду целиком (/clear, /help и т.д.) —
 				// popup не нужен, иначе Enter перехватит его и подставит
 				// первый элемент (/search) вместо того, что ввёл пользователь.
 				m.showPopup = false
 			} else {
-				m.showPopup = true
-				m.popupIdx = 0
+				// Фильтруем команды по префиксу — автодополнение в стиле bash.
+				m.popupFiltered = filterCommands(prefix, m.popupItems)
+				if len(m.popupFiltered) == 0 {
+					m.showPopup = false
+				} else {
+					m.showPopup = true
+					m.popupIdx = 0
+				}
 			}
 		} else {
 			m.showPopup = false
@@ -388,6 +397,29 @@ func (m *tuiModel) isExactCommand(val string) bool {
 	return false
 }
 
+// filterCommands возвращает подмножество команд из items, имена которых
+// (без плейсхолдера) начинаются с prefix (регистр игнорируется).
+// Используется для автодополнения в popup: ввёл "/cl" → остаются только
+// команды, начинающиеся с "cl" (например, "clear").
+// При пустом prefix возвращает исходный список.
+func filterCommands(prefix string, items []commandMenuEntry) []commandMenuEntry {
+	if prefix == "" {
+		return items
+	}
+	p := strings.ToLower(prefix)
+	var out []commandMenuEntry
+	for _, item := range items {
+		cmdName := item.name
+		if i := strings.IndexByte(cmdName, ' '); i >= 0 {
+			cmdName = cmdName[:i]
+		}
+		if strings.HasPrefix(strings.ToLower(cmdName), p) {
+			out = append(out, item)
+		}
+	}
+	return out
+}
+
 // appendBlock добавляет блок текста в вывод.
 func (m *tuiModel) appendBlock(text string) {
 	m.output = append(m.output, text)
@@ -446,7 +478,7 @@ func (m tuiModel) viewportHeight() int {
 	}
 	reserved := 8
 	if m.showPopup {
-		reserved += len(m.popupItems) + 3
+		reserved += len(m.popupFiltered) + 3
 	}
 	h := m.height - reserved
 	if h < 5 {
@@ -458,7 +490,7 @@ func (m tuiModel) viewportHeight() int {
 // renderPopup отрисовывает popup со списком команд.
 func (m tuiModel) renderPopup() string {
 	var lines []string
-	for i, c := range m.popupItems {
+	for i, c := range m.popupFiltered {
 		var row string
 		if i == m.popupIdx {
 			row = tuiStyles.PopupSel.Render(fmt.Sprintf("▸ /%s  %s", c.name, c.desc))

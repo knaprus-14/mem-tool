@@ -349,6 +349,38 @@ mem> _
   - **Фикс:** убран безусловный outer-вызов и `spCmd` из var-блока + из финального `tea.Batch`. Spinner обновляется только в `case spinner.TickMsg` — правильный bubbletea-паттерн.
 - **Не трогали:** UX-фиксы v1.15.11 (Esc отменяет, Ctrl+C×2 для выхода) оставлены без изменений.
 
+**v1.15.13 — глобальная база: нативные флаги `--global`/`--dir` и фильтр `-tag`:**
+
+- **Флаги `--global` и `--dir <path>`** — нативная поддержка работы с глобальной
+  базой знаний и произвольной директорией без wrapper-скриптов. Парсятся **до**
+  всей остальной логики в `run()` и делают `os.Chdir` на родителя `.mem/`
+  директории; дальше всё работает как обычно (cwd-relative пути в `pkg/mem/dbpath.go`).
+  Примеры:
+  - `mem --global stats` — статистика глобальной базы (~/global-mem/.mem)
+  - `mem --global search "tui bubbletea"` — поиск в глобальной базе
+  - `mem --dir "C:/Users/ZMII/global-mem" search "..."` — явный путь
+  - `mem --dir "/home/user/projects/foo" stats` — путь к проекту
+- **Флаг `-tag <value>`** в `mem search` — фильтр по **категории записи**
+  (точное совпадение с любым из тегов записи). В отличие от `-tags "a,b"`
+  (любой из списка), `-tag` — семантический фильтр для типовых категорий:
+  `rule`, `decision`, `bug`, `best-practice`. Пример:
+  `mem --global search "tui" -tag rule` — только правила про TUI.
+  Логируется отдельным префиксом `[TAG-FILTER]` (отличается от `[TAG]` для `-tags`).
+- **`mem-global.cmd` и `mem-both.cmd` упрощены** — теперь это trivial
+  short-cut-ы (`mem.exe --global %*`), без `cd`. Wrapper-скрипты остались для
+  удобства, но больше не обязательны.
+- **`templates/CLAUDE.md.template`** — переиспользуемый шаблон CLAUDE.md для
+  других проектов. Скопируйте его в корень любого проекта, чтобы Claude
+  автоматически искал в локальной + глобальной базах знаний через
+  `mem search` и `mem --global search`.
+
+**Изменённые файлы:**
+- `cmd/mem/main.go` — 6 call-сайтов `parseFlags` + фильтр `tagFilter` в `handleSearch` + бамп версии
+- `pkg/mem/dbpath.go` — `GlobalMemDir()` / `EnvGlobalDir` (уже было в v1.15.13-pre, без изменений здесь)
+- `C:\Users\ZMII\bin\mem-global.cmd`, `mem-both.cmd` — упрощены до нативного `--global`
+- `templates/CLAUDE.md.template` — новый файл
+- `DOCUMENTATION.md` — эта запись
+
 ### Версия 1.13 — Цветной вывод и команда `mem show`
 
 **v1.13.0 — фаза 1 UX-плана (цвета):**

@@ -17,9 +17,36 @@ type MemMeta struct {
 // MemDirName — имя скрытой директории с локальной базой
 const MemDirName = ".mem"
 
+// EnvGlobalDir — имя env-переменной для пути к глобальной базе знаний.
+// Если не задана, используется DefaultGlobalDir() (~/global-mem/.mem на каждой ОС).
+const EnvGlobalDir = "MEM_GLOBAL_DIR"
+
 // memDir возвращает путь к директории .mem/ относительно cwd
 func MemDir() string {
 	return MemDirName
+}
+
+// DefaultGlobalDir возвращает ОС-зависимый путь по умолчанию к глобальной базе:
+// Windows: %USERPROFILE%\global-mem\.mem
+// Unix:    $HOME/global-mem/.mem
+// Можно переопределить через env MEM_GLOBAL_DIR.
+func DefaultGlobalDir() string {
+	if env := os.Getenv(EnvGlobalDir); env != "" {
+		return env
+	}
+	home, err := os.UserHomeDir()
+	if err != nil || home == "" {
+		// fallback: относительный путь рядом с cwd
+		return filepath.Join("global-mem", MemDirName)
+	}
+	return filepath.Join(home, "global-mem", MemDirName)
+}
+
+// GlobalMemDir возвращает путь к глобальной базе знаний. Используется для
+// команд с флагом --global или --dir. Путь берётся из env MEM_GLOBAL_DIR,
+// иначе — из DefaultGlobalDir().
+func GlobalMemDir() string {
+	return DefaultGlobalDir()
 }
 
 // memConfigPath возвращает путь к .mem/config.json

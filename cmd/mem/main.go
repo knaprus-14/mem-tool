@@ -63,7 +63,7 @@ func init() {
 	}
 }
 
-const version = "1.15.12"
+const version = "1.15.13"
 
 // cmdRequiresDB — команды, для работы которых нужна локальная база .mem/
 var cmdRequiresDB = map[string]bool{
@@ -101,6 +101,76 @@ func parseColorFlag(args []string) (string, []string) {
 	return mode, out
 }
 
+// parseGlobalFlag извлекает флаги --global и --dir=<path> / --dir <path>
+// из произвольного набора аргументов.
+//
+// --global    — переключает cwd на родительскую директорию глобальной базы знаний
+//               (по умолчанию ~/global-mem/, путь берётся из env MEM_GLOBAL_DIR).
+//               После этого все команды работают с глобальной базой, как если бы
+//               пользователь запустил mem в её родительской папке.
+//
+// --dir <path> — переключает cwd на path/.mem/ (если path уже содержит .mem, берётся path).
+//               Полезно для работы с произвольной базой без cd.
+//
+// Возвращает (useGlobal bool, customDir string, remainingArgs []string).
+// Если useGlobal==true, customDir игнорируется.
+// Применяется через applyDirSwitch в самом начале run() ДО остальной логики.
+func parseGlobalFlag(args []string) (bool, string, []string) {
+	useGlobal := false
+	customDir := ""
+	out := make([]string, 0, len(args))
+	for i := 0; i < len(args); i++ {
+		a := args[i]
+		switch {
+		case a == "--global":
+			useGlobal = true
+		case a == "--dir":
+			if i+1 < len(args) {
+				customDir = args[i+1]
+				i++
+			}
+		case strings.HasPrefix(a, "--dir="):
+			customDir = strings.TrimPrefix(a, "--dir=")
+		default:
+			out = append(out, a)
+		}
+	}
+	return useGlobal, customDir, out
+}
+
+// applyDirSwitch применяет --global/--dir к текущему процессу через os.Chdir.
+// Если указан --global: cwd → родительская директория GlobalMemDir() (обычно ~/global-mem).
+// Если указан --dir <path>: cwd → path, либо path/.mem если path — родитель.
+// Возвращает ошибку, если перейти не удалось.
+//
+// После этого все последующие вызовы MemDir(), MemExists(), NewStore(memDir())
+// будут работать с целевой базой без дополнительных изменений.
+func applyDirSwitch(useGlobal bool, customDir string) error {
+	if useGlobal {
+		gdir := mem.GlobalMemDir()
+		// gdir обычно заканчивается на .mem — нам нужен его родитель (~/global-mem)
+		parent := filepath.Dir(gdir)
+		if err := os.Chdir(parent); err != nil {
+			return fmt.Errorf("не удалось перейти в глобальную базу %s: %w", parent, err)
+		}
+		return nil
+	}
+	if customDir != "" {
+		// customDir может быть как "C:/foo/.mem", так и "C:/foo" — нормализуем.
+		target := customDir
+		if filepath.Base(target) != mem.MemDirName {
+			target = filepath.Join(target, mem.MemDirName)
+		}
+		// Переходим в родительскую директорию (или саму target, если .mem)
+		cwd := filepath.Dir(target)
+		if err := os.Chdir(cwd); err != nil {
+			return fmt.Errorf("не удалось перейти в %s: %w", cwd, err)
+		}
+		return nil
+	}
+	return nil
+}
+
 func main() {
 	// Вся логика в run() int — main() просто транслирует код возврата в os.Exit.
 	// Это позволяет defer в run() корректно срабатывать (os.Exit не запускает defer).
@@ -110,8 +180,18 @@ func main() {
 // run — основная логика. Возвращает код выхода: 0 при успехе, 1 при ошибке.
 // Использование defer для Close() возможно благодаря тому, что main() вызывает os.Exit(run()).
 func run() int {
-	// Сначала парсим --color/--no-color из произвольной позиции
-	colorMode, args0 := parseColorFlag(os.Args[1:])
+	args0 := os.Args[1:]
+
+	// Сначала парсим --global / --dir — они переключают cwd до всей остальной логики.
+	// После chdir все команды работают с целевой базой как обычно.
+	useGlobal, customDir, args0 := parseGlobalFlag(args0)
+	if err := applyDirSwitch(useGlobal, customDir); err != nil {
+		fmt.Fprintf(os.Stderr, "%v\n", err)
+		return 1
+	}
+
+	// Потом --color/--no-color (влияет только на ui-стили, не на cwd)
+	colorMode, args0 := parseColorFlag(args0)
 	ui.Init(colorMode)
 
 	if len(os.Args) < 2 || len(args0) == 0 {
@@ -281,7 +361,7 @@ func printVersion() {
 	fmt.Println("Векторная база знаний для работы с Claude")
 }
 
-func parseFlags(args []string) (positional []string, title string, tags []string, limit int, from, to string, minScore float64, vectorOnly bool, important bool) {
+func parseFlags(args []string) (positional []string, title string, tags []string, limit int, from, to string, minScore float64, vectorOnly bool, important bool, tagFilter string) {
 	limit = 10
 	for i := 0; i < len(args); i++ {
 		switch args[i] {
@@ -326,6 +406,15 @@ func parseFlags(args []string) (positional []string, title string, tags []string
 			vectorOnly = true
 		case "-important":
 			important = true
+		case "-tag":
+			// Точный фильтр по одному тегу (для семантической фильтрации по типу записи:
+			// rule, decision, bug, best-practice, project, global и т.д.).
+			// -tags (множественное число) оставлен для совместимости — это поиск
+			// по тегам ВНУТРИ записей, а -tag — фильтр по КАТЕГОРИИ записи.
+			if i+1 < len(args) {
+				i++
+				tagFilter = args[i]
+			}
 		default:
 			positional = append(positional, args[i])
 		}
@@ -334,7 +423,7 @@ func parseFlags(args []string) (positional []string, title string, tags []string
 }
 
 func handleAdd(cfg *Config, store *Store, args []string) error {
-	positional, title, tags, _, _, _, _, _, important := parseFlags(args)
+	positional, title, tags, _, _, _, _, _, important, _ := parseFlags(args)
 	if len(positional) == 0 {
 		return fmt.Errorf("укажи текст для сохранения\nПример: mem add \"какой-то факт\" -title \"Название\" -tags \"термины,проект\" -important")
 	}
@@ -362,7 +451,7 @@ func handleAdd(cfg *Config, store *Store, args []string) error {
 }
 
 func handleSearch(cfg *Config, store *Store, args []string) error {
-	positional, _, tags, limit, from, to, minScore, vectorOnly, _ := parseFlags(args)
+	positional, _, tags, limit, from, to, minScore, vectorOnly, _, tagFilter := parseFlags(args)
 	if len(positional) == 0 {
 		return fmt.Errorf("укажи поисковый запрос\nПример: mem search \"IP сервера\" -tags \"инфраструктура\" -from 2026-06-01")
 	}
@@ -391,6 +480,24 @@ func handleSearch(cfg *Config, store *Store, args []string) error {
 		}
 		results = filtered
 		fmt.Printf("[TAG] Фильтр по тегам: %s\n", strings.Join(tags, ", "))
+	}
+
+	// Фильтрация по категории (точное совпадение с одним тегом записи).
+	// В отличие от -tags "a,b" (любой из), -tag "X" — это семантический
+	// фильтр: запись должна содержать тег X. Используется для типовых
+	// категорий: rule / decision / bug / best-practice.
+	if tagFilter != "" {
+		var filtered []Entry
+		for _, r := range results {
+			for _, t := range r.Tags {
+				if t == tagFilter {
+					filtered = append(filtered, r)
+					break
+				}
+			}
+		}
+		results = filtered
+		fmt.Printf("[TAG-FILTER] Категория: %s\n", tagFilter)
 	}
 
 	// Фильтрация по дате
@@ -663,7 +770,7 @@ func reRankResults(results []Entry, query string) int {
 }
 
 func handleRecent(store *Store, args []string) error {
-	_, _, _, limit, _, _, _, _, _ := parseFlags(args)
+	_, _, _, limit, _, _, _, _, _, _ := parseFlags(args)
 
 	entries, err := store.Recent(limit)
 	if err != nil {
@@ -706,7 +813,7 @@ func handleRecent(store *Store, args []string) error {
 }
 
 func handleAddFile(cfg *Config, store *Store, args []string) {
-	positional, title, tags, _, _, _, _, _, important := parseFlags(args)
+	positional, title, tags, _, _, _, _, _, important, _ := parseFlags(args)
 	if len(positional) == 0 {
 		fmt.Fprintln(os.Stderr, "Ошибка: укажи путь к файлу")
 		fmt.Fprintln(os.Stderr, "Пример: mem add-file ./notes.txt -tags \"документация\"")
@@ -1058,7 +1165,7 @@ func handleEdit(cfg *Config, store *Store, args []string) error {
 
 	// Парсим остальные аргументы (после ID)
 	rest := args[1:]
-	positionals, editTitle, _, _, _, _, _, _, _ := parseFlags(rest)
+	positionals, editTitle, _, _, _, _, _, _, _, _ := parseFlags(rest)
 	editText := strings.Join(positionals, " ")
 
 	if editText == "" && editTitle == "" {
@@ -1114,7 +1221,7 @@ func handleRetag(store *Store, args []string) error {
 		return fmt.Errorf("'%s' не число", args[0])
 	}
 
-	_, _, newTags, _, _, _, _, _, _ := parseFlags(args[1:])
+	_, _, newTags, _, _, _, _, _, _, _ := parseFlags(args[1:])
 	if len(newTags) == 0 {
 		return fmt.Errorf("укажи -tags \"новые,теги\"\nПример: mem retag 15 -tags \"сервер,ubuntu\"")
 	}
@@ -1178,10 +1285,12 @@ func printUsage() {
       Сохранить новую запись в базу. -important — пометить как важную.
       Если .mem/ нет — создаст автоматически.
 
-  mem search <запрос> [-limit N] [-tags "тег1,тег2"] [-from 2026-01-01] [-to 2026-07-01] [-min-score 0.5] [-vector-only]
+  mem search <запрос> [-limit N] [-tags "тег1,тег2"] [-tag "категория"] [-from 2026-01-01] [-to 2026-07-01] [-min-score 0.5] [-vector-only]
       Найти записи, похожие по смыслу.
       По умолчанию гибридный поиск + реранжирование (свежесть, теги, важность).
       -vector-only — отключить полнотекстовый буст, только векторы.
+      -tag "X" — фильтр по КАТЕГОРИИ записи (точное совпадение с одним тегом:
+      rule / decision / bug / best-practice). Отличается от -tags (любой из списка).
       Текст каждой записи выводится полностью (без обрезки).
 
   mem recent [-limit N]
@@ -1253,10 +1362,20 @@ func printUsage() {
   По умолчанию: auto (цвета в TTY, выключены в pipe).
   Управляется также env NO_COLOR=1, MEM_NO_COLOR=1.
 
+  --global                    Переключиться на глобальную базу знаний
+                              (по умолчанию ~/global-mem/.mem, путь через
+                              env MEM_GLOBAL_DIR). Пример: mem --global stats
+  --dir <путь>                Переключиться на базу в указанной директории.
+                              Пример: mem --dir "C:/Users/ZMII/global-mem" stats
+                              или mem --dir /home/user/projects/foo stats
+
 Примеры:
   cd ~/projects/myapp && mem add "Сервер: 157.22.196.67"
   cd ~/projects/other && mem add "Другой факт"
   mem search "IP сервера" -tags "инфраструктура"
+  mem search "tui" -tag rule                 # только правила про TUI
+  mem --global search "deadlock"            # поиск в глобальной базе
+  mem --global search "архитектура" -tag best-practice
   mem search "архитектура" -from 2026-07-01 -to 2026-07-26
   mem search "сервер" -min-score 0.5 -vector-only
   mem show 50                            # одна запись целиком

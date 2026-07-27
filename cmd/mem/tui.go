@@ -148,12 +148,15 @@ func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	var (
 		tiCmd tea.Cmd
 		vpCmd tea.Cmd
-		spCmd tea.Cmd
 	)
 
 	m.textarea, tiCmd = m.textarea.Update(msg)
 	m.viewport, vpCmd = m.viewport.Update(msg)
-	m.spinner, spCmd = m.spinner.Update(msg)
+	// spinner обновляется только в своей ветке case spinner.TickMsg ниже.
+	// Безусловный outer-вызов ломал цепочку тиков (v1.15.11 regression):
+	// при TickMsg сначала outer обрабатывал его (инкрементировал m.tag и
+	// возвращал tick), потом case делал второй Update, который видел
+	// tag mismatch и возвращал nil — цепочка обрывалась после 2 тиков.
 
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
@@ -326,7 +329,7 @@ func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 	}
 
-	return m, tea.Batch(tiCmd, vpCmd, spCmd)
+	return m, tea.Batch(tiCmd, vpCmd)
 }
 
 // runCommandAsync запускает команду: sync (/clear, /help, /exit) сразу,
@@ -590,9 +593,10 @@ func (m tuiModel) renderPopup() string {
 // Используется, чтобы вывод хендлеров (handleSearch, handleAdd и т.д.) попадал в viewport TUI,
 // а не в реальный stdout (где он смешался бы с TUI-рендерингом).
 //
-// w.Close() и восстановление os.Stdout вынесены в defer — если fn() запаникует,
-// pipe всё равно закроется и io.Copy в горутине увидит EOF. Иначе pipe-FD и
-// сама горутина утекают (io.Copy блокируется до EOF на read-end).
+// ВАЖНО: w.Close() ДОЛЖЕН быть вызван ДО чтения из done, иначе классический deadlock:
+// горутина-ридер ждёт EOF на r → EOF наступит только после w.Close() → а return <-done
+// вычисляется до defer → циклическая блокировка. Дефер оставлен как страховка от паники
+// в fn() (recover в runCommandAsync ловит панику и шлёт execResultMsg{err}).
 func captureStdout(fn func()) string {
 	oldStdout := os.Stdout
 	r, w, err := os.Pipe()
@@ -602,6 +606,7 @@ func captureStdout(fn func()) string {
 	}
 	os.Stdout = w
 
+	// Страховка от паники в fn(): закрыть pipe и восстановить stdout.
 	defer func() {
 		_ = w.Close()
 		os.Stdout = oldStdout
@@ -611,11 +616,16 @@ func captureStdout(fn func()) string {
 	go func() {
 		var buf strings.Builder
 		_, _ = io.Copy(&buf, r)
+		_ = r.Close()
 		done <- buf.String()
 	}()
 
 	fn()
-
+	// Закрываем w явно ДО <-done — иначе deadlock.
+	// Горутина-ридер увидит EOF на r, допишет в buf, закроет r,
+	// запишет результат в done (буферизованный канал уже будет иметь значение).
+	_ = w.Close()
+	os.Stdout = oldStdout
 	return <-done
 }
 

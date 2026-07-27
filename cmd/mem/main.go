@@ -13,6 +13,7 @@ import (
 	"time"
 
 	mem "github.com/knaprus-14/mem-tool/pkg/mem"
+	ui "github.com/knaprus-14/mem-tool/pkg/ui"
 )
 
 // === Алиасы для удобной работы с библиотекой mem ===
@@ -62,7 +63,7 @@ func init() {
 	}
 }
 
-const version = "1.12.0"
+const version = "1.13.0"
 
 // cmdRequiresDB — команды, для работы которых нужна локальная база .mem/
 var cmdRequiresDB = map[string]bool{
@@ -80,14 +81,41 @@ var cmdCanAutocreate = map[string]bool{
 	"add": true, "add-file": true, "index": true, "config": true,
 }
 
+// parseColorFlag извлекает флаги --color, --no-color, --color=always/never/auto
+// из произвольного набора аргументов и возвращает режим цветов и оставшиеся аргументы.
+func parseColorFlag(args []string) (string, []string) {
+	mode := "auto"
+	out := make([]string, 0, len(args))
+	for _, a := range args {
+		switch a {
+		case "--color", "--color=always", "--color=yes":
+			mode = "always"
+		case "--no-color", "--color=never", "--color=no":
+			mode = "never"
+		default:
+			out = append(out, a)
+		}
+	}
+	return mode, out
+}
+
 func main() {
 	if len(os.Args) < 2 {
 		printUsage()
 		return
 	}
 
-	cmd := os.Args[1]
-	args := os.Args[2:]
+	// Сначала парсим --color/--no-color из произвольной позиции
+	colorMode, args0 := parseColorFlag(os.Args[1:])
+	ui.Init(colorMode)
+
+	if len(args0) == 0 {
+		printUsage()
+		return
+	}
+
+	cmd := args0[0]
+	args := args0[1:]
 
 	// Команды, не требующие базы — обрабатываем сразу
 	switch cmd {
@@ -116,7 +144,7 @@ func main() {
 				fmt.Fprintf(os.Stderr, "Ошибка автосоздания .mem/: %v\n", err)
 				os.Exit(1)
 			}
-			fmt.Println("[INIT] Создана новая локальная база: .mem/")
+			fmt.Println(ui.Mark("ok"), "Создана новая локальная база:", ui.Tag(".mem/"))
 		} else {
 			fmt.Fprintf(os.Stderr, "Ошибка: .mem/ не найдена в текущей папке\n")
 			fmt.Fprintf(os.Stderr, "  Сначала выполните `mem init` или добавьте запись через `mem add`\n")
@@ -184,11 +212,11 @@ func handleInit() {
 		os.Exit(1)
 	}
 	cwd, _ := os.Getwd()
-	fmt.Println("[OK] Создана локальная база .mem/")
-	fmt.Println("  ├── config.json — настройки (бэкенд, модель, чанкинг)")
-	fmt.Println("  ├── store.db    — записи (SQLite, создаётся при первом add)")
-	fmt.Println("  └── meta.json   — метаданные (имя базы, дата создания)")
-	fmt.Printf("  Имя базы: %s\n", filepath.Base(cwd))
+	fmt.Println(ui.Success("Создана локальная база %s", ui.Tag(".mem/")))
+	fmt.Printf("  ├── %s — настройки (бэкенд, модель, чанкинг)\n", ui.Tag("config.json"))
+	fmt.Printf("  ├── %s    — записи (SQLite, создаётся при первом add)\n", ui.Tag("store.db"))
+	fmt.Printf("  └── %s   — метаданные (имя базы, дата создания)\n", ui.Tag("meta.json"))
+	fmt.Printf("  %s %s\n", ui.Key("Имя базы:"), ui.Value(filepath.Base(cwd)))
 	fmt.Println()
 	fmt.Println("Теперь можно работать:")
 	fmt.Println("  mem add \"текст\"          — добавить запись")
@@ -280,9 +308,9 @@ func handleAdd(cfg *Config, store *Store, args []string) {
 
 	mark := ""
 	if important {
-		mark = " [!]"
+		mark = " " + ui.Mark("warn")
 	}
-	fmt.Printf("[OK] Запись #%d сохранена%s\n", entry.ID, mark)
+	fmt.Printf("%s Запись %s сохранена%s\n", ui.Mark("ok"), ui.ID(fmt.Sprintf("#%d", entry.ID)), mark)
 }
 
 func handleSearch(cfg *Config, store *Store, args []string) {
@@ -387,21 +415,21 @@ func handleSearch(cfg *Config, store *Store, args []string) {
 	}
 
 	if len(results) == 0 {
-		fmt.Println("[-] Ничего не найдено")
+		fmt.Println(ui.Warn("Ничего не найдено"))
 		return
 	}
 
 	fmt.Println()
 	for i, r := range results {
-		pct := r.Score * 100
-		var bar string
+		pct := int(r.Score * 100)
+		var markKind string
 		switch {
 		case pct > 90:
-			bar = "[*]"
+			markKind = "good"
 		case pct > 70:
-			bar = "[~]"
+			markKind = "mid"
 		default:
-			bar = "[ ]"
+			markKind = "low"
 		}
 		// Форматируем дату
 		dateStr := r.Created
@@ -416,9 +444,18 @@ func handleSearch(cfg *Config, store *Store, args []string) {
 
 		impMark := ""
 		if r.Important {
-			impMark = " [!]"
+			impMark = " " + ui.Mark("warn")
 		}
-		fmt.Printf("%s #%d [%.0f%%] %s (%s)%s\n", bar, r.ID, pct, title, dateStr, impMark)
+		// Заголовок результата: mark ID [score] title (date) [!]
+		header := fmt.Sprintf("%s %s %s %s (%s)%s",
+			ui.Mark(markKind),
+			ui.ID(fmt.Sprintf("#%d", r.ID)),
+			ui.Score(pct),
+			title,
+			ui.Date(dateStr),
+			impMark,
+		)
+		fmt.Println(header)
 		fmt.Printf("   %s\n", r.Text)
 
 		// Показываем источник, если это чанк документа
@@ -430,14 +467,14 @@ func handleSearch(cfg *Config, store *Store, args []string) {
 			if r.TotalChunks > 0 {
 				ref += fmt.Sprintf(" | %d/%d", r.ChunkIndex+1, r.TotalChunks)
 			}
-			fmt.Printf("   [FILE] %s\n", ref)
+			fmt.Printf("   %s %s\n", ui.Key("[FILE]"), ui.Tag(ref))
 		}
 
 		if len(r.Tags) > 0 {
-			fmt.Printf("   [TAG] %s\n", strings.Join(r.Tags, ", "))
+			fmt.Printf("   %s %s\n", ui.Key("[TAG]"), ui.Tag(strings.Join(r.Tags, ", ")))
 		}
 		if i < len(results)-1 {
-			fmt.Println()
+			fmt.Println(ui.Separator())
 		}
 	}
 }
@@ -585,16 +622,17 @@ func handleRecent(store *Store, args []string) {
 
 	entries, err := store.Recent(limit)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "Ошибка: %v\n", err)
+		fmt.Fprintf(os.Stderr, "%s\n", ui.Err("Ошибка: %v", err))
 		os.Exit(1)
 	}
 
 	if len(entries) == 0 {
-		fmt.Println("[-] База пуста. Начни с: mem add \"какой-то факт\"")
+		fmt.Println(ui.Warn("База пуста. Начни с: %s", ui.Tag(`mem add "какой-то факт"`)))
 		return
 	}
 
-	fmt.Printf(">> Последние %d записей:\n\n", len(entries))
+	fmt.Println(ui.Header(fmt.Sprintf("Последние %d записей:", len(entries))))
+	fmt.Println()
 	for i, e := range entries {
 		display := e.Title
 		if display == "" {
@@ -605,19 +643,19 @@ func handleRecent(store *Store, args []string) {
 		}
 		ref := ""
 		if e.SourceFile != "" {
-			ref = fmt.Sprintf(" [%s]", e.SourceFile)
+			ref = " " + ui.Tag(fmt.Sprintf("[%s]", e.SourceFile))
 		}
 		tagStr := ""
 		if len(e.Tags) > 0 {
-			tagStr = " (" + strings.Join(e.Tags, ", ") + ")"
+			tagStr = " " + ui.Tag("("+strings.Join(e.Tags, ", ")+")")
 		}
 		impMark := ""
 		if e.Important {
-			impMark = " [!]"
+			impMark = " " + ui.Mark("warn")
 		}
-		fmt.Printf("  #%d%s%s%s  %s\n", e.ID, tagStr, ref, impMark, display)
+		fmt.Printf("  %s%s%s%s  %s\n", ui.ID(fmt.Sprintf("#%d", e.ID)), tagStr, ref, impMark, display)
 		if i < len(entries)-1 {
-			fmt.Println()
+			fmt.Println(ui.Separator())
 		}
 	}
 }

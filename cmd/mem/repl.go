@@ -103,21 +103,37 @@ func dispatchReplLine(cfg *Config, store *Store, line string) {
 
 	switch cmd {
 	case "search":
-		handleSearch(cfg, store, args)
+		if err := handleSearch(cfg, store, args); err != nil {
+			fmt.Fprintf(os.Stderr, "Ошибка: %v\n", err)
+		}
 	case "add":
-		handleAdd(cfg, store, args)
+		if err := handleAdd(cfg, store, args); err != nil {
+			fmt.Fprintf(os.Stderr, "Ошибка: %v\n", err)
+		}
 	case "recent":
-		handleRecent(store, args)
+		if err := handleRecent(store, args); err != nil {
+			fmt.Fprintf(os.Stderr, "Ошибка: %v\n", err)
+		}
 	case "show", "get", "view", "source":
-		handleShow(store, args)
+		if err := handleShow(store, args); err != nil {
+			fmt.Fprintf(os.Stderr, "Ошибка: %v\n", err)
+		}
 	case "important", "imp":
-		handleImportant(store, args)
+		if err := handleImportant(store, args); err != nil {
+			fmt.Fprintf(os.Stderr, "Ошибка: %v\n", err)
+		}
 	case "tags", "retag":
-		handleRetag(store, args)
+		if err := handleRetag(store, args); err != nil {
+			fmt.Fprintf(os.Stderr, "Ошибка: %v\n", err)
+		}
 	case "edit":
-		handleEdit(cfg, store, args)
+		if err := handleEdit(cfg, store, args); err != nil {
+			fmt.Fprintf(os.Stderr, "Ошибка: %v\n", err)
+		}
 	case "delete", "rm":
-		handleDelete(store, args)
+		if err := handleDelete(store, args); err != nil {
+			fmt.Fprintf(os.Stderr, "Ошибка: %v\n", err)
+		}
 	case "stats":
 		handleStats(store)
 	case "sources":

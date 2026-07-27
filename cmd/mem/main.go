@@ -63,7 +63,7 @@ func init() {
 	}
 }
 
-const version = "1.15.4"
+const version = "1.15.5"
 
 // cmdRequiresDB — команды, для работы которых нужна локальная база .mem/
 var cmdRequiresDB = map[string]bool{
@@ -178,11 +178,20 @@ func main() {
 
 	switch cmd {
 	case "add":
-		handleAdd(cfg, store, args)
+		if err := handleAdd(cfg, store, args); err != nil {
+			fmt.Fprintf(os.Stderr, "Ошибка: %v\n", err)
+			os.Exit(1)
+		}
 	case "search":
-		handleSearch(cfg, store, args)
+		if err := handleSearch(cfg, store, args); err != nil {
+			fmt.Fprintf(os.Stderr, "Ошибка: %v\n", err)
+			os.Exit(1)
+		}
 	case "recent":
-		handleRecent(store, args)
+		if err := handleRecent(store, args); err != nil {
+			fmt.Fprintf(os.Stderr, "Ошибка: %v\n", err)
+			os.Exit(1)
+		}
 	case "add-file":
 		handleAddFile(cfg, store, args)
 	case "config":
@@ -199,15 +208,30 @@ func main() {
 	case "sources":
 		handleSources(store)
 	case "show", "get", "view":
-		handleShow(store, args)
+		if err := handleShow(store, args); err != nil {
+			fmt.Fprintf(os.Stderr, "Ошибка: %v\n", err)
+			os.Exit(1)
+		}
 	case "delete", "rm":
-		handleDelete(store, args)
+		if err := handleDelete(store, args); err != nil {
+			fmt.Fprintf(os.Stderr, "Ошибка: %v\n", err)
+			os.Exit(1)
+		}
 	case "edit":
-		handleEdit(cfg, store, args)
+		if err := handleEdit(cfg, store, args); err != nil {
+			fmt.Fprintf(os.Stderr, "Ошибка: %v\n", err)
+			os.Exit(1)
+		}
 	case "retag":
-		handleRetag(store, args)
+		if err := handleRetag(store, args); err != nil {
+			fmt.Fprintf(os.Stderr, "Ошибка: %v\n", err)
+			os.Exit(1)
+		}
 	case "important", "imp":
-		handleImportant(store, args)
+		if err := handleImportant(store, args); err != nil {
+			fmt.Fprintf(os.Stderr, "Ошибка: %v\n", err)
+			os.Exit(1)
+		}
 	case "repl":
 		runRepl(cfg, store)
 	default:
@@ -298,12 +322,10 @@ func parseFlags(args []string) (positional []string, title string, tags []string
 	return
 }
 
-func handleAdd(cfg *Config, store *Store, args []string) {
+func handleAdd(cfg *Config, store *Store, args []string) error {
 	positional, title, tags, _, _, _, _, _, important := parseFlags(args)
 	if len(positional) == 0 {
-		fmt.Fprintln(os.Stderr, "Ошибка: укажи текст для сохранения")
-		fmt.Fprintln(os.Stderr, "Пример: mem add \"какой-то факт\" -title \"Название\" -tags \"термины,проект\" -important")
-		os.Exit(1)
+		return fmt.Errorf("укажи текст для сохранения\nПример: mem add \"какой-то факт\" -title \"Название\" -tags \"термины,проект\" -important")
 	}
 
 	text := strings.Join(positional, " ")
@@ -311,15 +333,13 @@ func handleAdd(cfg *Config, store *Store, args []string) {
 
 	embedding, err := getEmbedding(cfg, text)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "\nОшибка: %v\n", err)
-		os.Exit(1)
+		return fmt.Errorf("ошибка эмбеддинга: %w", err)
 	}
 	fmt.Printf("получен вектор %d измерений\n", len(embedding))
 
 	entry, err := store.Add(text, title, tags, cfg.Backend, embedding, important)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "Ошибка сохранения: %v\n", err)
-		os.Exit(1)
+		return fmt.Errorf("ошибка сохранения: %w", err)
 	}
 
 	mark := ""
@@ -327,14 +347,13 @@ func handleAdd(cfg *Config, store *Store, args []string) {
 		mark = " " + ui.Mark("warn")
 	}
 	fmt.Printf("%s Запись %s сохранена%s\n", ui.Mark("ok"), ui.ID(fmt.Sprintf("#%d", entry.ID)), mark)
+	return nil
 }
 
-func handleSearch(cfg *Config, store *Store, args []string) {
+func handleSearch(cfg *Config, store *Store, args []string) error {
 	positional, _, tags, limit, from, to, minScore, vectorOnly, _ := parseFlags(args)
 	if len(positional) == 0 {
-		fmt.Fprintln(os.Stderr, "Ошибка: укажи поисковый запрос")
-		fmt.Fprintln(os.Stderr, "Пример: mem search \"IP сервера\" -tags \"инфраструктура\" -from 2026-06-01")
-		os.Exit(1)
+		return fmt.Errorf("укажи поисковый запрос\nПример: mem search \"IP сервера\" -tags \"инфраструктура\" -from 2026-06-01")
 	}
 
 	query := strings.Join(positional, " ")
@@ -342,15 +361,13 @@ func handleSearch(cfg *Config, store *Store, args []string) {
 
 	queryVec, err := getEmbedding(cfg, query)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "\nОшибка эмбеддинга: %v\n", err)
-		os.Exit(1)
+		return fmt.Errorf("ошибка эмбеддинга: %w", err)
 	}
 	fmt.Printf("вектор %d измерений\n", len(queryVec))
 
 	results, err := store.Search(queryVec, cfg.Backend, limit)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "Ошибка поиска: %v\n", err)
-		os.Exit(1)
+		return fmt.Errorf("ошибка поиска: %w", err)
 	}
 
 	// Фильтрация по тегам
@@ -432,7 +449,7 @@ func handleSearch(cfg *Config, store *Store, args []string) {
 
 	if len(results) == 0 {
 		fmt.Println(ui.Warn("Ничего не найдено"))
-		return
+		return nil
 	}
 
 	fmt.Println()
@@ -493,6 +510,7 @@ func handleSearch(cfg *Config, store *Store, args []string) {
 			fmt.Println(ui.Separator())
 		}
 	}
+	return nil
 }
 
 // hasAnyTag проверяет, содержит ли запись хотя бы один из указанных тегов
@@ -633,18 +651,17 @@ func reRankResults(results []Entry, query string) int {
 	return count
 }
 
-func handleRecent(store *Store, args []string) {
+func handleRecent(store *Store, args []string) error {
 	_, _, _, limit, _, _, _, _, _ := parseFlags(args)
 
 	entries, err := store.Recent(limit)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "%s\n", ui.Err("Ошибка: %v", err))
-		os.Exit(1)
+		return fmt.Errorf("%w", err)
 	}
 
 	if len(entries) == 0 {
 		fmt.Println(ui.Warn("База пуста. Начни с: %s", ui.Tag(`mem add "какой-то факт"`)))
-		return
+		return nil
 	}
 
 	fmt.Println(ui.Header(fmt.Sprintf("Последние %d записей:", len(entries))))
@@ -674,6 +691,7 @@ func handleRecent(store *Store, args []string) {
 			fmt.Println(ui.Separator())
 		}
 	}
+	return nil
 }
 
 func handleAddFile(cfg *Config, store *Store, args []string) {
@@ -841,7 +859,7 @@ func handleSource(store *Store, args []string) {
 //   mem show --from-file <path> — все чанки документа с данным SourceFile
 //
 // Алиасы: get, view.
-func handleShow(store *Store, args []string) {
+func handleShow(store *Store, args []string) error {
 	var idArg string
 	fromFile := ""
 	rest := []string{}
@@ -865,35 +883,28 @@ func handleShow(store *Store, args []string) {
 		rest = nil // --from-file — отдельный режим, без id
 	} else {
 		if len(rest) == 0 {
-			fmt.Fprintln(os.Stderr, "Ошибка: укажи ID записи или --from-file <путь>")
-			fmt.Fprintln(os.Stderr, "Примеры:")
-			fmt.Fprintln(os.Stderr, "  mem show 50")
-			fmt.Fprintln(os.Stderr, "  mem show #50")
-			fmt.Fprintln(os.Stderr, "  mem show --from-file docs/architecture.md")
-			os.Exit(1)
+			return fmt.Errorf("укажи ID записи или --from-file <путь>\nПримеры:\n  mem show 50\n  mem show #50\n  mem show --from-file docs/architecture.md")
 		}
 		idArg = rest[0]
 	}
 
 	if fromFile != "" {
-		showAllChunksFromFile(store, fromFile)
-		return
+		return showAllChunksFromFile(store, fromFile)
 	}
 
 	// Снимаем префикс # если есть
 	idStr := strings.TrimPrefix(idArg, "#")
 	id, err := strconv.ParseInt(idStr, 10, 64)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "Ошибка: '%s' не число\n", idArg)
-		os.Exit(1)
+		return fmt.Errorf("'%s' не число", idArg)
 	}
 
 	entry, err := store.GetByID(id)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "Ошибка: %v\n", err)
-		os.Exit(1)
+		return fmt.Errorf("%w", err)
 	}
 	showOneEntry(entry)
+	return nil
 }
 
 // showOneEntry печатает одну запись: заголовок, полный текст, метаданные.
@@ -942,11 +953,10 @@ func showOneEntry(entry *Entry) {
 }
 
 // showAllChunksFromFile печатает все чанки одного документа (по SourceFile).
-func showAllChunksFromFile(store *Store, sourcePath string) {
+func showAllChunksFromFile(store *Store, sourcePath string) error {
 	entries := store.GetBySourceFile(sourcePath)
 	if len(entries) == 0 {
-		fmt.Fprintln(os.Stderr, ui.Warn("Не найдено записей с SourceFile = %s", sourcePath))
-		os.Exit(1)
+		return fmt.Errorf("не найдено записей с SourceFile = %s", sourcePath)
 	}
 
 	// Сортируем по chunk_index, чтобы порядок был правильный
@@ -980,13 +990,15 @@ func showAllChunksFromFile(store *Store, sourcePath string) {
 		}
 	}
 	fmt.Println()
+	return nil
 }
 
-func handleSources(store *Store) {
+func handleSources(store *Store) error {
 	IndexSummary(store)
+	return nil
 }
 
-func handleStats(store *Store) {
+func handleStats(store *Store) error {
 	stats := store.Stats()
 
 	fmt.Println("[STATS] Статистика базы памяти")
@@ -1000,43 +1012,37 @@ func handleStats(store *Store) {
 			fmt.Printf("    %s: %d\n", backend, count)
 		}
 	}
+	return nil
 }
 
 // handleDelete удаляет запись по ID
-func handleDelete(store *Store, args []string) {
+func handleDelete(store *Store, args []string) error {
 	if len(args) == 0 {
-		fmt.Fprintln(os.Stderr, "Ошибка: укажи номер записи для удаления")
-		fmt.Fprintln(os.Stderr, "Пример: mem delete 15")
-		os.Exit(1)
+		return fmt.Errorf("укажи номер записи для удаления\nПример: mem delete 15")
 	}
 
 	id, err := strconv.ParseInt(args[0], 10, 64)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "Ошибка: '%s' не число\n", args[0])
-		os.Exit(1)
+		return fmt.Errorf("'%s' не число", args[0])
 	}
 
 	if err := store.DeleteById(id); err != nil {
-		fmt.Fprintf(os.Stderr, "Ошибка: %v\n", err)
-		os.Exit(1)
+		return fmt.Errorf("%w", err)
 	}
 
 	fmt.Printf("[OK] Запись #%d удалена\n", id)
+	return nil
 }
 
 // handleEdit изменяет текст и/или заголовок записи
-func handleEdit(cfg *Config, store *Store, args []string) {
+func handleEdit(cfg *Config, store *Store, args []string) error {
 	if len(args) == 0 {
-		fmt.Fprintln(os.Stderr, "Ошибка: укажи номер записи и новый текст")
-		fmt.Fprintln(os.Stderr, "Пример: mem edit 15 \"новый текст\"")
-		fmt.Fprintln(os.Stderr, "Пример: mem edit 15 -title \"Новый заголовок\"")
-		os.Exit(1)
+		return fmt.Errorf("укажи номер записи и новый текст\nПример: mem edit 15 \"новый текст\"\nПример: mem edit 15 -title \"Новый заголовок\"")
 	}
 
 	id, err := strconv.ParseInt(args[0], 10, 64)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "Ошибка: '%s' не число\n", args[0])
-		os.Exit(1)
+		return fmt.Errorf("'%s' не число", args[0])
 	}
 
 	// Парсим остальные аргументы (после ID)
@@ -1045,16 +1051,13 @@ func handleEdit(cfg *Config, store *Store, args []string) {
 	editText := strings.Join(positionals, " ")
 
 	if editText == "" && editTitle == "" {
-		fmt.Fprintln(os.Stderr, "Ошибка: укажи новый текст или заголовок (-title)")
-		fmt.Fprintln(os.Stderr, "Пример: mem edit 15 \"новый текст\"")
-		os.Exit(1)
+		return fmt.Errorf("укажи новый текст или заголовок (-title)\nПример: mem edit 15 \"новый текст\"")
 	}
 
 	// Получаем текущую запись
 	entry, err := store.GetByID(id)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "Ошибка: %v\n", err)
-		os.Exit(1)
+		return fmt.Errorf("%w", err)
 	}
 
 	// Если текст не указан — оставляем старый
@@ -1071,80 +1074,68 @@ func handleEdit(cfg *Config, store *Store, args []string) {
 		fmt.Printf(">> Новый эмбеддинг через %s... ", cfg.Backend)
 		embedding, err := getEmbedding(cfg, editText)
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "\nОшибка эмбеддинга: %v\n", err)
-			os.Exit(1)
+			return fmt.Errorf("ошибка эмбеддинга: %w", err)
 		}
 		fmt.Printf("вектор %d измерений\n", len(embedding))
 
 		if err := store.UpdateById(id, editText, editTitle, entry.Tags, embedding); err != nil {
-			fmt.Fprintf(os.Stderr, "Ошибка: %v\n", err)
-			os.Exit(1)
+			return fmt.Errorf("%w", err)
 		}
 	} else {
 		// Текст не менялся — эмбеддинг остаётся прежним
 		if err := store.UpdateById(id, editText, editTitle, entry.Tags, nil); err != nil {
-			fmt.Fprintf(os.Stderr, "Ошибка: %v\n", err)
-			os.Exit(1)
+			return fmt.Errorf("%w", err)
 		}
 	}
 
 	fmt.Printf("[OK] Запись #%d обновлена\n", id)
+	return nil
 }
 
 // handleRetag изменяет теги записи
-func handleRetag(store *Store, args []string) {
+func handleRetag(store *Store, args []string) error {
 	if len(args) == 0 {
-		fmt.Fprintln(os.Stderr, "Ошибка: укажи номер записи и новые теги")
-		fmt.Fprintln(os.Stderr, "Пример: mem retag 15 -tags \"новый,тег\"")
-		os.Exit(1)
+		return fmt.Errorf("укажи номер записи и новые теги\nПример: mem retag 15 -tags \"новый,тег\"")
 	}
 
 	id, err := strconv.ParseInt(args[0], 10, 64)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "Ошибка: '%s' не число\n", args[0])
-		os.Exit(1)
+		return fmt.Errorf("'%s' не число", args[0])
 	}
 
 	_, _, newTags, _, _, _, _, _, _ := parseFlags(args[1:])
 	if len(newTags) == 0 {
-		fmt.Fprintln(os.Stderr, "Ошибка: укажи -tags \"новые,теги\"")
-		fmt.Fprintln(os.Stderr, "Пример: mem retag 15 -tags \"сервер,ubuntu\"")
-		os.Exit(1)
+		return fmt.Errorf("укажи -tags \"новые,теги\"\nПример: mem retag 15 -tags \"сервер,ubuntu\"")
 	}
 
 	// Получаем текущую запись, чтобы сохранить текст и заголовок
 	entry, err := store.GetByID(id)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "Ошибка: %v\n", err)
-		os.Exit(1)
+		return fmt.Errorf("%w", err)
 	}
 
 	if err := store.UpdateById(id, entry.Text, entry.Title, newTags, nil); err != nil {
-		fmt.Fprintf(os.Stderr, "Ошибка: %v\n", err)
-		os.Exit(1)
+		return fmt.Errorf("%w", err)
 	}
 
 	fmt.Printf("[OK] Теги записи #%d обновлены: %s\n", id, strings.Join(newTags, ", "))
+	return nil
 }
 
 // handleImportant переключает флаг важности записи
-func handleImportant(store *Store, args []string) {
+func handleImportant(store *Store, args []string) error {
 	if len(args) == 0 {
-		fmt.Fprintln(os.Stderr, "Ошибка: укажи номер записи")
-		fmt.Fprintln(os.Stderr, "Пример: mem important 15")
-		os.Exit(1)
+		return fmt.Errorf("укажи номер записи\nПример: mem important 15")
 	}
 
 	id, err := strconv.ParseInt(args[0], 10, 64)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "Ошибка: '%s' не число\n", args[0])
-		os.Exit(1)
+		return fmt.Errorf("'%s' не число", args[0])
 	}
 
 	entry, err := store.ToggleImportant(id)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "Ошибка: %v\n", err)
-		os.Exit(1)
+		return fmt.Errorf("%w", err)
 	}
 
 	status := "⭐ важная"
@@ -1152,6 +1143,7 @@ func handleImportant(store *Store, args []string) {
 		status = "обычная"
 	}
 	fmt.Printf("[OK] Запись #%d помечена как %s\n", id, status)
+	return nil
 }
 
 func printUsage() {

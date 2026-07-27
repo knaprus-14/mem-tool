@@ -298,33 +298,40 @@ func (m *tuiModel) runCommandAsync(line string) tea.Cmd {
 		var result string
 		var err error
 
+		// runWithCapture выполняет хендлер, перехватывая его stdout, и возвращает
+		// и вывод, и ошибку хендлера — чтобы TUI мог показать ошибку в viewport,
+		// не убивая процесс (раньше хендлер делал os.Exit(1) и TUI умирал).
+		runWithCapture := func(fn func() error) {
+			var hErr error
+			result = captureStdout(func() { hErr = fn() })
+			if hErr != nil {
+				err = hErr
+			}
+		}
+
 		switch cmd {
 		case "search":
-			result = captureStdout(func() { handleSearch(cfg, store, args) })
+			runWithCapture(func() error { return handleSearch(cfg, store, args) })
 		case "add":
-			result = captureStdout(func() { handleAdd(cfg, store, args) })
+			runWithCapture(func() error { return handleAdd(cfg, store, args) })
 		case "recent":
-			result = captureStdout(func() { handleRecent(store, args) })
+			runWithCapture(func() error { return handleRecent(store, args) })
 		case "show", "get", "view", "source":
-			result = captureStdout(func() { handleShow(store, args) })
+			runWithCapture(func() error { return handleShow(store, args) })
 		case "important", "imp":
-			result = captureStdout(func() { handleImportant(store, args) })
+			runWithCapture(func() error { return handleImportant(store, args) })
 		case "tags", "retag":
-			result = captureStdout(func() { handleRetag(store, args) })
+			runWithCapture(func() error { return handleRetag(store, args) })
 		case "edit":
-			result = captureStdout(func() { handleEdit(cfg, store, args) })
+			runWithCapture(func() error { return handleEdit(cfg, store, args) })
 		case "delete", "rm":
-			result = captureStdout(func() { handleDelete(store, args) })
+			runWithCapture(func() error { return handleDelete(store, args) })
 		case "stats":
-			result = captureStdout(func() { handleStats(store) })
+			runWithCapture(func() error { return handleStats(store) })
 		case "sources":
-			result = captureStdout(func() { handleSources(store) })
+			runWithCapture(func() error { return handleSources(store) })
 		case "config":
-			result = captureStdout(func() {
-				if e := handleConfig(args); e != nil {
-					err = e
-				}
-			})
+			runWithCapture(func() error { return handleConfig(args) })
 		default:
 			err = fmt.Errorf("неизвестная команда: /%s", cmd)
 		}

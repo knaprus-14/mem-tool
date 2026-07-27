@@ -171,10 +171,16 @@ func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, tea.Quit
 
 		case "enter":
-			// Если popup открыт — выбор команды
+			// Если popup открыт — выбор команды.
+			// Берём только имя (без плейсхолдера вроде «<id>»/«<текст>»):
+			// иначе пользователь допишет аргумент после плейсхолдера и
+			// парсер передаст «<id>» в хендлер как ID — будет «не число».
 			if m.showPopup {
-				cmd := m.popupItems[m.popupIdx].name
-				m.textarea.SetValue("/" + cmd + " ")
+				name := m.popupItems[m.popupIdx].name
+				if i := strings.IndexByte(name, ' '); i >= 0 {
+					name = name[:i]
+				}
+				m.textarea.SetValue("/" + name + " ")
 				m.textarea.CursorEnd()
 				m.showPopup = false
 				return m, nil

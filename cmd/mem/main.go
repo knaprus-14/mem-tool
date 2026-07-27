@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -10,7 +11,43 @@ import (
 	"strings"
 	"syscall"
 	"time"
+
+	mem "github.com/knaprus-14/mem-tool/pkg/mem"
 )
+
+// === Алиасы для удобной работы с библиотекой mem ===
+// Type aliases — позволяют писать Config, Store, Entry вместо mem.Config и т.д.
+type (
+	Config       = mem.Config
+	Store        = mem.Store
+	Entry        = mem.Entry
+	IndexResult  = mem.IndexResult
+	OllamaConfig = mem.OllamaConfig
+	PolzaConfig  = mem.PolzaConfig
+	ChunkConfig  = mem.ChunkConfig
+)
+
+// Алиасы функций
+var (
+	loadConfig         = mem.LoadConfig
+	saveConfig         = mem.SaveConfig
+	newStore           = mem.NewStore
+	ChunkDocument      = mem.ChunkDocument
+	IndexDirectory     = mem.IndexDirectory
+	IndexFile          = mem.IndexFile
+	IndexSummary       = mem.IndexSummary
+	getEmbedding       = mem.GetEmbedding
+	cosineSimilarity   = mem.CosineSimilarity
+	configPath         = mem.ConfigPath
+	memExists          = mem.MemExists
+	memDir             = mem.MemDir
+	initMem            = mem.InitMem
+	ensureMem          = mem.EnsureMem
+	defaultLocalConfig = mem.DefaultLocalConfig
+	defaultConfig      = mem.DefaultConfig
+)
+
+const memDirName = mem.MemDirName
 
 func init() {
 	// На Windows переключаем консоль в UTF-8, чтобы русские буквы не крокозябрились
@@ -25,7 +62,7 @@ func init() {
 	}
 }
 
-const version = "1.11.0"
+const version = "1.12.0"
 
 // cmdRequiresDB — команды, для работы которых нужна локальная база .mem/
 var cmdRequiresDB = map[string]bool{
@@ -1008,4 +1045,90 @@ func printUsage() {
   mem config set-chunk-strategy sentence
 
 Больше информации: mem version`)
+}
+
+// handleConfig — CLI-обёртка над mem.SaveConfig / mem.LoadConfig
+// Реализует команды `mem config set-backend`, `set-polza-key` и т.д.
+func handleConfig(args []string) error {
+	cfg, err := loadConfig()
+	if err != nil {
+		return err
+	}
+
+	if len(args) == 0 {
+		data, _ := json.MarshalIndent(cfg, "", "  ")
+		fmt.Println(string(data))
+		return nil
+	}
+
+	cmd := args[0]
+	switch cmd {
+	case "set-backend":
+		if len(args) < 2 {
+			return fmt.Errorf("использование: mem config set-backend <ollama|polza>")
+		}
+		backend := args[1]
+		if backend != "ollama" && backend != "polza" {
+			return fmt.Errorf("бэкенд должен быть 'ollama' или 'polza'")
+		}
+		cfg.Backend = backend
+		return saveConfig(cfg)
+
+	case "set-polza-key":
+		if len(args) < 2 {
+			return fmt.Errorf("использование: mem config set-polza-key <api_key>")
+		}
+		cfg.Polza.APIKey = args[1]
+		return saveConfig(cfg)
+
+	case "set-polza-model":
+		if len(args) < 2 {
+			return fmt.Errorf("использование: mem config set-polza-model <model_name>")
+		}
+		cfg.Polza.Model = args[1]
+		return saveConfig(cfg)
+
+	case "set-ollama-model":
+		if len(args) < 2 {
+			return fmt.Errorf("использование: mem config set-ollama-model <model_name>")
+		}
+		cfg.Ollama.Model = args[1]
+		return saveConfig(cfg)
+
+	case "set-chunk-size":
+		if len(args) < 2 {
+			return fmt.Errorf("использование: mem config set-chunk-size <символов>")
+		}
+		n, err := strconv.Atoi(args[1])
+		if err != nil || n < 100 || n > 10000 {
+			return fmt.Errorf("размер чанка должен быть от 100 до 10000")
+		}
+		cfg.Chunking.MaxSize = n
+		return saveConfig(cfg)
+
+	case "set-chunk-overlap":
+		if len(args) < 2 {
+			return fmt.Errorf("использование: mem config set-chunk-overlap <символов>")
+		}
+		n, err := strconv.Atoi(args[1])
+		if err != nil || n < 0 || n > 1000 {
+			return fmt.Errorf("перекрытие должно быть от 0 до 1000")
+		}
+		cfg.Chunking.Overlap = n
+		return saveConfig(cfg)
+
+	case "set-chunk-strategy":
+		if len(args) < 2 {
+			return fmt.Errorf("использование: mem config set-chunk-strategy <paragraph|sentence|fixed>")
+		}
+		strategy := args[1]
+		if strategy != "paragraph" && strategy != "sentence" && strategy != "fixed" {
+			return fmt.Errorf("стратегия должна быть: paragraph, sentence или fixed")
+		}
+		cfg.Chunking.Strategy = strategy
+		return saveConfig(cfg)
+
+	default:
+		return fmt.Errorf("неизвестная команда: %s", cmd)
+	}
 }

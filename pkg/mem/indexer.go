@@ -1,4 +1,4 @@
-package main
+package mem
 
 import (
 	"fmt"
@@ -148,7 +148,7 @@ func IndexFile(cfg *Config, store *Store, filePath string) (IndexResult, error) 
 	for _, chunk := range chunks {
 		fmt.Printf("  [%d/%d] Эмбеддинг... ", chunk.Index+1, len(chunks))
 
-		embedding, err := getEmbedding(cfg, chunk.Text)
+		embedding, err := GetEmbedding(cfg, chunk.Text)
 		if err != nil {
 			fmt.Printf("[ERR] %v\n", err)
 			continue

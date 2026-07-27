@@ -1,4 +1,4 @@
-package main
+package mem
 
 import (
 	"bytes"
@@ -129,7 +129,7 @@ func embedPolza(cfg *Config, text string) ([]float32, error) {
 
 // === Общий интерфейс ===
 
-func getEmbedding(cfg *Config, text string) ([]float32, error) {
+func GetEmbedding(cfg *Config, text string) ([]float32, error) {
 	switch cfg.Backend {
 	case "ollama":
 		return embedOllama(cfg, text)

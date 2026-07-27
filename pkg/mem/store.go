@@ -1,4 +1,4 @@
-package main
+package mem
 
 import (
 	"bytes"
@@ -70,7 +70,7 @@ CREATE INDEX IF NOT EXISTS idx_backend ON entries(backend);
 `
 
 // newStore открывает (или создаёт) SQLite-базу в указанной директории
-func newStore(dir string) (*Store, error) {
+func NewStore(dir string) (*Store, error) {
 	if err := os.MkdirAll(dir, 0700); err != nil {
 		return nil, err
 	}
@@ -381,7 +381,7 @@ func (s *Store) Search(queryVector []float32, backend string, limit int) ([]Entr
 		if entry.Embedding == nil || len(entry.Embedding) != len(queryVector) {
 			continue
 		}
-		score := cosineSimilarity(queryVector, s.vectors[i])
+		score := CosineSimilarity(queryVector, s.vectors[i])
 		results = append(results, scored{entry: entry, score: score})
 	}
 
@@ -484,7 +484,7 @@ func (s *Store) Stats() map[string]interface{} {
 }
 
 // cosineSimilarity считает косинусное сходство между двумя векторами
-func cosineSimilarity(a, b []float32) float64 {
+func CosineSimilarity(a, b []float32) float64 {
 	if len(a) != len(b) {
 		return 0
 	}

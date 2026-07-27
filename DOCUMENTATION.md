@@ -1,8 +1,8 @@
 # mem-tool — Векторная база знаний
 
-**Версия:** 1.15.9
+**Версия:** 1.15.10
 **Автор:** Кнап Руслан Юрьевич
-**Дата:** 2026-07-28 (код-ревью: TUI качество)
+**Дата:** 2026-07-28 (код-ревью: backend качество)
 **Лицензия:** Proprietary (все права принадлежат автору)
 
 ---
@@ -294,6 +294,21 @@ mem> _
 - **Фикс 9: Enter не конфликтует с InsertNewline.**
   - **Было:** `ta.KeyMap.InsertNewline.SetEnabled(true)` — textarea реагировал на Enter как на newline, и тот же Enter сабмитил команду. Видно было вспышку `\n` в textarea перед сабмитом.
   - **Стало:** `ta.KeyMap.InsertNewline = key.NewBinding(key.WithKeys("ctrl+j"))` — InsertNewline перебинжен на `ctrl+j`. Enter — только сабмит. Ctrl+J — для вставки реального newline (если когда-нибудь понадобится для multiline prompt).
+
+**v1.15.10 — код-ревью: качество backend (error handling, SQL):**
+- Закрывает 4 средних находки из код-ревью backend (SQLite/readline).
+- **Фикс 10: `LastInsertId`/`RowsAffected` проверяют ошибки.**
+  - **Было:** `id, _ := res.LastInsertId()` и `n, _ := res.RowsAffected()` — ошибки проглатывались. Если драйвер не смог вернуть id — `id = 0`, дальше в коде получали запись #0 вместо ошибки.
+  - **Стало:** `Add` и `AddChunk` возвращают `fmt.Errorf("получение LastInsertId: %w", lastErr)` при ошибке. `DeleteById` и `UpdateById` проверяют `rowsErr` от `RowsAffected()`. `UpdateById` дополнительно проверяет `n == 0` → возвращает «запись не найдена» (раньше молча возвращался nil).
+- **Фикс 11: сериализация возвращает ошибки.**
+  - **Было:** `floatsToBytes`, `bytesToFloats`, `tagsToJSON`, `tagsFromJSON` тихо проглатывали ошибки `binary.Read/Write` и `json.Marshal/Unmarshal`. Повреждённый BLOB в БД → `bytesToFloats` возвращал nil → запись «исчезала» из поиска без уведомления.
+  - **Стало:** все 4 хелпера возвращают `(... , error)`. `bytesToFloats` дополнительно проверяет, что длина BLOB кратна 4 (размер `float32`), и возвращает явную ошибку про повреждение. `loadAll` оборачивает ошибку с ID записи: `fmt.Errorf("запись #%d: %w", e.ID, err)`. `Add`/`AddChunk`/`UpdateById` возвращают ошибки сериализации вызывающему коду.
+- **Фикс 12: инициализация схемы в транзакции.**
+  - **Было:** `db.Exec(storeSchema)` — SQLite выполняет DDL по одному выражению. При сбое между `CREATE TABLE` и `CREATE INDEX` база оставалась в полу-применённом состоянии (таблица без индексов).
+  - **Стало:** добавлена функция `initSchema(db)` — оборачивает `tx.Begin() → tx.Exec(storeSchema) → tx.Commit()` с `Rollback` при ошибке. SQLite поддерживает transactional DDL.
+- **Фикс 13: `Recent` сортирует по `created DESC`.**
+  - **Было:** `Recent` возвращал хвост `s.entries` (отсортирован при `loadAll` по `id ASC`) и разворачивал — порядок определялся id, а не фактическим временем создания. Запись с большим id могла появиться «раньше» записи с меньшим id, если они были созданы в разных сессиях с расхождением часов.
+  - **Стало:** `Recent` копирует `s.entries`, сортирует по `created DESC` (tie-breaker `id DESC`), возвращает первые `limit` записей. Сортировка в памяти (не SQL) — пользователь выбрал этот вариант.
 
 ### Версия 1.13 — Цветной вывод и команда `mem show`
 

@@ -108,9 +108,9 @@ func (m *tuiModel) headerLine() string {
 		"mem · поисковая база · %d записей · backend: %s · %s", total, backend, model))
 }
 
-// printHeader добавляет приветствие в viewport (для /clear).
+// printHeader добавляет приветствие в viewport (для /clear и стартового экрана).
+// Динамический заголовок (headerLine) НЕ выводится — он уже отрисован в View() сверху.
 func (m *tuiModel) printHeader() {
-	m.appendBlock(m.headerLine())
 	m.appendBlock(tuiStyles.Status.Render("Введите запрос, /help для списка команд, Esc/Ctrl-D для выхода."))
 	m.appendBlock(tuiStyles.Separator.Render(strings.Repeat("─", m.viewportWidth())))
 }

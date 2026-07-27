@@ -27,10 +27,21 @@ var (
 // mode can be: "always", "never", or "auto" (default).
 // In auto mode, color is enabled only when stdout is a terminal
 // and no disable env vars are set.
+//
+// Set MEM_UI_DEBUG=1 to print detection info to stderr.
 func Init(mode string) {
 	once.Do(func() {
 		colorIsOn = determineMode(mode)
 		color.NoColor = !colorIsOn
+		if os.Getenv("MEM_UI_DEBUG") != "" {
+			fmt.Fprintf(os.Stderr,
+				"[ui-debug] mode=%q → enabled=%v (NO_COLOR=%q MEM_NO_COLOR=%q COLORTERM=%q TERM=%q isatty=%v)\n",
+				mode, colorIsOn,
+				os.Getenv("NO_COLOR"), os.Getenv("MEM_NO_COLOR"),
+				os.Getenv("COLORTERM"), os.Getenv("TERM"),
+				term.IsTerminal(int(os.Stdout.Fd())),
+			)
+		}
 	})
 }
 

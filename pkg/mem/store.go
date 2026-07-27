@@ -447,6 +447,21 @@ func (s *Store) GetByID(id int64) (*Entry, error) {
 	return nil, fmt.Errorf("запись #%d не найдена", id)
 }
 
+// GetBySourceFile возвращает все записи (чанки) с указанным SourceFile.
+// Возвращает слайс указателей, чтобы избежать копирования больших текстов.
+func (s *Store) GetBySourceFile(sourceFile string) []*Entry {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	var out []*Entry
+	for i := range s.entries {
+		if s.entries[i].SourceFile == sourceFile {
+			out = append(out, &s.entries[i])
+		}
+	}
+	return out
+}
+
 // SourceFiles возвращает список уникальных файлов-источников с количеством чанков
 func (s *Store) SourceFiles() map[string]int {
 	s.mu.RLock()

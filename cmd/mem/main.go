@@ -63,7 +63,7 @@ func init() {
 	}
 }
 
-const version = "1.13.0"
+const version = "1.13.1"
 
 // cmdRequiresDB — команды, для работы которых нужна локальная база .mem/
 var cmdRequiresDB = map[string]bool{
@@ -71,6 +71,7 @@ var cmdRequiresDB = map[string]bool{
 	"config": true,
 	"search": true, "recent": true, "stats": true,
 	"source": true, "sources": true,
+	"show": true, "get": true, "view": true,
 	"delete": true, "rm": true,
 	"edit": true, "retag": true,
 	"important": true, "imp": true,
@@ -186,6 +187,8 @@ func main() {
 		handleSource(store, args)
 	case "sources":
 		handleSources(store)
+	case "show", "get", "view":
+		handleShow(store, args)
 	case "delete", "rm":
 		handleDelete(store, args)
 	case "edit":
@@ -816,6 +819,154 @@ func handleSource(store *Store, args []string) {
 	}
 	fmt.Printf("[DATE] Дата: %s\n", entry.Created)
 	fmt.Printf("[CFG]  Бэкенд: %s (%d измерений)\n", entry.Backend, entry.Dims)
+}
+
+// handleShow выводит одну запись полностью или все чанки одного файла.
+//
+// Использование:
+//   mem show <id>           — одна запись (например, mem show 50 или mem show #50)
+//   mem show --from-file <path> — все чанки документа с данным SourceFile
+//
+// Алиасы: get, view.
+func handleShow(store *Store, args []string) {
+	var idArg string
+	fromFile := ""
+	rest := []string{}
+	for i := 0; i < len(args); i++ {
+		a := args[i]
+		switch {
+		case a == "--from-file" || a == "--file" || a == "-f":
+			if i+1 < len(args) {
+				fromFile = args[i+1]
+				i++
+			}
+		case strings.HasPrefix(a, "--from-file="):
+			fromFile = strings.TrimPrefix(a, "--from-file=")
+		case strings.HasPrefix(a, "--file="):
+			fromFile = strings.TrimPrefix(a, "--file=")
+		default:
+			rest = append(rest, a)
+		}
+	}
+	if fromFile != "" {
+		rest = nil // --from-file — отдельный режим, без id
+	} else {
+		if len(rest) == 0 {
+			fmt.Fprintln(os.Stderr, "Ошибка: укажи ID записи или --from-file <путь>")
+			fmt.Fprintln(os.Stderr, "Примеры:")
+			fmt.Fprintln(os.Stderr, "  mem show 50")
+			fmt.Fprintln(os.Stderr, "  mem show #50")
+			fmt.Fprintln(os.Stderr, "  mem show --from-file docs/architecture.md")
+			os.Exit(1)
+		}
+		idArg = rest[0]
+	}
+
+	if fromFile != "" {
+		showAllChunksFromFile(store, fromFile)
+		return
+	}
+
+	// Снимаем префикс # если есть
+	idStr := strings.TrimPrefix(idArg, "#")
+	id, err := strconv.ParseInt(idStr, 10, 64)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Ошибка: '%s' не число\n", idArg)
+		os.Exit(1)
+	}
+
+	entry, err := store.GetByID(id)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Ошибка: %v\n", err)
+		os.Exit(1)
+	}
+	showOneEntry(entry)
+}
+
+// showOneEntry печатает одну запись: заголовок, полный текст, метаданные.
+func showOneEntry(entry *Entry) {
+	title := entry.Title
+	if title == "" {
+		title = "(без заголовка)"
+	}
+
+	impMark := ""
+	if entry.Important {
+		impMark = " " + ui.Mark("warn")
+	}
+
+	header := fmt.Sprintf("%s %s  %s%s",
+		ui.Mark("good"),
+		ui.ID(fmt.Sprintf("#%d", entry.ID)),
+		title,
+		impMark,
+	)
+	fmt.Println(header)
+	fmt.Println(ui.Separator())
+	fmt.Println()
+	fmt.Println(entry.Text)
+	fmt.Println()
+
+	if entry.SourceFile != "" {
+		ref := entry.SourceFile
+		if entry.ChunkLabel != "" {
+			ref += " | " + entry.ChunkLabel
+		}
+		if entry.TotalChunks > 0 {
+			ref += fmt.Sprintf(" | %d/%d", entry.ChunkIndex+1, entry.TotalChunks)
+		}
+		fmt.Printf("   %s %s\n", ui.Key("[FILE]"), ui.Tag(ref))
+	}
+	if len(entry.Tags) > 0 {
+		fmt.Printf("   %s %s\n", ui.Key("[TAG]"), ui.Tag(strings.Join(entry.Tags, ", ")))
+	}
+	dateStr := entry.Created
+	if t, err := time.Parse(time.RFC3339, entry.Created); err == nil {
+		dateStr = t.Format("2006-01-02 15:04")
+	}
+	fmt.Printf("   %s %s\n", ui.Key("[DATE]"), ui.Date(dateStr))
+	fmt.Printf("   %s %s (%d изм.)\n", ui.Key("[CFG]"), ui.Tag(entry.Backend), entry.Dims)
+}
+
+// showAllChunksFromFile печатает все чанки одного документа (по SourceFile).
+func showAllChunksFromFile(store *Store, sourcePath string) {
+	entries := store.GetBySourceFile(sourcePath)
+	if len(entries) == 0 {
+		fmt.Fprintln(os.Stderr, ui.Warn("Не найдено записей с SourceFile = %s", sourcePath))
+		os.Exit(1)
+	}
+
+	// Сортируем по chunk_index, чтобы порядок был правильный
+	sort.Slice(entries, func(i, j int) bool {
+		if entries[i].ChunkIndex != entries[j].ChunkIndex {
+			return entries[i].ChunkIndex < entries[j].ChunkIndex
+		}
+		return entries[i].ID < entries[j].ID
+	})
+
+	fmt.Println(ui.Header(fmt.Sprintf("Документ: %s", sourcePath)))
+	fmt.Println(ui.Header(fmt.Sprintf("Чанков: %d", len(entries))))
+	fmt.Println(ui.Separator())
+
+	for i, e := range entries {
+		label := e.ChunkLabel
+		if label == "" {
+			label = fmt.Sprintf("чанк %d/%d", e.ChunkIndex+1, e.TotalChunks)
+		}
+		fmt.Println()
+		fmt.Printf("%s %s  %s\n",
+			ui.Mark("mid"),
+			ui.ID(fmt.Sprintf("#%d", e.ID)),
+			ui.Header(label),
+		)
+		fmt.Println(ui.Separator())
+		fmt.Println(e.Text)
+		if i < len(entries)-1 {
+			fmt.Println()
+			fmt.Println(ui.Separator())
+		}
+	}
+	fmt.Println()
 }
 
 func handleSources(store *Store) {

@@ -107,7 +107,7 @@ func main() {
 	ui.Init(colorMode)
 
 	if len(os.Args) < 2 || len(args0) == 0 {
-		// mem без аргументов → если .mem/ есть, запускаем REPL; иначе — help
+		// mem без аргументов → если .mem/ есть, запускаем TUI; иначе — help
 		if memExists() {
 			cfg, err := loadConfig()
 			if err != nil {
@@ -119,7 +119,7 @@ func main() {
 				fmt.Fprintf(os.Stderr, "Ошибка открытия хранилища: %v\n", err)
 				os.Exit(1)
 			}
-			runRepl(cfg, store)
+			runTui(cfg, store)
 			return
 		}
 		printUsage()

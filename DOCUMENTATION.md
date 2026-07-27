@@ -1,6 +1,6 @@
 # mem-tool — Векторная база знаний
 
-**Версия:** 1.13.1
+**Версия:** 1.13.2
 **Автор:** Кнап Руслан Юрьевич
 **Дата:** 2026-07-27 (monorepo + Telegram-бот)
 **Лицензия:** Proprietary (все права принадлежат автору)
@@ -154,6 +154,14 @@ Re-ranking не радикально меняет порядок, а лишь «
 - Алиасы: `get`, `view`
 - `pkg/mem`: добавлен `Store.GetBySourceFile(sourceFile)` — слайс указателей на записи с данным SourceFile
 - `pkg/ui`: переменная `MEM_UI_DEBUG=1` — пишет в stderr детект-инфо (mode, NO_COLOR, MEM_NO_COLOR, COLORTERM, TERM, isatty)
+
+**v1.13.2 — актуализация `mem help`:**
+- Убрано дублирование `mem sources` (была дважды)
+- Добавлены `mem version`, `mem help` в список команд
+- Добавлены алиасы `rm`, `imp` к `delete` и `important`
+- Добавлена секция «Глобальные флаги» с описанием `--color=always|never|auto`, `--no-color`, `NO_COLOR`, `MEM_NO_COLOR`
+- В `mem search` явно указано: «Текст каждой записи выводится полностью (без обрезки)»
+- Примеры обновлены под `mem show`
 
 ### Версия 1.11 — SQLite и дедупликация
 

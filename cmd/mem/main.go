@@ -63,7 +63,7 @@ func init() {
 	}
 }
 
-const version = "1.13.1"
+const version = "1.13.2"
 
 // cmdRequiresDB — команды, для работы которых нужна локальная база .mem/
 var cmdRequiresDB = map[string]bool{
@@ -1152,6 +1152,12 @@ func printUsage() {
       Создать новую локальную базу .mem/ в текущей папке
       (опционально — база создаётся автоматически при первом add/index/config)
 
+  mem version
+      Показать версию программы
+
+  mem help
+      Показать эту справку
+
   mem add <текст> [-title "Название"] [-tags "тег1,тег2"] [-important]
       Сохранить новую запись в базу. -important — пометить как важную.
       Если .mem/ нет — создаст автоматически.
@@ -1160,9 +1166,15 @@ func printUsage() {
       Найти записи, похожие по смыслу.
       По умолчанию гибридный поиск + реранжирование (свежесть, теги, важность).
       -vector-only — отключить полнотекстовый буст, только векторы.
+      Текст каждой записи выводится полностью (без обрезки).
 
   mem recent [-limit N]
       Показать последние записи
+
+  mem show <id> | mem show --from-file <путь>
+      Алиасы: get, view. Также mem source <id>.
+      Показать одну запись целиком (полный текст + метаданные)
+      или все чанки одного документа.
 
   mem add-file <путь_к_файлу> [-tags "тег1,тег2"] [-important]
       Сохранить содержимое файла в базу (с чанкингом)
@@ -1170,13 +1182,10 @@ func printUsage() {
   mem index <путь_к_папке_или_файлу>
       Проиндексировать все файлы в папке (.txt, .md, .pdf, .csv, .json)
 
-  mem source <id>
-      Показать детали записи (источник, контекст)
-
   mem sources
-      Список всех проиндексированных документов
+      Список всех проиндексированных документов с числом чанков
 
-  mem delete <id>
+  mem delete <id> | mem rm <id>
       Удалить запись из базы
 
   mem edit <id> <новый текст> [-title "Новый заголовок"]
@@ -1185,7 +1194,7 @@ func printUsage() {
   mem retag <id> -tags "новые,теги"
       Изменить теги записи
 
-  mem important <id>
+  mem important <id> | mem imp <id>
       Переключить флаг важности записи
 
   mem config
@@ -1215,8 +1224,11 @@ func printUsage() {
   mem stats
       Статистика базы
 
-  mem sources
-      Список проиндексированных документов
+Глобальные флаги (перед командой):
+  --color=always|never|auto   Включить/выключить цвета в выводе
+  --no-color                  То же, что --color=never
+  По умолчанию: auto (цвета в TTY, выключены в pipe).
+  Управляется также env NO_COLOR=1, MEM_NO_COLOR=1.
 
 Примеры:
   cd ~/projects/myapp && mem add "Сервер: 157.22.196.67"
@@ -1224,6 +1236,8 @@ func printUsage() {
   mem search "IP сервера" -tags "инфраструктура"
   mem search "архитектура" -from 2026-07-01 -to 2026-07-26
   mem search "сервер" -min-score 0.5 -vector-only
+  mem show 50                            # одна запись целиком
+  mem show --from-file docs/arch.md      # все чанки документа
   mem add-file ./документация.txt
   mem index ./проекты/
   mem edit 1 "Обновлённый текст сервера"
@@ -1233,7 +1247,7 @@ func printUsage() {
   mem config set-chunk-size 800
   mem config set-chunk-strategy sentence
 
-Больше информации: mem version`)
+Больше информации: README.md и DOCUMENTATION.md`)
 }
 
 // handleConfig — CLI-обёртка над mem.SaveConfig / mem.LoadConfig

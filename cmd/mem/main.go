@@ -63,7 +63,7 @@ func init() {
 	}
 }
 
-const version = "1.15.7"
+const version = "1.15.8"
 
 // cmdRequiresDB — команды, для работы которых нужна локальная база .mem/
 var cmdRequiresDB = map[string]bool{
@@ -102,6 +102,14 @@ func parseColorFlag(args []string) (string, []string) {
 }
 
 func main() {
+	// Вся логика в run() int — main() просто транслирует код возврата в os.Exit.
+	// Это позволяет defer в run() корректно срабатывать (os.Exit не запускает defer).
+	os.Exit(run())
+}
+
+// run — основная логика. Возвращает код выхода: 0 при успехе, 1 при ошибке.
+// Использование defer для Close() возможно благодаря тому, что main() вызывает os.Exit(run()).
+func run() int {
 	// Сначала парсим --color/--no-color из произвольной позиции
 	colorMode, args0 := parseColorFlag(os.Args[1:])
 	ui.Init(colorMode)
@@ -112,18 +120,19 @@ func main() {
 			cfg, err := loadConfig()
 			if err != nil {
 				fmt.Fprintf(os.Stderr, "Ошибка загрузки конфига: %v\n", err)
-				os.Exit(1)
+				return 1
 			}
 			store, err := newStore(memDir())
 			if err != nil {
 				fmt.Fprintf(os.Stderr, "Ошибка открытия хранилища: %v\n", err)
-				os.Exit(1)
+				return 1
 			}
+			defer store.Close()
 			runTui(cfg, store)
-			return
+			return 0
 		}
 		printUsage()
-		return
+		return 0
 	}
 
 	cmd := args0[0]
@@ -132,21 +141,21 @@ func main() {
 	// Команды, не требующие базы — обрабатываем сразу
 	switch cmd {
 	case "init":
-		handleInit()
-		return
+		handleInit() // handleInit сам делает os.Exit — это CLI-only путь, defer'ов нет
+		return 0
 	case "version", "--version", "-v":
 		printVersion()
-		return
+		return 0
 	case "help", "--help", "-h":
 		printUsage()
-		return
+		return 0
 	}
 
 	// Все остальные команды требуют локальную базу
 	if !cmdRequiresDB[cmd] {
 		fmt.Fprintf(os.Stderr, "Неизвестная команда: %s\n\n", cmd)
 		printUsage()
-		os.Exit(1)
+		return 1
 	}
 
 	// Проверяем/создаём базу
@@ -154,50 +163,51 @@ func main() {
 		if cmdCanAutocreate[cmd] {
 			if err := initMem(); err != nil {
 				fmt.Fprintf(os.Stderr, "Ошибка автосоздания .mem/: %v\n", err)
-				os.Exit(1)
+				return 1
 			}
 			fmt.Println(ui.Mark("ok"), "Создана новая локальная база:", ui.Tag(".mem/"))
 		} else {
 			fmt.Fprintf(os.Stderr, "Ошибка: .mem/ не найдена в текущей папке\n")
 			fmt.Fprintf(os.Stderr, "  Сначала выполните `mem init` или добавьте запись через `mem add`\n")
-			os.Exit(1)
+			return 1
 		}
 	}
 
 	cfg, err := loadConfig()
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Ошибка загрузки конфига: %v\n", err)
-		os.Exit(1)
+		return 1
 	}
 
 	store, err := newStore(memDir())
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Ошибка открытия хранилища: %v\n", err)
-		os.Exit(1)
+		return 1
 	}
+	defer store.Close()
 
 	switch cmd {
 	case "add":
 		if err := handleAdd(cfg, store, args); err != nil {
 			fmt.Fprintf(os.Stderr, "Ошибка: %v\n", err)
-			os.Exit(1)
+			return 1
 		}
 	case "search":
 		if err := handleSearch(cfg, store, args); err != nil {
 			fmt.Fprintf(os.Stderr, "Ошибка: %v\n", err)
-			os.Exit(1)
+			return 1
 		}
 	case "recent":
 		if err := handleRecent(store, args); err != nil {
 			fmt.Fprintf(os.Stderr, "Ошибка: %v\n", err)
-			os.Exit(1)
+			return 1
 		}
 	case "add-file":
 		handleAddFile(cfg, store, args)
 	case "config":
 		if err := handleConfig(args); err != nil {
 			fmt.Fprintf(os.Stderr, "Ошибка: %v\n", err)
-			os.Exit(1)
+			return 1
 		}
 	case "stats":
 		handleStats(store)
@@ -210,35 +220,36 @@ func main() {
 	case "show", "get", "view":
 		if err := handleShow(store, args); err != nil {
 			fmt.Fprintf(os.Stderr, "Ошибка: %v\n", err)
-			os.Exit(1)
+			return 1
 		}
 	case "delete", "rm":
 		if err := handleDelete(store, args); err != nil {
 			fmt.Fprintf(os.Stderr, "Ошибка: %v\n", err)
-			os.Exit(1)
+			return 1
 		}
 	case "edit":
 		if err := handleEdit(cfg, store, args); err != nil {
 			fmt.Fprintf(os.Stderr, "Ошибка: %v\n", err)
-			os.Exit(1)
+			return 1
 		}
 	case "retag":
 		if err := handleRetag(store, args); err != nil {
 			fmt.Fprintf(os.Stderr, "Ошибка: %v\n", err)
-			os.Exit(1)
+			return 1
 		}
 	case "important", "imp":
 		if err := handleImportant(store, args); err != nil {
 			fmt.Fprintf(os.Stderr, "Ошибка: %v\n", err)
-			os.Exit(1)
+			return 1
 		}
 	case "repl":
 		runRepl(cfg, store)
 	default:
 		fmt.Fprintf(os.Stderr, "Неизвестная команда: %s\n\n", cmd)
 		printUsage()
-		os.Exit(1)
+		return 1
 	}
+	return 0
 }
 
 // handleInit создаёт локальную базу .mem/ в текущей папке

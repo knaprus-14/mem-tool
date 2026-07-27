@@ -507,6 +507,10 @@ func (m tuiModel) renderPopup() string {
 // captureStdout выполняет fn, перехватывая её вывод в stdout, и возвращает его строкой.
 // Используется, чтобы вывод хендлеров (handleSearch, handleAdd и т.д.) попадал в viewport TUI,
 // а не в реальный stdout (где он смешался бы с TUI-рендерингом).
+//
+// w.Close() и восстановление os.Stdout вынесены в defer — если fn() запаникует,
+// pipe всё равно закроется и io.Copy в горутине увидит EOF. Иначе pipe-FD и
+// сама горутина утекают (io.Copy блокируется до EOF на read-end).
 func captureStdout(fn func()) string {
 	oldStdout := os.Stdout
 	r, w, err := os.Pipe()
@@ -515,6 +519,11 @@ func captureStdout(fn func()) string {
 		return ""
 	}
 	os.Stdout = w
+
+	defer func() {
+		_ = w.Close()
+		os.Stdout = oldStdout
+	}()
 
 	done := make(chan string, 1)
 	go func() {
@@ -525,8 +534,6 @@ func captureStdout(fn func()) string {
 
 	fn()
 
-	_ = w.Close()
-	os.Stdout = oldStdout
 	return <-done
 }
 

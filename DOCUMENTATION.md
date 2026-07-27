@@ -1,8 +1,8 @@
 # mem-tool — Векторная база знаний
 
-**Версия:** 1.15.4
+**Версия:** 1.15.8
 **Автор:** Кнап Руслан Юрьевич
-**Дата:** 2026-07-27 (TUI на bubbletea + спиннер)
+**Дата:** 2026-07-28 (код-ревью: критичные баги закрыты)
 **Лицензия:** Proprietary (все права принадлежат автору)
 
 ---
@@ -261,6 +261,21 @@ mem> _
   - Добавлена функция `filterCommands(prefix string, items []commandMenuEntry) []commandMenuEntry` — возвращает команды, имена которых начинаются с `prefix` (без учёта регистра, без плейсхолдера).
   - Popup-логика при показе пересчитывает `popupFiltered` и сбрасывает `popupIdx = 0`. Если совпадений нет — popup скрывается.
   - `Enter`, `renderPopup`, `viewportHeight` обновлены для работы с `popupFiltered`.
+
+**v1.15.8 — код-ревью: критичные баги (data integrity, resource safety):**
+- Проведено код-ревью TUI-стека (bubbletea/bubbles/lipgloss) и backend (SQLite/readline) с подключением **context7 MCP** для сверки с актуальной документацией. Всего 19 находок. v1.15.8 закрывает 4 критичных.
+- **Фикс 1: `captureStdout` panic-safe.**
+  - **Было:** `os.Pipe()` + горутина с `io.Copy` + `fn()` без `defer Close`. Если `fn()` паникует — `w.Close()` не вызывается → `io.Copy` блокируется до EOF на read-end → утечка pipe-FD и горутины.
+  - **Стало:** `defer func() { _ = w.Close(); os.Stdout = oldStdout }()` — pipe закрывается даже при panic. Panic продолжит распространяться к outer `recover` в `runCommandAsync`, и TUI увидит «Ошибка: паника в обработчике: ...» вместо зависания.
+- **Фикс 2: `Store.Close()` + `defer` во всех путях.**
+  - **Было:** `Store` не имел метода `Close()` — SQLite-соединение никогда не закрывалось явно (только при выходе процесса). На Linux/Mac это OK, на Windows приводит к ошибкам «database is locked» при следующем запуске.
+  - **Стало:** добавлен `func (s *Store) Close() error { return s.db.Close() }`. В `cmd/mem/main.go` функция `main()` разделена на `main() → run() int`, в `run()` сразу после `newStore` стоит `defer store.Close()`. Это работает для всех веток: CLI-команды, `runRepl`, `runTui`.
+- **Фикс 3: `GetByID`/`GetBySourceFile`/`ToggleImportant` возвращают копии.**
+  - **Было:** `GetByID` возвращал `*Entry` на внутренний слайс после `RUnlock`, `GetBySourceFile` — `[]*Entry` на те же внутренние структуры. Внешний код мог читать/менять состояние `Store` конкурентно после снятия лока → race condition / data corruption.
+  - **Стало:** `GetByID` и `ToggleImportant` возвращают указатель на локальную копию `Entry` с глубокими копиями `Tags` и `Embedding` (`append([]string(nil), e.Tags...)`, `append([]float32(nil), e.Embedding...)`). `GetBySourceFile` возвращает `[]Entry` (не `[]*Entry`) — каждая запись это копия. Вызывающий код (`handleShow`, `handleImportant`, `showAllChunksFromFile`) уже совместим.
+- **Фикс 4: `Add`/`AddChunk`/`UpdateById` копируют `tags` и `embedding`.**
+  - **Было:** `entry.Tags = tags` / `entry.Embedding = embedding` сохраняло caller-слайсы прямо в кэш `Store`. Если caller мутирует свой слайс после вызова — кэш меняется без блокировки → рассинхрон с БД.
+  - **Стало:** перед сохранением делается копия `tagsCopy := append([]string(nil), tags...)`, `embCopy := append([]float32(nil), embedding...)`. В кэш попадает копия, БД сериализуется из копии, caller-слайс остаётся независимым.
 
 ### Версия 1.13 — Цветной вывод и команда `mem show`
 

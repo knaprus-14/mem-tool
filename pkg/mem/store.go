@@ -94,6 +94,14 @@ func NewStore(dir string) (*Store, error) {
 	return s, nil
 }
 
+// Close закрывает соединение с БД. Должен вызываться через defer сразу после NewStore:
+//	defer store, err := mem.NewStore(...)
+//	if err != nil { ... }
+//	defer store.Close()
+func (s *Store) Close() error {
+	return s.db.Close()
+}
+
 // loadAll загружает все записи в оперативный кэш при старте
 func (s *Store) loadAll() error {
 	rows, err := s.db.Query(`SELECT id, title, text, tags, created, backend, dims, embedding,
@@ -176,23 +184,28 @@ func (s *Store) Add(text string, title string, tags []string, backend string, em
 	defer s.mu.Unlock()
 
 	now := time.Now().UTC().Format(time.RFC3339)
+	// Копируем tags и embedding — caller может мутировать свои слайсы после возврата,
+	// а Store хранит свои копии в кэше (s.entries/s.vectors).
+	tagsCopy := append([]string(nil), tags...)
+	embCopy := append([]float32(nil), embedding...)
+
 	res, err := s.db.Exec(`INSERT INTO entries
 		(title, text, tags, created, backend, dims, embedding, important)
 		VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-		title, text, tagsToJSON(tags), now, backend, len(embedding),
-		floatsToBytes(embedding), boolToInt(important))
+		title, text, tagsToJSON(tagsCopy), now, backend, len(embCopy),
+		floatsToBytes(embCopy), boolToInt(important))
 	if err != nil {
 		return nil, err
 	}
 	id, _ := res.LastInsertId()
 
 	entry := Entry{
-		ID: id, Title: title, Text: text, Tags: tags,
-		Created: now, Backend: backend, Dims: len(embedding),
-		Embedding: embedding, Important: important,
+		ID: id, Title: title, Text: text, Tags: tagsCopy,
+		Created: now, Backend: backend, Dims: len(embCopy),
+		Embedding: embCopy, Important: important,
 	}
 	s.entries = append(s.entries, entry)
-	s.vectors = append(s.vectors, embedding)
+	s.vectors = append(s.vectors, embCopy)
 	return &entry, nil
 }
 
@@ -207,8 +220,12 @@ func (s *Store) AddChunk(text string, title string, tags []string, backend strin
 	defer s.mu.Unlock()
 
 	now := time.Now().UTC().Format(time.RFC3339)
-	embBytes := floatsToBytes(embedding)
-	tagsStr := tagsToJSON(tags)
+	// Копируем tags и embedding — caller может мутировать свои слайсы после возврата,
+	// а Store хранит свои копии в кэше (s.entries/s.vectors).
+	tagsCopy := append([]string(nil), tags...)
+	embCopy := append([]float32(nil), embedding...)
+	embBytes := floatsToBytes(embCopy)
+	tagsStr := tagsToJSON(tagsCopy)
 	impInt := boolToInt(important)
 
 	// Пытаемся вставить; если конфликт по (source_file, chunk_index) — обновляем
@@ -228,7 +245,7 @@ func (s *Store) AddChunk(text string, title string, tags []string, backend strin
 			important = excluded.important,
 			created = excluded.created,
 			backend = excluded.backend`,
-		title, text, tagsStr, now, backend, len(embedding), embBytes,
+		title, text, tagsStr, now, backend, len(embCopy), embBytes,
 		sourceFile, chunkLabel, chunkIndex, totalChunks, impInt)
 
 	if err != nil {
@@ -247,23 +264,23 @@ func (s *Store) AddChunk(text string, title string, tags []string, backend strin
 
 	// Обновляем кэш в памяти
 	entry := Entry{
-		ID: id, Title: title, Text: text, Tags: tags,
-		Created: now, Backend: backend, Dims: len(embedding),
-		Embedding: embedding, SourceFile: sourceFile, ChunkLabel: chunkLabel,
+		ID: id, Title: title, Text: text, Tags: tagsCopy,
+		Created: now, Backend: backend, Dims: len(embCopy),
+		Embedding: embCopy, SourceFile: sourceFile, ChunkLabel: chunkLabel,
 		ChunkIndex: chunkIndex, TotalChunks: totalChunks, Important: important,
 	}
 	cacheUpdated := false
 	for i := range s.entries {
 		if s.entries[i].ID == id {
 			s.entries[i] = entry
-			s.vectors[i] = embedding
+			s.vectors[i] = embCopy
 			cacheUpdated = true
 			break
 		}
 	}
 	if !cacheUpdated {
 		s.entries = append(s.entries, entry)
-		s.vectors = append(s.vectors, embedding)
+		s.vectors = append(s.vectors, embCopy)
 	}
 	return &entry, nil
 }
@@ -299,38 +316,53 @@ func (s *Store) UpdateById(id int64, text string, title string, tags []string, e
 	defer s.mu.Unlock()
 
 	now := time.Now().UTC().Format(time.RFC3339)
-	tagsStr := tagsToJSON(tags)
+	// Копируем tags — caller может мутировать свой слайс после возврата.
+	tagsCopy := append([]string(nil), tags...)
+	tagsStr := tagsToJSON(tagsCopy)
 
 	var err error
 	if embedding != nil {
+		embCopy := append([]float32(nil), embedding...)
 		_, err = s.db.Exec(`UPDATE entries SET text=?, title=?, tags=?, embedding=?, dims=?, created=? WHERE id=?`,
-			text, title, tagsStr, floatsToBytes(embedding), len(embedding), now, id)
+			text, title, tagsStr, floatsToBytes(embCopy), len(embCopy), now, id)
+		if err != nil {
+			return err
+		}
+		for i := range s.entries {
+			if s.entries[i].ID == id {
+				s.entries[i].Text = text
+				s.entries[i].Title = title
+				s.entries[i].Tags = tagsCopy
+				s.entries[i].Created = now
+				s.entries[i].Embedding = embCopy
+				s.entries[i].Dims = len(embCopy)
+				s.vectors[i] = embCopy
+				return nil
+			}
+		}
+		return fmt.Errorf("запись #%d не найдена", id)
 	} else {
 		_, err = s.db.Exec(`UPDATE entries SET text=?, title=?, tags=?, created=? WHERE id=?`,
 			text, title, tagsStr, now, id)
-	}
-	if err != nil {
-		return err
-	}
-
-	for i := range s.entries {
-		if s.entries[i].ID == id {
-			s.entries[i].Text = text
-			s.entries[i].Title = title
-			s.entries[i].Tags = tags
-			s.entries[i].Created = now
-			if embedding != nil {
-				s.entries[i].Embedding = embedding
-				s.entries[i].Dims = len(embedding)
-				s.vectors[i] = embedding
-			}
-			return nil
+		if err != nil {
+			return err
 		}
+		for i := range s.entries {
+			if s.entries[i].ID == id {
+				s.entries[i].Text = text
+				s.entries[i].Title = title
+				s.entries[i].Tags = tagsCopy
+				s.entries[i].Created = now
+				return nil
+			}
+		}
+		return fmt.Errorf("запись #%d не найдена", id)
 	}
-	return fmt.Errorf("запись #%d не найдена", id)
 }
 
-// ToggleImportant переключает флаг важности
+// ToggleImportant переключает флаг важности.
+// Возвращает Entry-копию (не указатель на внутренний кэш) — иначе вызывающий код
+// может читать/менять состояние Store конкурентно после снятия локального Lock.
 func (s *Store) ToggleImportant(id int64) (*Entry, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -352,7 +384,10 @@ func (s *Store) ToggleImportant(id int64) (*Entry, error) {
 	for i := range s.entries {
 		if s.entries[i].ID == id {
 			s.entries[i].Important = newVal != 0
-			return &s.entries[i], nil
+			entry := s.entries[i]
+			entry.Tags = append([]string(nil), s.entries[i].Tags...)
+			entry.Embedding = append([]float32(nil), s.entries[i].Embedding...)
+			return &entry, nil
 		}
 	}
 	return nil, fmt.Errorf("запись #%d не найдена", id)
@@ -434,29 +469,38 @@ func (s *Store) Recent(limit int) ([]Entry, error) {
 	return out, nil
 }
 
-// GetByID возвращает запись по ID
+// GetByID возвращает запись по ID.
+// Возвращает указатель на локальную копию Entry с глубокими копиями Tags/Embedding —
+// вызывающий код не может мутировать внутренний кэш Store после снятия RLock.
 func (s *Store) GetByID(id int64) (*Entry, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
 	for i := range s.entries {
 		if s.entries[i].ID == id {
-			return &s.entries[i], nil
+			entry := s.entries[i]
+			entry.Tags = append([]string(nil), s.entries[i].Tags...)
+			entry.Embedding = append([]float32(nil), s.entries[i].Embedding...)
+			return &entry, nil
 		}
 	}
 	return nil, fmt.Errorf("запись #%d не найдена", id)
 }
 
 // GetBySourceFile возвращает все записи (чанки) с указанным SourceFile.
-// Возвращает слайс указателей, чтобы избежать копирования больших текстов.
-func (s *Store) GetBySourceFile(sourceFile string) []*Entry {
+// Возвращает []Entry (не []*Entry) — каждая запись это копия с глубокими копиями
+// Tags/Embedding, чтобы вызывающий код не мог мутировать внутренний кэш Store.
+func (s *Store) GetBySourceFile(sourceFile string) []Entry {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
-	var out []*Entry
+	var out []Entry
 	for i := range s.entries {
 		if s.entries[i].SourceFile == sourceFile {
-			out = append(out, &s.entries[i])
+			entry := s.entries[i]
+			entry.Tags = append([]string(nil), s.entries[i].Tags...)
+			entry.Embedding = append([]float32(nil), s.entries[i].Embedding...)
+			out = append(out, entry)
 		}
 	}
 	return out

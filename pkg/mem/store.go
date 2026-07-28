@@ -203,6 +203,13 @@ func bytesToFloats(b []byte) ([]float32, error) {
 	return v, nil
 }
 
+// FloatsToBytes — публичная обёртка для переиспользования в других пакетах
+// (например, pkg/fileindex). Семантика идентична floatsToBytes.
+func FloatsToBytes(v []float32) ([]byte, error) { return floatsToBytes(v) }
+
+// BytesToFloats — публичная обёртка для переиспользования в других пакетах.
+func BytesToFloats(b []byte) ([]float32, error) { return bytesToFloats(b) }
+
 func tagsToJSON(tags []string) (string, error) {
 	if tags == nil {
 		return "[]", nil

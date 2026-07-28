@@ -83,93 +83,9 @@ var cmdCanAutocreate = map[string]bool{
 	"add": true, "add-file": true, "index": true, "config": true,
 }
 
-// parseColorFlag извлекает флаги --color, --no-color, --color=always/never/auto
-// из произвольного набора аргументов и возвращает режим цветов и оставшиеся аргументы.
-func parseColorFlag(args []string) (string, []string) {
-	mode := "auto"
-	out := make([]string, 0, len(args))
-	for _, a := range args {
-		switch a {
-		case "--color", "--color=always", "--color=yes":
-			mode = "always"
-		case "--no-color", "--color=never", "--color=no":
-			mode = "never"
-		default:
-			out = append(out, a)
-		}
-	}
-	return mode, out
-}
-
-// parseGlobalFlag извлекает флаги --global и --dir=<path> / --dir <path>
-// из произвольного набора аргументов.
-//
-// --global    — переключает cwd на родительскую директорию глобальной базы знаний
-//               (по умолчанию ~/global-mem/, путь берётся из env MEM_GLOBAL_DIR).
-//               После этого все команды работают с глобальной базой, как если бы
-//               пользователь запустил mem в её родительской папке.
-//
-// --dir <path> — переключает cwd на path/.mem/ (если path уже содержит .mem, берётся path).
-//               Полезно для работы с произвольной базой без cd.
-//
-// Возвращает (useGlobal bool, customDir string, remainingArgs []string).
-// Если useGlobal==true, customDir игнорируется.
-// Применяется через applyDirSwitch в самом начале run() ДО остальной логики.
-func parseGlobalFlag(args []string) (bool, string, []string) {
-	useGlobal := false
-	customDir := ""
-	out := make([]string, 0, len(args))
-	for i := 0; i < len(args); i++ {
-		a := args[i]
-		switch {
-		case a == "--global":
-			useGlobal = true
-		case a == "--dir":
-			if i+1 < len(args) {
-				customDir = args[i+1]
-				i++
-			}
-		case strings.HasPrefix(a, "--dir="):
-			customDir = strings.TrimPrefix(a, "--dir=")
-		default:
-			out = append(out, a)
-		}
-	}
-	return useGlobal, customDir, out
-}
-
-// applyDirSwitch применяет --global/--dir к текущему процессу через os.Chdir.
-// Если указан --global: cwd → родительская директория GlobalMemDir() (обычно ~/global-mem).
-// Если указан --dir <path>: cwd → path, либо path/.mem если path — родитель.
-// Возвращает ошибку, если перейти не удалось.
-//
-// После этого все последующие вызовы MemDir(), MemExists(), NewStore(memDir())
-// будут работать с целевой базой без дополнительных изменений.
-func applyDirSwitch(useGlobal bool, customDir string) error {
-	if useGlobal {
-		gdir := mem.GlobalMemDir()
-		// gdir обычно заканчивается на .mem — нам нужен его родитель (~/global-mem)
-		parent := filepath.Dir(gdir)
-		if err := os.Chdir(parent); err != nil {
-			return fmt.Errorf("не удалось перейти в глобальную базу %s: %w", parent, err)
-		}
-		return nil
-	}
-	if customDir != "" {
-		// customDir может быть как "C:/foo/.mem", так и "C:/foo" — нормализуем.
-		target := customDir
-		if filepath.Base(target) != mem.MemDirName {
-			target = filepath.Join(target, mem.MemDirName)
-		}
-		// Переходим в родительскую директорию (или саму target, если .mem)
-		cwd := filepath.Dir(target)
-		if err := os.Chdir(cwd); err != nil {
-			return fmt.Errorf("не удалось перейти в %s: %w", cwd, err)
-		}
-		return nil
-	}
-	return nil
-}
+// Парсинг --global, --dir и --color реализован в pkg/mem/cliutil.go (ParseGlobalFlag,
+// ApplyDirSwitch, ParseColorFlag). Экспортированы в v1.16.0 — раньше жили здесь
+// как приватные функции; теперь переиспользуются cmd/mem-index/main.go.
 
 func main() {
 	// Вся логика в run() int — main() просто транслирует код возврата в os.Exit.
@@ -184,14 +100,14 @@ func run() int {
 
 	// Сначала парсим --global / --dir — они переключают cwd до всей остальной логики.
 	// После chdir все команды работают с целевой базой как обычно.
-	useGlobal, customDir, args0 := parseGlobalFlag(args0)
-	if err := applyDirSwitch(useGlobal, customDir); err != nil {
+	useGlobal, customDir, args0 := mem.ParseGlobalFlag(args0)
+	if err := mem.ApplyDirSwitch(useGlobal, customDir); err != nil {
 		fmt.Fprintf(os.Stderr, "%v\n", err)
 		return 1
 	}
 
 	// Потом --color/--no-color (влияет только на ui-стили, не на cwd)
-	colorMode, args0 := parseColorFlag(args0)
+	colorMode, args0 := mem.ParseColorFlag(args0)
 	ui.Init(colorMode)
 
 	if len(os.Args) < 2 || len(args0) == 0 {

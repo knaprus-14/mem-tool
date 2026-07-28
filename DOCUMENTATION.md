@@ -381,6 +381,101 @@ mem> _
 - `templates/CLAUDE.md.template` — новый файл
 - `DOCUMENTATION.md` — эта запись
 
+### Версия 1.16 — mem-index: семантический каталог файлов (новый бинарь)
+
+**v1.16.0 — `mem-index.exe`: поиск файлов по смыслу (не по точному имени):**
+
+- **Проблема:** существующий `mem add-file` индексирует **содержимое** файла (чанки + embedding
+  каждого чанка) — это не помогает найти **сам файл** по примерному/смысловому запросу.
+  «Где та книга про японскую кухню?» — не решается текущим `mem`.
+- **Решение — отдельный бинарь `mem-index.exe`** с собственной БД `.fileindex/` (SQLite),
+  где хранятся метаданные файлов (путь, имя, размер, mtime, hash, аннотация) и
+  embedding строки `name + parent_dirs + annotation`. Поиск — косинусом по embedding,
+  с гибридным boost по имени файла (как в `mem`).
+- **Сценарий:** есть диск с книгами (`D:\Books\`) где `.fb2`, `.pdf`, `.epub`, `.djvu`
+  перемешаны. После `mem-index init D:\Books && mem-index enrich D:\Books` можно искать:
+  ```
+  mem-index find "книга про японскую кухню"   # семантически по аннотации
+  mem-index find "Азимов роботы"               # точно в аннотации
+  ```
+- **Команды:**
+  - `mem-index init <dir>` — создать `.fileindex/` + первый scan.
+  - `mem-index scan <dir> [-enrich] [-no-embed]` — инкрементальный rescan.
+    Быстрый skip для файлов с неизменившимся mtime (без Enrich).
+  - `mem-index enrich <dir>` — повторный scan с извлечением аннотаций.
+  - `mem-index find "запрос"` — семантический поиск с гибридным boost.
+  - `mem-index list [-limit N] [-include-stale]` — последние записи.
+  - `mem-index show <id>` — одна запись целиком (путь, метаданные, аннотация).
+  - `mem-index stats` — статистика (всего/активных/stale/по расширениям).
+  - `mem-index rm <id>` — удалить запись из каталога (не с диска).
+  - Поддерживаются глобальные флаги `--global`, `--dir <path>`, `--color`.
+- **Stale-handling:** записи с удалёнными/перемещёнными файлами помечаются `stale=1`,
+  не удаляются. `list` по умолчанию скрывает их, `list -include-stale` показывает
+  с пометкой `[STALE]`. Если файл вернулся на диск — следующий scan автоматически
+  снимает stale (через Upsert со `stale=0`).
+- **Аннотации по форматам:**
+  | Формат | Метод                                                                                  |
+  |--------|----------------------------------------------------------------------------------------|
+  | `.txt`, `.md` | первые 64 KB текста                                                           |
+  | `.fb2`         | нативный `encoding/xml` парсит `<annotation>` (точное описание книги)       |
+  | `.pdf`         | `pdftotext -f 1 -l 2` (если установлен; иначе пустая аннотация + warning)  |
+  | `.epub`        | `archive/zip` + `encoding/xml`: `<dc:description>` + `<dc:title>` + `<dc:creator>` |
+  | `.djvu`, `.djv`| `djvused -e print-meta` (если установлен; метаданные title/author/year, без OCR) |
+  | другое         | пустая аннотация (но запись в БД создаётся — путь/имя/размер)               |
+- **Пути в БД — относительно scan-root.** Если перенести `D:\Books` на `E:\` — база
+  продолжает работать; достаточно `mem-index scan .` после переноса (mtime файлов
+  скорее всего изменится, вызовется re-embed).
+- **Embedding:** переиспользует `mem.GetEmbedding(cfg, text)` (Ollama bge-m3 1024-dim
+  или Polza text-embedding-3-small 1536-dim). Тот же config.json, что у `mem`.
+- **Архитектурные решения:**
+  - **Отдельный бинарь** (а не подкоманда `mem fileindex`) — пользователь явно попросил
+    «отдельную программу», плюс нет лишних зависимостей (bubbletea, TUI) в `mem-index`.
+  - **Отдельная директория `.fileindex/`** (не `.mem/`) — никаких конфликтов: можно
+    положить `.fileindex/` рядом с `.mem/` в одной папке, они не мешают.
+  - **Переиспользование `pkg/mem`** — embedding, cosine similarity, float32 BLOB helpers,
+    config (LoadConfigIn/SaveConfigIn). Новый код в `pkg/fileindex/` — только специфика
+    файлов: dbpath, store, filereader, scan.
+
+**Изменённые/новые файлы:**
+
+- **Новые:**
+  - `pkg/fileindex/dbpath.go` — константы и функции `.fileindex/` (parallel к `pkg/mem/dbpath.go`)
+  - `pkg/fileindex/config.go` — обёртка над `mem.LoadConfigIn` / `mem.SaveConfigIn`
+  - `pkg/fileindex/store.go` — `FileEntry`, `Store`, SQLite-схема `files`, in-memory кэш, cosine search
+  - `pkg/fileindex/filereader.go` — `ExtractAnnotation(absPath, ext)` диспетчер по расширению
+  - `pkg/fileindex/scan.go` — recursive walk, reconciling, progress
+  - `cmd/mem-index/main.go` — top-level dispatch + handlers + `printUsage()`
+
+- **Модифицированные:**
+  - `pkg/mem/cliutil.go` — НОВЫЙ, экспортирует `ParseGlobalFlag`, `ApplyDirSwitch`,
+    `ParseColorFlag`, `PrintVersion` (раньше приватные в `cmd/mem/main.go`)
+  - `pkg/mem/store.go` — экспортированы `FloatsToBytes`, `BytesToFloats`
+    (старые приватные остались как тонкие обёртки)
+  - `cmd/mem/main.go` — заменены локальные `parseGlobalFlag`/`applyDirSwitch`/
+    `parseColorFlag` на `mem.ParseGlobalFlag`/`mem.ApplyDirSwitch`/`mem.ParseColorFlag`
+  - `DOCUMENTATION.md` — эта запись
+
+**Версии:**
+
+- `mem.exe`: **v1.15.13** (без изменений)
+- `mem-index.exe`: **v1.16.0** (новый бинарь)
+
+**Тестовый сценарий (воспроизводится):**
+
+```bash
+mkdir E:\test-books\Programming E:\test-books\SciFi
+# создать README.txt, go_patterns.md, azimov_robots.fb2
+cd E:\test-books
+mem-index init .                    # создаёт .fileindex/, делает первый scan
+mem-index enrich .                  # извлекает аннотации
+mem-index find "роботы Азимов"      # → #3 SciFi/azimov_robots.fb2 (64.1%)
+mem-index find "паттерны проектирования"  # → #1 Programming/go_patterns.md (64.4%)
+rm SciFi/azimov_robots.fb2
+mem-index scan .                    # Stale: 1
+mem-index list                      # не показывает stale
+mem-index list -include-stale       # показывает с [STALE]
+```
+
 ### Версия 1.13 — Цветной вывод и команда `mem show`
 
 **v1.13.0 — фаза 1 UX-плана (цвета):**

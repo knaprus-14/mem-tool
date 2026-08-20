@@ -4,6 +4,7 @@ import (
 	"math"
 	"regexp"
 	"strings"
+	"unicode"
 	"unicode/utf8"
 )
 
@@ -332,25 +333,46 @@ func splitSentences(text string) []string {
 	// Заменяем переносы строк внутри абзаца на пробелы
 	text = strings.ReplaceAll(text, "\n", " ")
 
-	// Регулярка для границ предложений
-	// Ищем . ! ? за которыми идёт пробел и заглавная буква
-	re := regexp.MustCompile(`([.!?])\s+(\p{Lu})`)
-	result := re.Split(text, -1)
-
-	// Если не удалось разбить — возвращаем как одно предложение
-	if len(result) <= 1 {
-		return []string{strings.TrimSpace(text)}
-	}
-
-	// Собираем результат
+	// Ищем границу после . ! ?, если за пробельным разделителем начинается
+	// слово с заглавной буквы. Раньше regexp.Split с захватывающими группами
+	// превращал сам знак и первую букву следующего предложения в отдельные
+	// элементы, из-за чего при последующей сборке текст повреждался.
+	runes := []rune(text)
+	start := 0
 	var sentences []string
-	for _, s := range result {
-		s = strings.TrimSpace(s)
-		if s != "" {
-			sentences = append(sentences, s)
+	for i := 0; i < len(runes); i++ {
+		if runes[i] != '.' && runes[i] != '!' && runes[i] != '?' {
+			continue
 		}
+
+		// Оставляем последовательность пунктуации и закрывающие кавычки
+		// в текущем предложении: «Правда?!» Следующее.
+		end := i + 1
+		for end < len(runes) && (runes[end] == '.' || runes[end] == '!' || runes[end] == '?') {
+			end++
+		}
+		for end < len(runes) && strings.ContainsRune("\"'»”)]}", runes[end]) {
+			end++
+		}
+
+		next := end
+		for next < len(runes) && unicode.IsSpace(runes[next]) {
+			next++
+		}
+		if next == end || next >= len(runes) || !unicode.IsUpper(runes[next]) {
+			continue
+		}
+
+		if sentence := strings.TrimSpace(string(runes[start:end])); sentence != "" {
+			sentences = append(sentences, sentence)
+		}
+		start = next
+		i = next - 1
 	}
 
+	if sentence := strings.TrimSpace(string(runes[start:])); sentence != "" {
+		sentences = append(sentences, sentence)
+	}
 	return sentences
 }
 

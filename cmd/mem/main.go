@@ -1,9 +1,11 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"os"
+	"os/signal"
 	"path/filepath"
 	"runtime"
 	"sort"
@@ -12,6 +14,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/knaprus-14/mem-tool/pkg/ingest"
 	mem "github.com/knaprus-14/mem-tool/pkg/mem"
 	ui "github.com/knaprus-14/mem-tool/pkg/ui"
 )
@@ -67,7 +70,7 @@ const version = "1.15.13"
 
 // cmdRequiresDB — команды, для работы которых нужна локальная база .mem/
 var cmdRequiresDB = map[string]bool{
-	"add": true, "add-file": true, "index": true,
+	"add": true, "add-file": true, "import": true, "index": true,
 	"config": true,
 	"search": true, "recent": true, "stats": true,
 	"source": true, "sources": true,
@@ -80,7 +83,7 @@ var cmdRequiresDB = map[string]bool{
 
 // cmdCanAutocreate — команды, которые могут автоматически создать .mem/
 var cmdCanAutocreate = map[string]bool{
-	"add": true, "add-file": true, "index": true, "config": true,
+	"add": true, "add-file": true, "import": true, "index": true, "config": true,
 }
 
 // Парсинг --global, --dir и --color реализован в pkg/mem/cliutil.go (ParseGlobalFlag,
@@ -199,7 +202,15 @@ func run() int {
 			return 1
 		}
 	case "add-file":
-		handleAddFile(cfg, store, args)
+		if err := handleAddFile(cfg, store, args); err != nil {
+			fmt.Fprintf(os.Stderr, "Ошибка: %v\n", err)
+			return 1
+		}
+	case "import":
+		if err := handleImport(cfg, store, args); err != nil {
+			fmt.Fprintf(os.Stderr, "Ошибка: %v\n", err)
+			return 1
+		}
 	case "config":
 		if err := handleConfig(args); err != nil {
 			fmt.Fprintf(os.Stderr, "Ошибка: %v\n", err)
@@ -208,7 +219,10 @@ func run() int {
 	case "stats":
 		handleStats(store)
 	case "index":
-		handleIndex(cfg, store, args)
+		if err := handleIndex(cfg, store, args); err != nil {
+			fmt.Fprintf(os.Stderr, "Ошибка: %v\n", err)
+			return 1
+		}
 	case "source":
 		handleSource(store, args)
 	case "sources":
@@ -527,14 +541,7 @@ func handleSearch(cfg *Config, store *Store, args []string) error {
 
 		// Показываем источник, если это чанк документа
 		if r.SourceFile != "" {
-			ref := r.SourceFile
-			if r.ChunkLabel != "" {
-				ref += " | " + r.ChunkLabel
-			}
-			if r.TotalChunks > 0 {
-				ref += fmt.Sprintf(" | %d/%d", r.ChunkIndex+1, r.TotalChunks)
-			}
-			fmt.Printf("   %s %s\n", ui.Key("[FILE]"), ui.Tag(ref))
+			fmt.Printf("   %s %s\n", ui.Key("[FILE]"), ui.Tag(sourceReference(r)))
 		}
 
 		if len(r.Tags) > 0 {
@@ -558,6 +565,26 @@ func hasAnyTag(e Entry, filterTags []string) bool {
 		}
 	}
 	return false
+}
+
+func sourceReference(entry Entry) string {
+	ref := entry.SourceFile
+	if entry.SourcePath != "" {
+		ref = entry.SourcePath
+	}
+	if entry.Page > 0 {
+		ref += fmt.Sprintf(" | page %d", entry.Page)
+	}
+	if entry.DocumentID != "" {
+		ref += fmt.Sprintf(" | block %d", entry.BlockIndex+1)
+	}
+	if entry.ChunkLabel != "" {
+		ref += " | " + entry.ChunkLabel
+	}
+	if entry.TotalChunks > 0 {
+		ref += fmt.Sprintf(" | chunk %d/%d", entry.ChunkIndex+1, entry.TotalChunks)
+	}
+	return ref
 }
 
 // matchesDateRange проверяет, попадает ли дата создания записи в диапазон
@@ -728,100 +755,138 @@ func handleRecent(store *Store, args []string) error {
 	return nil
 }
 
-func handleAddFile(cfg *Config, store *Store, args []string) {
+func handleAddFile(cfg *Config, store *Store, args []string) error {
 	positional, title, tags, _, _, _, _, _, important, _ := parseFlags(args)
 	if len(positional) == 0 {
-		fmt.Fprintln(os.Stderr, "Ошибка: укажи путь к файлу")
-		fmt.Fprintln(os.Stderr, "Пример: mem add-file ./notes.txt -tags \"документация\"")
-		os.Exit(1)
+		return fmt.Errorf("укажи путь к файлу (пример: mem add-file ./notes.txt -tags \"документация\")")
 	}
 
 	path := positional[0]
 	data, err := os.ReadFile(path)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "Ошибка чтения файла %s: %v\n", path, err)
-		os.Exit(1)
+		return fmt.Errorf("чтение файла %s: %w", path, err)
 	}
 
 	text := strings.TrimSpace(string(data))
 	if text == "" {
-		fmt.Fprintln(os.Stderr, "Ошибка: файл пуст")
-		os.Exit(1)
+		return fmt.Errorf("файл пуст")
 	}
 
-	displayText := text
-	if len([]rune(displayText)) > 500 {
-		displayText = string([]rune(displayText)[:500]) + "..."
+	sourcePath, err := mem.CanonicalSourcePath(path)
+	if err != nil {
+		return fmt.Errorf("путь к файлу: %w", err)
 	}
+	fmt.Printf("[FILE] Файл: %s (%d символов)\n", sourcePath, len([]rune(text)))
 
-	fmt.Printf("[FILE] Файл: %s (%d символов)\n", path, len(text))
-
-	// Используем чанкинг для больших файлов
 	chunks := ChunkDocument(text, cfg.Chunking.MaxSize, cfg.Chunking.Overlap, cfg.Chunking.Strategy)
+	if len(chunks) == 0 {
+		return fmt.Errorf("после чанкинга не осталось текста")
+	}
 	if len(chunks) > 1 {
 		fmt.Printf("[CUT] Разбито на %d чанков (max %d символов, стратегия: %s)\n",
 			len(chunks), cfg.Chunking.MaxSize, cfg.Chunking.Strategy)
+	}
 
-		fileName := path
-		if idx := strings.LastIndexAny(fileName, "/\\"); idx >= 0 {
-			fileName = fileName[idx+1:]
+	embeddings := make([][]float32, len(chunks))
+	failed := 0
+	for i, chunk := range chunks {
+		fmt.Printf("   [%d/%d] Эмбеддинг... ", i+1, len(chunks))
+		embedding, embedErr := getEmbedding(cfg, chunk.Text)
+		if embedErr != nil {
+			failed++
+			fmt.Printf("[ERR] %v\n", embedErr)
+			continue
 		}
+		embeddings[i] = embedding
+		fmt.Printf("вектор %d [OK]\n", len(embedding))
+	}
+	if failed > 0 {
+		return fmt.Errorf("не удалось построить embedding для %d из %d чанков; файл не сохранён", failed, len(chunks))
+	}
 
-		for i, chunk := range chunks {
-			fmt.Printf("   [%d/%d] Эмбеддинг... ", i+1, len(chunks))
-			embedding, err := getEmbedding(cfg, chunk.Text)
-			if err != nil {
-				fmt.Printf("[ERR] %v\n", err)
-				continue
-			}
-			fmt.Printf("вектор %d [OK]\n", len(embedding))
-
-			chunkTitle := fileName
-			if chunk.Label != "" {
-				chunkTitle = fileName + ": " + chunk.Label
-			}
-			_, err = store.AddChunk(chunk.Text, chunkTitle, tags, cfg.Backend, embedding,
-				fileName, chunk.Label, chunk.Index, len(chunks), important)
-			if err != nil {
-				fmt.Fprintf(os.Stderr, "   [ERR] Ошибка: %v\n", err)
-			}
+	fileName := filepath.Base(sourcePath)
+	storedChunks := make([]mem.DocumentChunk, len(chunks))
+	for i, chunk := range chunks {
+		chunkTitle := fileName
+		if len(chunks) == 1 && title != "" {
+			chunkTitle = title
+		} else if chunk.Label != "" {
+			chunkTitle = fileName + ": " + chunk.Label
 		}
-		fmt.Printf("[OK] Файл сохранён как %d чанков\n", len(chunks))
-	} else {
-		// Маленький файл — один эмбеддинг, как раньше
-		fmt.Printf(">> Эмбеддинг через %s... ", cfg.Backend)
-		embedding, err := getEmbedding(cfg, text)
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "\nОшибка: %v\n", err)
-			os.Exit(1)
+		storedChunks[i] = mem.DocumentChunk{
+			Text: chunk.Text, Title: chunkTitle, Tags: tags, Backend: cfg.Backend,
+			Embedding: embeddings[i], ChunkLabel: chunk.Label,
+			ChunkIndex: chunk.Index, TotalChunks: len(chunks), Important: important,
+			Provenance: mem.Provenance{SourcePath: sourcePath},
 		}
-		fmt.Printf("получен вектор %d измерений\n", len(embedding))
+	}
+	if err := store.ReplaceDocumentChunks(sourcePath, storedChunks); err != nil {
+		return fmt.Errorf("файл не обновлён: %w", err)
+	}
 
-		entry, err := store.Add(displayText, title, tags, cfg.Backend, embedding, important)
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "Ошибка сохранения: %v\n", err)
-			os.Exit(1)
+	if len(chunks) == 1 {
+		entries := store.GetBySourceFile(sourcePath)
+		if len(entries) != 1 {
+			return fmt.Errorf("файл сохранён, но запись отсутствует в кэше")
 		}
 		mark := ""
 		if important {
 			mark = " [!]"
 		}
-		fmt.Printf("[OK] Файл сохранён как запись #%d%s\n", entry.ID, mark)
+		fmt.Printf("[OK] Файл сохранён как запись #%d%s\n", entries[0].ID, mark)
+	} else {
+		fmt.Printf("[OK] Файл сохранён как %d чанков\n", len(chunks))
 	}
+	return nil
 }
 
-func handleIndex(cfg *Config, store *Store, args []string) {
+func handleImport(cfg *Config, store *Store, args []string) error {
+	positional, title, tags, _, _, _, _, _, important, _ := parseFlags(args)
+	if len(positional) == 0 {
+		return fmt.Errorf("укажи Markdown, PDF или DjVu (пример: mem import ./book.djvu)")
+	}
+	if len(positional) > 1 {
+		return fmt.Errorf("mem import принимает один документ за вызов")
+	}
+
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
+	defer stop()
+	fmt.Printf("[IMPORT] Анализ документа: %s\n", positional[0])
+	result, err := mem.ImportDocument(ctx, cfg, store, positional[0], mem.ImportOptions{
+		Title: title, Tags: tags, Important: important,
+		Progress: func(event ingest.ProgressEvent) {
+			if event.Page > 0 {
+				fmt.Printf("[%s] [%d/%d] page %d: %s\n", strings.ToUpper(event.Stage), event.Current, event.Total, event.Page, event.Message)
+			} else {
+				fmt.Printf("[%s] %s\n", strings.ToUpper(event.Stage), event.Message)
+			}
+		},
+	})
+	if err != nil {
+		return err
+	}
+	pageSummary := "без известных страниц"
+	if len(result.Pages) > 0 {
+		pageSummary = fmt.Sprintf("%d страниц с текстом", len(result.Pages))
+	}
+	fmt.Printf("[OK] Документ импортирован: %s\n", result.SourcePath)
+	fmt.Printf("     document=%s | blocks=%d | chunks=%d | %s\n",
+		result.DocumentID, result.Blocks, result.Chunks, pageSummary)
+	for _, warning := range result.Warnings {
+		fmt.Printf("[WARN] %s\n", warning)
+	}
+	return nil
+}
+
+func handleIndex(cfg *Config, store *Store, args []string) error {
 	if len(args) == 0 {
-		fmt.Fprintln(os.Stderr, "Ошибка: укажи путь к файлу или папке")
-		fmt.Fprintln(os.Stderr, "Пример: mem index C:\\МоиДокументы\\")
-		os.Exit(1)
+		return fmt.Errorf("укажи путь к файлу или папке (пример: mem index C:\\МоиДокументы\\)")
 	}
 
 	path := args[0]
 	results, err := IndexDirectory(cfg, store, path)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "Ошибка: %v\n", err)
-		os.Exit(1)
+		return err
 	}
 
 	// Подводим итог
@@ -833,7 +898,10 @@ func handleIndex(cfg *Config, store *Store, args []string) {
 			errors++
 		}
 	}
-
+	if errors > 0 {
+		return fmt.Errorf("индексация завершена с ошибками: %d из %d файлов; сохранено %d чанков", errors, len(results), total)
+	}
+	return nil
 }
 
 func handleSource(store *Store, args []string) {
@@ -867,7 +935,28 @@ func handleSource(store *Store, args []string) {
 	fmt.Println(strings.Repeat("---", 20))
 
 	if entry.SourceFile != "" {
-		fmt.Printf("[FILE] Файл:     %s\n", entry.SourceFile)
+		sourcePath := entry.SourceFile
+		if entry.SourcePath != "" {
+			sourcePath = entry.SourcePath
+		}
+		fmt.Printf("[FILE] Файл:     %s\n", sourcePath)
+		if entry.DocumentID != "" {
+			fmt.Printf("[DOC]  Документ: %s\n", entry.DocumentID)
+		}
+		if entry.Page > 0 {
+			fmt.Printf("[PAGE] Страница: %d\n", entry.Page)
+			fmt.Printf("[BLOCK] Блок:    %d (%s)\n", entry.BlockIndex+1, entry.BlockMarker)
+		}
+		if entry.ExtractionMethod != "" {
+			fmt.Printf("[EXTRACT] Метод:   %s", entry.ExtractionMethod)
+			if entry.OCRConfidence >= 0 && entry.ExtractionMethod == "ocr" {
+				fmt.Printf(" (confidence %.1f)", entry.OCRConfidence)
+			}
+			fmt.Println()
+		}
+		for _, warning := range entry.Warnings {
+			fmt.Printf("[WARN] %s\n", warning)
+		}
 		if entry.ChunkLabel != "" {
 			fmt.Printf("[SEC]  Раздел:   %s\n", entry.ChunkLabel)
 		}
@@ -889,8 +978,9 @@ func handleSource(store *Store, args []string) {
 // handleShow выводит одну запись полностью или все чанки одного файла.
 //
 // Использование:
-//   mem show <id>           — одна запись (например, mem show 50 или mem show #50)
-//   mem show --from-file <path> — все чанки документа с данным SourceFile
+//
+//	mem show <id>           — одна запись (например, mem show 50 или mem show #50)
+//	mem show --from-file <path> — все чанки документа с данным SourceFile
 //
 // Алиасы: get, view.
 func handleShow(store *Store, args []string) error {
@@ -966,14 +1056,7 @@ func showOneEntry(entry *Entry) {
 	fmt.Println()
 
 	if entry.SourceFile != "" {
-		ref := entry.SourceFile
-		if entry.ChunkLabel != "" {
-			ref += " | " + entry.ChunkLabel
-		}
-		if entry.TotalChunks > 0 {
-			ref += fmt.Sprintf(" | %d/%d", entry.ChunkIndex+1, entry.TotalChunks)
-		}
-		fmt.Printf("   %s %s\n", ui.Key("[FILE]"), ui.Tag(ref))
+		fmt.Printf("   %s %s\n", ui.Key("[FILE]"), ui.Tag(sourceReference(*entry)))
 	}
 	if len(entry.Tags) > 0 {
 		fmt.Printf("   %s %s\n", ui.Key("[TAG]"), ui.Tag(strings.Join(entry.Tags, ", ")))
@@ -1220,6 +1303,11 @@ func printUsage() {
   mem add-file <путь_к_файлу> [-tags "тег1,тег2"] [-important]
       Сохранить содержимое файла в базу (с чанкингом)
 
+	mem import <document.md|document.pdf|document.djvu> [-title "Название"] [-tags "тег1,тег2"] [-important]
+	  Импортировать Markdown, PDF или DjVu с постраничным provenance документа.
+	  Markdown-маркеры <!-- page: N --> сохраняются как номера страниц.
+	  Для сканов используется локальный Tesseract; инструменты не устанавливаются автоматически.
+
   mem index <путь_к_папке_или_файлу>
       Проиндексировать все файлы в папке (.txt, .md, .pdf, .csv, .json)
 
@@ -1297,6 +1385,7 @@ func printUsage() {
   mem show 50                            # одна запись целиком
   mem show --from-file docs/arch.md      # все чанки документа
   mem add-file ./документация.txt
+  mem import ./book.md
   mem index ./проекты/
   mem edit 1 "Обновлённый текст сервера"
   mem retag 5 -tags "сервер,ubuntu,важно"

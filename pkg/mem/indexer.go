@@ -1,17 +1,20 @@
 package mem
 
 import (
+	"context"
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
+
+	"github.com/knaprus-14/mem-tool/pkg/ingest"
 )
 
 // IndexResult — результат индексации одного файла
 type IndexResult struct {
 	FilePath string
 	Chunks   int
+	Failed   int
 	Err      error
 	Skipped  bool
 }
@@ -41,7 +44,7 @@ func IndexDirectory(cfg *Config, store *Store, dirPath string) ([]IndexResult, e
 		// Это файл, а не папка
 		result, err := IndexFile(cfg, store, absPath)
 		if err != nil {
-			return []IndexResult{{FilePath: absPath, Err: err}}, nil
+			result.Err = err
 		}
 		return []IndexResult{result}, nil
 	}
@@ -52,6 +55,7 @@ func IndexDirectory(cfg *Config, store *Store, dirPath string) ([]IndexResult, e
 	totalChunks := 0
 	totalFiles := 0
 	skippedFiles := 0
+	failedFiles := 0
 
 	err = filepath.Walk(absPath, func(path string, info os.FileInfo, err error) error {
 		if err != nil {
@@ -77,6 +81,7 @@ func IndexDirectory(cfg *Config, store *Store, dirPath string) ([]IndexResult, e
 		results = append(results, result)
 
 		if result.Err != nil {
+			failedFiles++
 			fmt.Printf("  [ERR] %s — ошибка: %v\n", filepath.Base(path), result.Err)
 		} else {
 			prefix := "[FILE]"
@@ -102,6 +107,9 @@ func IndexDirectory(cfg *Config, store *Store, dirPath string) ([]IndexResult, e
 	if skippedFiles > 0 {
 		fmt.Printf(", %d пропущено", skippedFiles)
 	}
+	if failedFiles > 0 {
+		fmt.Printf(", %d с ошибками", failedFiles)
+	}
 	fmt.Println()
 
 	return results, nil
@@ -109,9 +117,15 @@ func IndexDirectory(cfg *Config, store *Store, dirPath string) ([]IndexResult, e
 
 // IndexFile индексирует один файл: читает, чанкует, эмбеддит, сохраняет
 func IndexFile(cfg *Config, store *Store, filePath string) (IndexResult, error) {
+	return indexFileWithEmbedder(cfg, store, filePath, GetEmbedding)
+}
+
+type embeddingFunc func(*Config, string) ([]float32, error)
+
+func indexFileWithEmbedder(cfg *Config, store *Store, filePath string, embed embeddingFunc) (IndexResult, error) {
 	result := IndexResult{FilePath: filePath}
 
-	absPath, err := filepath.Abs(filePath)
+	absPath, err := CanonicalSourcePath(filePath)
 	if err != nil {
 		result.Err = err
 		return result, err
@@ -143,28 +157,59 @@ func IndexFile(cfg *Config, store *Store, filePath string) (IndexResult, error) 
 		tags = append(tags, parent)
 	}
 
-	// Создаём чанки
-	fileName := filepath.Base(absPath)
-	for _, chunk := range chunks {
+	// Сначала строим все embeddings. Если хотя бы один не получен, существующая
+	// версия документа остаётся нетронутой, а результат не маскируется под успех.
+	embeddings := make([][]float32, len(chunks))
+	for i, chunk := range chunks {
 		fmt.Printf("  [%d/%d] Эмбеддинг... ", chunk.Index+1, len(chunks))
 
-		embedding, err := GetEmbedding(cfg, chunk.Text)
-		if err != nil {
-			fmt.Printf("[ERR] %v\n", err)
+		embedding, embedErr := embed(cfg, chunk.Text)
+		if embedErr != nil {
+			result.Failed++
+			fmt.Printf("[ERR] %v\n", embedErr)
 			continue
 		}
+		embeddings[i] = embedding
 		fmt.Printf("вектор %d\n", len(embedding))
-
-		_, err = store.AddChunk(chunk.Text, fileName, tags, cfg.Backend, embedding,
-			fileName, chunk.Label, chunk.Index, len(chunks), false)
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "  [ERR] Ошибка сохранения: %v\n", err)
-			continue
-		}
-		result.Chunks++
+	}
+	if result.Failed > 0 {
+		err := fmt.Errorf("не удалось построить embedding для %d из %d чанков; документ не обновлён", result.Failed, len(chunks))
+		result.Err = err
+		return result, err
 	}
 
+	// Сохраняем чанки под каноническим абсолютным путём: одинаковые имена
+	// файлов в разных каталогах становятся разными документами.
+	fileName := filepath.Base(absPath)
+	storedChunks := make([]DocumentChunk, len(chunks))
+	for i, chunk := range chunks {
+		storedChunks[i] = DocumentChunk{
+			Text: chunk.Text, Title: fileName, Tags: tags, Backend: cfg.Backend,
+			Embedding: embeddings[i], ChunkLabel: chunk.Label,
+			ChunkIndex: chunk.Index, TotalChunks: len(chunks),
+			Provenance: Provenance{SourcePath: absPath},
+		}
+	}
+	if err = store.ReplaceDocumentChunks(absPath, storedChunks); err != nil {
+		result.Failed = len(chunks)
+		err = fmt.Errorf("документ не обновлён: %w", err)
+		result.Err = err
+		return result, err
+	}
+	result.Chunks = len(chunks)
+
 	return result, nil
+}
+
+// CanonicalSourcePath возвращает устойчивую identity документа. В базе хранится
+// полный очищенный путь; старые записи с basename остаются нетронутыми, потому
+// что автоматически сопоставить их с одним из одноимённых файлов небезопасно.
+func CanonicalSourcePath(path string) (string, error) {
+	absPath, err := filepath.Abs(path)
+	if err != nil {
+		return "", err
+	}
+	return filepath.Clean(absPath), nil
 }
 
 // readFile читает содержимое файла, поддерживая разные форматы
@@ -188,32 +233,18 @@ func readFile(path string) (string, error) {
 	}
 }
 
-// readPDF пытается извлечь текст из PDF через pdftotext
+// readPDF keeps the legacy mem index path working while sharing the staged PDF
+// extractor and its actionable errors with mem import.
 func readPDF(path string) (string, error) {
-	// Пробуем pdftotext
-	if _, err := exec.LookPath("pdftotext"); err == nil {
-		cmd := exec.Command("pdftotext", "-layout", path, "-")
-		out, err := cmd.Output()
-		if err == nil && len(out) > 0 {
-			return string(out), nil
-		}
+	doc, err := ingest.Extract(context.Background(), path)
+	if err != nil {
+		return "", err
 	}
-
-	// Пробуем python с pdfminer
-	if _, err := exec.LookPath("python"); err == nil {
-		script := `
-	import sys, io, pdfminer.high_level
-	sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8')
-	pdfminer.high_level.extract_text(sys.argv[1])
-	`
-		cmd := exec.Command("python", "-c", script, path)
-		out, err := cmd.Output()
-		if err == nil && len(out) > 0 {
-			return string(out), nil
-		}
+	texts := make([]string, 0, len(doc.Blocks))
+	for _, block := range doc.Blocks {
+		texts = append(texts, block.Text)
 	}
-
-	return "", fmt.Errorf("не удалось прочитать PDF. Установи pdftotext (poppler-utils) или python pdfminer")
+	return strings.Join(texts, "\n\n"), nil
 }
 
 // IndexSummary возвращает список файлов в директории с подсчётом

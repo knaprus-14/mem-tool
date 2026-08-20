@@ -88,6 +88,11 @@ func DefaultLocalConfig() *Config {
 			Overlap:  100,
 			Strategy: "paragraph",
 		},
+		Ingest: IngestConfig{
+			OCRLanguages:  "rus+eng",
+			OCRDPI:        300,
+			LowConfidence: 65,
+		},
 	}
 }
 

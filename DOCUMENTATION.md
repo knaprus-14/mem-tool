@@ -48,7 +48,7 @@
 - Поддержка .txt, .md, .csv, .json, .pdf
 - Source-команды: `mem source <id>` и `mem sources`
 
-**Проблема с PDF:** PDF читается двумя способами — через `pdftotext` (poppler-utils) или через Python-скрипт с библиотекой pdfminer.
+**PDF/DjVu/OCR:** импорт сначала использует встроенный текст (`pdftotext`/`mutool` для PDF, `djvutxt` для DjVu). Если текста нет или он слишком бедный, страницы последовательно рендерятся и распознаются локальным Tesseract. Инструменты ищутся в project config, `MEM_*` env, `PATH` и стандартных каталогах Windows; системный `PATH` не изменяется.
 
 ### Версия 1.2 — Заголовки записей
 Раньше записи были безымянными. Теперь у каждой записи может быть заголовок:
@@ -241,7 +241,7 @@ mem> _
   - REPL-диспатч в `dispatchReplLine()`: то же, но без `os.Exit` — REPL продолжает работать после ошибки.
   - TUI-горутина в `runCommandAsync()`: ошибка пробрасывается в `execResultMsg.err` и отрисовывается в viewport через `"Ошибка: " + err.Error()` — TUI остаётся живым и принимает следующие команды.
   - В TUI добавлен локальный хелпер `runWithCapture(fn func() error)` — запускает хендлер с перехватом stdout и пробрасывает ошибку в общий `err`, чтобы убрать копипасту в каждом case.
-- CLI-only хендлеры (`handleInit`, `handleAddFile`, `handleIndex`, `handleSource`) не трогали — они вызываются только из CLI-режима, где `os.Exit` корректен.
+- CLI-only хендлеры `handleInit`/`handleSource` остаются отдельными путями; файловые команды возвращают ошибки диспетчеру, чтобы partial failure не маскировался под успех.
 
 **v1.15.6 — TUI popup не перехватывает Enter при ручном вводе команды:**
 - **Баг:** в TUI при ручном наборе команды (например, `/clear`) без выбора из всплывающего popup'а — Enter перехватывался popup'ом и подменял ввод на первый элемент меню (`/search`). В итоге вместо `/clear` выполнялся `/search` (или требовался ещё один Enter).
@@ -637,7 +637,7 @@ mem config set-chunk-strategy sentence
 
 **Важно:** Если PDF-извлечение выдаёт текст без границ предложений (нет точек с заглавными буквами), `splitSentences` может не найти, где разорвать. В этом случае предложение режется **фиксированно** — по символам с разрывом по пробелам. Это гарантирует, что ни один чанк не превысит `maxSize` и не вызовет ошибку `"input length exceeds the context length"` в Ollama.
 
-Дополнительная защита в `embed.go`: перед отправкой текста в модель он урезается до 2000 рун. Это safety net на случай, если чанкинг по какой-то причине пропустит слишком длинный текст.
+Дополнительная защита в `embed.go`: текст длиннее лимита embedding отклоняется с ясной ошибкой и советом уменьшить `chunk_max_size`. Тихого усечения больше нет: сохранённый текст всегда совпадает с текстом, для которого рассчитан вектор.
 
 ---
 
@@ -646,7 +646,8 @@ mem config set-chunk-strategy sentence
 ### Требования
 - Go 1.25+ (для сборки) — pure-Go SQLite через `modernc.org/sqlite`, **без CGO**
 - Ollama с моделью bge-m3 (для локальных эмбеддингов) — **или** API-ключ Polza AI
-- Для PDF: `pdftotext` (poppler-utils) или Python + pdfminer
+- Для PDF: `pdftotext` (Poppler) или `mutool` (MuPDF); для OCR дополнительно `pdftoppm`/`mutool` и Tesseract с запрошенными language data.
+- Для DjVu: DjVuLibre (`djvutxt`, `djvused`, `ddjvu`); для сканов также Tesseract. Для Markdown внешние зависимости не нужны.
 
 ### Сборка
 ```powershell
@@ -754,6 +755,40 @@ mem recent -limit 5
 mem add-file ./настройка.txt -tags "документация,сервер"
 mem add-file ./README.md -important
 ```
+
+### `mem import <путь>`
+
+Staged-импорт документов с provenance для последующего цитирования результата поиска.
+
+```powershell
+mem import ./book.md -tags "книга,справочник"
+mem import ./manual.pdf -title "Руководство"
+mem import ./scan.djvu -tags "скан,справочник"
+```
+
+Поддерживаются:
+
+- Markdown (`.md`, `.markdown`). Маркеры отдельной строкой `<!-- page: N -->` сохраняются в каноническом Markdown и записываются как точный номер страницы каждого поискового чанка.
+- PDF (`.pdf`): сначала текстовый слой через `pdftotext`, затем `mutool`; при пустом/бедном слое — постраничный OCR.
+- DjVu (`.djvu`, `.djv`): сначала `djvutxt`; при отсутствии embedded text — последовательный рендер `ddjvu` и OCR.
+
+Оба extractor-а создают канонический Markdown того же вида:
+
+```markdown
+# Заголовок документа
+
+<!-- page: 1 -->
+
+Текст первой страницы...
+
+<!-- page: 2 -->
+
+Текст второй страницы...
+```
+
+Пустой текст не считается успехом. OCR выполняется по одной странице, временный raster удаляется перед переходом к следующей странице, а общий временный каталог очищается при успехе, ошибке и отмене. `Ctrl+C` также отменяет активный запрос embedding. Все чанки повторного импорта заменяются одной SQLite-транзакцией: при ошибке записи прежняя версия документа остаётся целой. В базе сохраняются физическая страница, метод extraction, средняя Tesseract confidence и предупреждения low-confidence. LLM-коррекция OCR не выполняется.
+
+Явные пути и OCR-настройки задаются в `.mem/config.json` в секции `ingest`; эквивалентные env: `MEM_PDFTOTEXT`, `MEM_MUTOOL`, `MEM_PDFINFO`, `MEM_PDFTOPPM`, `MEM_DJVUTXT`, `MEM_DJVUSED`, `MEM_DDJVU`, `MEM_TESSERACT`, `MEM_TESSDATA_DIR`, `MEM_OCR_LANGS`. Все requested languages (например, `rus+eng`) должны находиться в одном tessdata-каталоге.
 
 ### `mem index <путь>`
 
@@ -1032,6 +1067,15 @@ mem search "команды линукс" -from 2026-07-01
 | `chunk_label` | TEXT | Описание чанка (заголовок раздела) |
 | `chunk_index` | INTEGER | Номер чанка в файле (0-based) |
 | `total_chunks` | INTEGER | Всего чанков в файле |
+| `document_id` | TEXT | Стабильная identity импортированного документа |
+| `source_path` | TEXT | Канонический абсолютный путь источника |
+| `media_type` | TEXT | Тип источника (`text/markdown`, `application/pdf`) |
+| `page` | INTEGER | Номер страницы, 0 если неизвестен |
+| `block_index` | INTEGER | Номер исходного staged-блока (0-based) |
+| `block_marker` | TEXT | Исходный маркер страницы/блока |
+| `extraction_method` | TEXT | `text` для embedded/Markdown или `ocr` для Tesseract |
+| `ocr_confidence` | REAL | Средняя word-confidence Tesseract; `-1`, если OCR не применялся |
+| `warnings` | TEXT | JSON-массив предупреждений extraction/OCR |
 | `important` | INTEGER | Флаг важности: 0 или 1 |
 
 **Индексы:**
@@ -1066,6 +1110,7 @@ mem search "команды линукс" -from 2026-07-01
 
 **Архитектура monorepo (с v1.12):**
 - `pkg/mem/` — библиотека ядра (импортируется обоими бинарями)
+- `pkg/ingest/` — staged extraction: Markdown/page markers, PDF/DjVu embedded text и постраничный OCR fallback
 - `cmd/mem/` — CLI-бинарь `mem.exe`
 - `cmd/mem-bot/` — Telegram-бот `mem-bot.exe`
 
@@ -1075,6 +1120,13 @@ mem search "команды линукс" -from 2026-07-01
 | `pkg/mem/embed.go` | Эмбеддинги: Ollama и Polza бэкенды |
 | `pkg/mem/chunk.go` | Чанкинг: разбивка документов на фрагменты |
 | `pkg/mem/indexer.go` | Индексация: обход папок, чтение файлов |
+| `pkg/mem/importer.go` | Чанкинг и индексирование staged-документов с provenance |
+| `pkg/ingest/document.go` | Типы документа/блока и registry extractor-ов |
+| `pkg/ingest/markdown.go` | Канонизация Markdown и разбор `<!-- page: N -->` |
+| `pkg/ingest/pdf.go` | PDF text-layer extraction и классификация OCR-required |
+| `pkg/ingest/djvu.go` | DjVu embedded text и постраничный `ddjvu` fallback |
+| `pkg/ingest/ocr.go` | Tesseract TSV, confidence, cleanup и cancellation |
+| `pkg/ingest/tools.go` | Tool discovery: config/env/PATH/стандартные Windows paths |
 | `pkg/mem/config.go` | Конфигурация: загрузка/сохранение JSON |
 | `pkg/mem/dbpath.go` | Пути к локальной `.mem/`, `initMem`, per-dir варианты для бота |
 | `cmd/mem/main.go` | CLI: команды, флаги, вывод |

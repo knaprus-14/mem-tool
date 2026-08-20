@@ -29,21 +29,21 @@ type ScanReport struct {
 
 // skipDirNames — директории, которые мы всегда пропускаем.
 var skipDirNames = map[string]bool{
-	".git":         true,
-	".vs":          true,
-	".idea":        true,
-	".mem":         true,
-	".fileindex":   true,
-	"node_modules": true,
-	"__pycache__":  true,
-	".venv":        true,
-	"venv":         true,
-	".cache":       true,
-	"target":       true, // Rust
-	"dist":         true,
-	"build":        true,
-	".gradle":      true,
-	".next":        true, // Next.js
+	".git":          true,
+	".vs":           true,
+	".idea":         true,
+	".mem":          true,
+	".fileindex":    true,
+	"node_modules":  true,
+	"__pycache__":   true,
+	".venv":         true,
+	"venv":          true,
+	".cache":        true,
+	"target":        true, // Rust
+	"dist":          true,
+	"build":         true,
+	".gradle":       true,
+	".next":         true, // Next.js
 	".parcel-cache": true,
 }
 
@@ -64,12 +64,18 @@ func shouldSkipDir(name string) bool {
 // Алгоритм:
 //  1. WalkDir по RootDir с пропуском skip-директорий.
 //  2. Для каждого файла: stat() → relPath → проверяем существующую запись.
-//  3. Если mtime не изменился и не Enrich — skip (быстрый rescan).
+//  3. Skip только активной записи с теми же метаданными и актуальным вектором.
 //  4. Иначе: parentDir → annotation (если Enrich) → embedding → Upsert.
-//  5. После walk: AllPaths() vs посещённые → MarkStale/UnmarkStale.
+//  5. После полного walk: AllPaths() vs посещённые → MarkStale.
 func Scan(opts ScanOptions, store *Store, cfg *mem.Config) (ScanReport, error) {
 	if opts.RootDir == "" {
 		return ScanReport{}, fmt.Errorf("Scan: пустой RootDir")
+	}
+	if store == nil {
+		return ScanReport{}, fmt.Errorf("Scan: nil Store")
+	}
+	if cfg == nil {
+		return ScanReport{}, fmt.Errorf("Scan: nil Config")
 	}
 	absRoot, err := filepath.Abs(opts.RootDir)
 	if err != nil {
@@ -79,9 +85,11 @@ func Scan(opts ScanOptions, store *Store, cfg *mem.Config) (ScanReport, error) {
 	report := ScanReport{}
 	visited := make(map[string]bool) // relPath → true
 	count := 0
+	walkIncomplete := false
 
 	walkErr := filepath.WalkDir(absRoot, func(fullPath string, d fs.DirEntry, err error) error {
 		if err != nil {
+			walkIncomplete = true
 			report.Errors = append(report.Errors, fmt.Sprintf("%s: %v", fullPath, err))
 			return nil // продолжаем обход
 		}
@@ -98,6 +106,7 @@ func Scan(opts ScanOptions, store *Store, cfg *mem.Config) (ScanReport, error) {
 		// Только регулярные файлы (не symlinks, не устройства).
 		info, err := d.Info()
 		if err != nil {
+			walkIncomplete = true
 			report.Errors = append(report.Errors, fmt.Sprintf("stat %s: %v", fullPath, err))
 			return nil
 		}
@@ -108,6 +117,7 @@ func Scan(opts ScanOptions, store *Store, cfg *mem.Config) (ScanReport, error) {
 		count++
 		relPath, err := filepath.Rel(absRoot, fullPath)
 		if err != nil {
+			walkIncomplete = true
 			report.Errors = append(report.Errors, fmt.Sprintf("relpath %s: %v", fullPath, err))
 			return nil
 		}
@@ -117,8 +127,12 @@ func Scan(opts ScanOptions, store *Store, cfg *mem.Config) (ScanReport, error) {
 		// Проверяем существующую запись.
 		existing, exists := store.GetByPath(relPath)
 
-		// Быстрый skip: mtime не изменился и не Enrich.
-		if exists && !opts.Enrich && existing.Mtime == info.ModTime().Unix() {
+		// Быстрый skip допустим только для активной записи с теми же метаданными.
+		// Если backend сменился или embedding отсутствует, обычный scan должен
+		// пересчитать вектор даже при неизменном mtime.
+		vectorCurrent := exists && existing.Backend == cfg.Backend && len(existing.Embedding) > 0
+		sameMetadata := exists && existing.Mtime == info.ModTime().Unix() && existing.Size == info.Size()
+		if exists && !existing.Stale && !opts.Enrich && sameMetadata && (!opts.Embed || vectorCurrent) {
 			report.Skipped++
 			if opts.Progress && count%100 == 0 {
 				fmt.Printf("  [%d files] skipped=%d added=%d updated=%d\n",
@@ -139,31 +153,40 @@ func Scan(opts ScanOptions, store *Store, cfg *mem.Config) (ScanReport, error) {
 		entry.ParentDir = parentDirChain(absRoot, fullPath, 2)
 
 		// Аннотация (если Enrich).
+		annotationFailed := false
 		if opts.Enrich {
 			ann, annErr := ExtractAnnotation(fullPath, entry.Ext)
 			if annErr != nil {
 				report.Errors = append(report.Errors,
 					fmt.Sprintf("annotation %s: %v", fullPath, annErr))
+				annotationFailed = true
+				// Индексируем файл по метаданным, но не затираем прежнюю аннотацию.
+				if exists {
+					entry.Annotation = existing.Annotation
+				}
+			} else {
+				entry.Annotation = ann
 			}
-			entry.Annotation = ann
 		}
 
-		// Embedding (всегда, если Embed=true, или если записи нет).
-		if opts.Embed || !exists {
+		// В metadata-only режиме новые/enriched записи сохраняются без вектора.
+		// Для неизменённой существующей записи старый совместимый вектор можно
+		// сохранить, не выдавая его за другой backend.
+		if opts.Embed {
 			searchText := buildSearchText(entry)
 			vec, embErr := mem.GetEmbedding(cfg, searchText)
 			if embErr != nil {
 				report.Errors = append(report.Errors,
 					fmt.Sprintf("embedding %s: %v", fullPath, embErr))
-				// Без embedding запись бесполезна для поиска — пропускаем.
+				// Сохраняем прежнюю запись: частичное обновление опаснее пропуска.
 				return nil
 			}
 			entry.Embedding = vec
 			entry.Dims = len(vec)
-		} else {
-			// Сохраняем старый embedding при обновлении метаданных без Enrich.
+		} else if exists && (!opts.Enrich || annotationFailed) {
 			entry.Embedding = existing.Embedding
 			entry.Dims = existing.Dims
+			entry.Backend = existing.Backend
 		}
 
 		if opts.DryRun {
@@ -195,6 +218,10 @@ func Scan(opts ScanOptions, store *Store, cfg *mem.Config) (ScanReport, error) {
 	if walkErr != nil {
 		return report, fmt.Errorf("walk: %w", walkErr)
 	}
+	if walkIncomplete {
+		report.Errors = append(report.Errors, "stale reconciliation skipped: filesystem walk was incomplete")
+		return report, nil
+	}
 
 	// Reconciling: что было в БД, но не найдено на диске.
 	allPaths, err := store.AllPaths()
@@ -213,7 +240,9 @@ func Scan(opts ScanOptions, store *Store, cfg *mem.Config) (ScanReport, error) {
 		// но это уже случай выше: visited=false). Так что всё missing → MarkStale.
 		// Для UnmarkStale — мы бы хотели снять stale с записей, которые мы сейчас посетили
 		// и они уже есть. Это делается автоматически в Upsert (stale=0).
-		if err := store.MarkStale(missing); err != nil {
+		if opts.DryRun {
+			report.Stale = len(missing)
+		} else if err := store.MarkStale(missing); err != nil {
 			report.Errors = append(report.Errors, fmt.Sprintf("MarkStale: %v", err))
 		} else {
 			report.Stale = len(missing)

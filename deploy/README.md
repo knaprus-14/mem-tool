@@ -1,87 +1,131 @@
-# Деплой mem-bot на VDS (knaprus)
+# Деплой mem-bot на Linux VDS (knaprus)
 
-## Одноразовая настройка (от root)
+Целевой systemd-юнит запускает Linux-бинарь `/opt/mem-bot/mem-bot`. Обычный
+`go build` на Windows создаёт PE/Windows `.exe` и для VDS не подходит.
+
+## Сборка и загрузка с Windows
+
+Проверить архитектуру VDS: `ssh root@knaprus "uname -m"`. Для `x86_64`
+используется `GOARCH=amd64`; для `aarch64` — `GOARCH=arm64`.
+
+Из корня репозитория в PowerShell:
+
+```powershell
+$oldGOOS = $env:GOOS
+$oldGOARCH = $env:GOARCH
+$oldCGO = $env:CGO_ENABLED
+try {
+    $env:GOOS = "linux"
+    $env:GOARCH = "amd64"
+    $env:CGO_ENABLED = "0"
+    go build -trimpath -o mem-bot-linux ./cmd/mem-bot
+} finally {
+    $env:GOOS = $oldGOOS
+    $env:GOARCH = $oldGOARCH
+    $env:CGO_ENABLED = $oldCGO
+}
+
+scp mem-bot-linux root@knaprus:/tmp/mem-bot
+scp deploy/mem-bot.service root@knaprus:/tmp/mem-bot.service
+```
+
+## Одноразовая настройка на VDS
+
+Команды выполняются от `root`:
 
 ```bash
-# 1. Создаём пользователя для бота (без shell, без home)
 useradd --system --shell /usr/sbin/nologin --no-create-home membot
 
-# 2. Создаём директории
-mkdir -p /opt/mem-bot/data
-mkdir -p /var/log/mem-bot
-chown -R membot:membot /opt/mem-bot
-chown -R membot:membot /var/log/mem-bot
-chmod 750 /opt/mem-bot/data
+install -d -o root -g root -m 0755 /opt/mem-bot
+install -d -o membot -g membot -m 0750 /opt/mem-bot/data
+install -d -o membot -g membot -m 0750 /var/log/mem-bot
+install -o root -g root -m 0755 /tmp/mem-bot /opt/mem-bot/mem-bot
 
-# 3. Копируем бинарь (с локальной машины)
-scp E:\Programming\claude\mem-tool\mem-bot.exe root@knaprus:/opt/mem-bot/
-
-# 4. Создаём env-файл с токеном
 cat > /opt/mem-bot/.env <<'EOF'
 TELEGRAM_BOT_TOKEN=ТВОЙ_ТОКЕН_СЮДА
 MEM_BOT_DATA_DIR=/opt/mem-bot/data
 EOF
-chown membot:membot /opt/mem-bot/.env
-chmod 600 /opt/mem-bot/.env
+chown root:membot /opt/mem-bot/.env
+chmod 0640 /opt/mem-bot/.env
 
-# 5. Устанавливаем systemd-юнит
-cp /tmp/mem-bot.service /etc/systemd/system/mem-bot.service
+install -o root -g root -m 0644 /tmp/mem-bot.service /etc/systemd/system/mem-bot.service
+rm -f /tmp/mem-bot /tmp/mem-bot.service
+
 systemctl daemon-reload
-systemctl enable mem-bot
-systemctl start mem-bot
+systemctl enable --now mem-bot
+```
 
-# 6. Проверяем
-systemctl status mem-bot
-journalctl -u mem-bot -f
-tail -f /var/log/mem-bot/bot.log
+Проверить формат бинаря, состояние и логи:
+
+```bash
+file /opt/mem-bot/mem-bot
+# Ожидается ELF 64-bit для архитектуры VDS, не PE32/Windows.
+
+systemctl --no-pager --full status mem-bot
+journalctl -u mem-bot -n 50 --no-pager
+tail -n 50 /var/log/mem-bot/bot.log
 ```
 
 ## Управление
 
 ```bash
-systemctl status mem-bot    # статус
-systemctl stop mem-bot      # остановить
-systemctl restart mem-bot   # перезапустить
-systemctl logs mem-bot      # логи (journalctl)
+systemctl status mem-bot
+systemctl stop mem-bot
+systemctl restart mem-bot
+journalctl -u mem-bot -f
 ```
 
 ## Обновление
 
-```bash
-# С локальной машины — собрать новую версию
-cd E:\Programming\claude\mem-tool
-go build -o mem-bot.exe ./cmd/mem-bot/
+Сначала повторить PowerShell-сборку выше, затем:
 
-# Скопировать на VDS
-scp mem-bot.exe root@knaprus:/opt/mem-bot/
-
-# Перезапустить бота
-ssh root@knaprus "systemctl restart mem-bot"
+```powershell
+scp mem-bot-linux root@knaprus:/tmp/mem-bot.new
+ssh root@knaprus "install -o root -g root -m 0755 /tmp/mem-bot.new /opt/mem-bot/mem-bot.new && mv -f /opt/mem-bot/mem-bot.new /opt/mem-bot/mem-bot && rm -f /tmp/mem-bot.new && systemctl restart mem-bot"
+ssh root@knaprus "file /opt/mem-bot/mem-bot && systemctl --no-pager --full status mem-bot && journalctl -u mem-bot -n 50 --no-pager"
 ```
 
-## Бэкапы
+Сначала создаётся новый файл, затем `mv` атомарно заменяет старый бинарь в той
+же файловой системе. При ошибке загрузки работающий бинарь не изменяется.
+
+## Консистентный бэкап SQLite
+
+Нельзя архивировать открытые `store.db` обычным `tar`: снимок может попасть на
+середину транзакции. Простой вариант с короткой остановкой сервиса:
 
 ```bash
-# Базы пользователей (per-user SQLite) — в /opt/mem-bot/data/
-# Бэкап раз в день через cron:
-
 # /etc/cron.daily/mem-bot-backup
 #!/bin/bash
+set -euo pipefail
+umask 077
+
 BACKUP_DIR=/var/backups/mem-bot
-mkdir -p $BACKUP_DIR
-tar czf $BACKUP_DIR/data-$(date +%F).tar.gz /opt/mem-bot/data
-# Хранить 30 дней
-find $BACKUP_DIR -name "data-*.tar.gz" -mtime +30 -delete
+ARCHIVE="$BACKUP_DIR/data-$(date +%F).tar.gz"
+mkdir -p "$BACKUP_DIR"
+chmod 0700 "$BACKUP_DIR"
+
+systemctl stop mem-bot
+trap 'systemctl start mem-bot' EXIT
+tar -C /opt/mem-bot -czf "$ARCHIVE" data
+systemctl start mem-bot
+trap - EXIT
+
+find "$BACKUP_DIR" -type f -name "data-*.tar.gz" -mtime +30 -delete
 ```
+
+После создания скрипта: `chmod 0700 /etc/cron.daily/mem-bot-backup`.
+Восстановление нужно отдельно проверять на временной директории, открывая
+каждый `store.db` через `PRAGMA integrity_check`.
 
 ## Безопасность
 
-- ✅ Токен в env-файле с правами 600, owner=membot
-- ✅ Бот работает от отдельного пользователя без root
-- ✅ ProtectSystem=strict — доступ только к /opt/mem-bot
-- ✅ NoNewPrivileges — запрет эскалации привилегий
-- ⚠️ Ollama на localhost:11434 — должен быть доступен для membot
+- Токен хранится в root-owned env-файле `0640`, доступном группе `membot`.
+- Бинарь и systemd-юнит принадлежат root; пользователь бота не может их заменить.
+- Бот работает без root, с `NoNewPrivileges` и `ProtectSystem=strict`.
+- Запись разрешена только в `/opt/mem-bot/data`; Ollama доступна на localhost.
 
 ## Проверка после деплоя
 
-Открыть `@mem_knaprus_bot` в Telegram → `/start` → должно прийти приветствие.
+Открыть `@mem_knaprus_bot` в Telegram и выполнить `/start`, `/add`, `/search`.
+После этого перезапустить сервис и повторить `/recent`, чтобы проверить
+сохранность SQLite и корректное закрытие/повторное открытие базы.

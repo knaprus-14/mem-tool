@@ -182,8 +182,10 @@ func TestSearchCitationsPreservePageAndLegacyHonesty(t *testing.T) {
 	defer store.Close()
 	_, err := store.AddDocumentChunk("page text", "Book", nil, "test", []float32{1, 0},
 		"section", 0, 1, false, Provenance{
-			DocumentID: "doc-1", SourcePath: "C:/docs/book.pdf", MediaType: "application/pdf",
-			Page: 7, BlockIndex: 1, BlockMarker: "<!-- page: 7 -->", ExtractionMethod: "text",
+			DocumentID: "doc-1", DocumentRevision: ChunkContentHash("document revision fixture"),
+			ChunkHash: ChunkContentHash("page text"), SourcePath: "C:/docs/book.pdf", MediaType: "application/pdf",
+			Page: 7, BlockIndex: 1, BlockMarker: "<!-- page: 7 -->",
+			BlockChunkIndex: 0, BlockTotalChunks: 1, ExtractionMethod: "text", OCRConfidence: -1,
 		})
 	if err != nil {
 		t.Fatal(err)
@@ -225,8 +227,8 @@ func TestSearchCitationsPreservePageAndLegacyHonesty(t *testing.T) {
 }
 
 func TestCitationIDsAreStableAndDistinctForDocumentIdentities(t *testing.T) {
-	first := Entry{DocumentID: "doc-first", SourcePath: "C:/docs/first.pdf", Page: 4, BlockIndex: 2, ChunkIndex: 1}
-	second := Entry{DocumentID: "doc-second", SourcePath: "C:/docs/second.pdf", Page: 4, BlockIndex: 2, ChunkIndex: 1}
+	first := Entry{DocumentID: "doc-first", SourcePath: "C:/docs/first.pdf", Page: 4, BlockIndex: 2, ChunkIndex: 1, BlockTotalChunks: 1}
+	second := Entry{DocumentID: "doc-second", SourcePath: "C:/docs/second.pdf", Page: 4, BlockIndex: 2, ChunkIndex: 1, BlockTotalChunks: 1}
 	firstID, firstLabel := CitationForEntry(first)
 	secondID, secondLabel := CitationForEntry(second)
 	if firstID == secondID {
@@ -237,6 +239,25 @@ func TestCitationIDsAreStableAndDistinctForDocumentIdentities(t *testing.T) {
 	}
 	if !strings.Contains(firstLabel, "page 4") || !strings.Contains(secondLabel, "page 4") {
 		t.Fatalf("citation labels lost physical page: %q / %q", firstLabel, secondLabel)
+	}
+}
+
+func TestCitationIDUsesBlockLocalChunkCoordinate(t *testing.T) {
+	before := Entry{
+		DocumentID: "doc-stable", SourcePath: "C:/docs/book.pdf", Page: 9,
+		BlockIndex: 3, ChunkIndex: 4, BlockChunkIndex: 1, BlockTotalChunks: 3,
+	}
+	afterEarlierBlockGrowth := before
+	afterEarlierBlockGrowth.ChunkIndex = 11
+	beforeID, _ := CitationForEntry(before)
+	afterID, _ := CitationForEntry(afterEarlierBlockGrowth)
+	if beforeID != afterID {
+		t.Fatalf("source anchor changed after an earlier block grew: %q vs %q", beforeID, afterID)
+	}
+	differentLocalChunk := before
+	differentLocalChunk.BlockChunkIndex++
+	if otherID, _ := CitationForEntry(differentLocalChunk); otherID == beforeID {
+		t.Fatalf("distinct block-local chunks share citation ID %q", beforeID)
 	}
 }
 
@@ -251,6 +272,10 @@ func TestFTSRebuildAfterMutationAndReopen(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	if !store.lexicalDirty {
+		store.Close()
+		t.Fatal("new store must rebuild persisted FTS state before first lexical query")
+	}
 	entry, err := store.Add("before-token", "", nil, "test", []float32{1, 0}, false)
 	if err != nil {
 		store.Close()
@@ -261,9 +286,25 @@ func TestFTSRebuildAfterMutationAndReopen(t *testing.T) {
 		store.Close()
 		t.Fatalf("initial lexical search failed: %#v err=%v", before, err)
 	}
+	if store.lexicalDirty {
+		store.Close()
+		t.Fatal("successful lexical search did not clear dirty state")
+	}
+	if _, err := store.SearchWithOptions(SearchOptions{Query: "before-token", Backend: "test"}); err != nil {
+		store.Close()
+		t.Fatal(err)
+	}
+	if store.lexicalDirty {
+		store.Close()
+		t.Fatal("read-only repeat search dirtied the lexical index")
+	}
 	if err := store.UpdateById(entry.ID, "after-token", "", nil, []float32{1, 0}); err != nil {
 		store.Close()
 		t.Fatal(err)
+	}
+	if !store.lexicalDirty {
+		store.Close()
+		t.Fatal("entry mutation did not dirty the lexical index")
 	}
 	old, err := store.SearchWithOptions(SearchOptions{Query: "before-token", Backend: "test"})
 	if err != nil || len(old) != 0 {
@@ -279,9 +320,78 @@ func TestFTSRebuildAfterMutationAndReopen(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer reopened.Close()
+	if !reopened.lexicalDirty {
+		t.Fatal("reopened store trusted possibly stale persisted FTS state")
+	}
 	after, err := reopened.SearchWithOptions(SearchOptions{Query: "after-token", Backend: "test"})
 	if err != nil || len(after) != 1 || after[0].ID != entry.ID || !after[0].LexicalHit {
 		t.Fatalf("lexical index was not rebuilt after reopen: %#v err=%v", after, err)
+	}
+	if reopened.lexicalDirty {
+		t.Fatal("reopened store remained dirty after successful rebuild")
+	}
+}
+
+func TestFTSDeleteInvalidatesAndRemovesLexicalHit(t *testing.T) {
+	store := newSearchTestStore(t)
+	defer store.Close()
+	entry, err := store.Add("delete-me-token", "", nil, "test", []float32{1}, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	results, err := store.SearchWithOptions(SearchOptions{Query: "delete-me-token", Backend: "test"})
+	if err != nil || len(results) != 1 {
+		t.Fatalf("initial lexical search failed: %#v err=%v", results, err)
+	}
+	if err := store.DeleteById(entry.ID); err != nil {
+		t.Fatal(err)
+	}
+	if !store.lexicalDirty {
+		t.Fatal("delete did not dirty the lexical index")
+	}
+	results, err = store.SearchWithOptions(SearchOptions{Query: "delete-me-token", Backend: "test"})
+	if err != nil || len(results) != 0 {
+		t.Fatalf("deleted lexical hit survived rebuild: %#v err=%v", results, err)
+	}
+}
+
+func TestFTSRebuildRollsBackPartialFailure(t *testing.T) {
+	store := newSearchTestStore(t)
+	defer store.Close()
+	if _, err := store.Add("good", "good", nil, "test", []float32{1}, false); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.Add("bad", "bad", nil, "test", []float32{1}, false); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.db.Exec(`DROP TABLE entries_fts`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.db.Exec(`CREATE TABLE entries_fts (
+		entry_id INTEGER, title TEXT CHECK(title != 'bad'), text TEXT, tags TEXT
+	)`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.db.Exec(`INSERT INTO entries_fts(rowid, entry_id, title, text, tags)
+		VALUES (999, 999, 'sentinel', 'sentinel', '')`); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := store.rebuildFTSLocked(); err == nil {
+		t.Fatal("rebuild unexpectedly succeeded despite CHECK constraint")
+	}
+	var count int
+	if err := store.db.QueryRow(`SELECT COUNT(*) FROM entries_fts WHERE entry_id = 999 AND title = 'sentinel'`).Scan(&count); err != nil {
+		t.Fatal(err)
+	}
+	if count != 1 {
+		t.Fatalf("failed rebuild did not restore prior index state: sentinel count=%d", count)
+	}
+	if err := store.db.QueryRow(`SELECT COUNT(*) FROM entries_fts WHERE entry_id != 999`).Scan(&count); err != nil {
+		t.Fatal(err)
+	}
+	if count != 0 {
+		t.Fatalf("partial FTS rows survived rollback: count=%d", count)
 	}
 }
 

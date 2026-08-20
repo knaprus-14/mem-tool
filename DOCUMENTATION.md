@@ -89,17 +89,186 @@
 Локальный lexical-слой использует SQLite FTS5/BM25 (в текущем pure-Go build
 FTS5 доступен). Если конкретная сборка SQLite не предоставляет FTS5, поиск
 детерминированно переходит на token-based fallback; это fallback, а не оценка
-вероятности релевантности. `-vector-only` отключает lexical-кандидатов.
+вероятности релевантности. FTS перестраивается лениво после открытия базы или
+изменения записей, одной SQLite-транзакцией; повторный read-only поиск не делает
+полный rebuild. `-vector-only` отключает lexical-кандидатов.
 
 Итоговый fusion score прозрачен: `0.5 * vector_score + 0.5 * lexical_score`,
 где обе компоненты нормализованы в диапазон 0..1. Если lexical совпадений нет,
 сохраняется vector score. После fusion остаётся совместимый re-ranking по
 свежести/тегам/важности, затем `-min-score` и только потом `-limit`.
 
-Каждый результат содержит строку `[CITE]` со стабильным content-derived citation
-ID (полный SHA-256 идентификатора документа) и отдельным читаемым label. Для
-provenance-aware chunks label включает source, физическую page, block и chunk;
-legacy rows не получают выдуманную страницу и помечаются `(no provenance)`.
+Каждый результат содержит строку `[CITE]` с детерминированным source anchor и
+отдельным читаемым label. Для новых provenance-aware chunks anchor строится из
+идентификатора документа, физической page, исходного block и номера чанка внутри
+этого блока. Поэтому изменение числа чанков в более раннем блоке не переименовывает
+якоря следующих блоков. Label включает source, page, block и глобальный chunk;
+legacy rows без новых block-local координат используют совместимый fallback, не
+получают выдуманную страницу и помечаются `(no provenance)` при полном отсутствии
+provenance. Source anchor намеренно не содержит ревизию: он обозначает логическое
+место в документе. Отдельные `document_revision` и `chunk_hash` показывают, из
+какой версии документа и какого точного текста получено evidence.
+
+### Grounded answers: `mem ask`
+
+`mem search` остаётся сырым поиском и не вызывает генеративную модель. Для
+локального ответа только по найденным фрагментам используется отдельная команда:
+
+```powershell
+mem ask "На какой странице описан запуск сервера?" -limit 5
+mem ask "что сказано о резервном копировании" -tags "инфраструктура" -context-chars 8000
+```
+
+Стадии retrieval/evidence/generation выводятся в `stderr`, а проверенный ответ и
+источники — в `stdout`. Evidence сериализуется как недоверенные данные, содержит
+source anchor, `document_revision`, хеш полного чанка и отдельный хеш точного
+текста prompt. Если текст пришлось обрезать по бюджету, это явно отмечается как
+`truncated`, поэтому хеш полного чанка не выдаётся за хеш отправленного фрагмента.
+
+Контракт с моделью fail-closed: она должна вернуть ровно один JSON object либо с
+`claims`, где у каждого тезиса есть непустой список точных `citations`, либо с
+`insufficient_evidence`. Свободный текст, лишние поля, неизвестные/неполные ID и
+смешанные форматы citation отклоняются до вывода. Проверка гарантирует, что каждый
+выведенный тезис ссылается на реально переданный evidence ID, но не доказывает
+семантическую истинность тезиса — интерпретацию локальной модели всё равно нужно
+оценивать критически.
+
+Для `ask` требуется отдельная локальная chat/instruct-модель Ollama. `bge-m3`
+остаётся только embedding-моделью и не выбирается автоматически. Answer endpoint
+принимает только `localhost`, `127.0.0.1` или `::1`; HTTP redirects не следуются,
+чтобы локальный endpoint не мог перенаправить evidence во внешнюю сеть.
+
+### Расширенная карта знаний: фундамент graph-модели
+
+После стабилизации provenance добавлен persistence-контракт именно для графа,
+а не для примитивного дерева. Backend-фундамент и ограниченное локальное
+LLM-извлечение доступны через CLI; визуальный интерфейс ещё не включён.
+
+Поддерживаемые типы узлов: `document`, `topic`, `claim`, `note`, `question`,
+`card`, `contradiction`, `gap`. Связи также типизированы: `contains`, `about`,
+`supports`, `contradicts`, `derived_from`, `asks`, `answers`, `prerequisite`,
+`related`, `compares`, `reveals_gap`, `resolves`. Узел может иметь несколько
+входящих и исходящих связей, поэтому модель поддерживает сравнение документов,
+перекрёстные темы и противоречия без сведения структуры к иерархии.
+
+Каждый узел и каждая связь обязаны иметь хотя бы один `EvidenceAnchor`. Anchor
+содержит стабильный citation ID, document/chunk revision, source coordinates,
+точную выдержку и её SHA-256. Ручные и generated-узлы не освобождаются от этого
+правила. При повторном импорте состояние anchor определяется как:
+
+- `current` — location, document revision, chunk hash и выдержка совпадают;
+- `stale` — логический source anchor ещё существует, но ревизия/evidence изменились;
+- `missing` — source anchor больше не найден.
+
+`UpsertKnowledgeGraph` атомарно обновляет переданный фрагмент графа и его evidence,
+не стирая другие ветви. SQLite хранит узлы, связи и evidence в отдельных таблицах
+`knowledge_nodes`, `knowledge_edges`, `knowledge_node_evidence` и
+`knowledge_edge_evidence`.
+
+Строгое извлечение запускается отдельно от поиска:
+
+```powershell
+mem map build "архитектура импорта" -limit 10
+mem map build "сравнение требований двух документов" -tags "нормативы" -context-chars 16000
+mem map analyze "требования к рабочему давлению" -context-chars 32000
+mem map status
+mem map status --json
+mem map approve node kn-0123456789abcdef0123456789abcdef --reviewer "Руслан" --comment "Проверено по документу"
+mem map approve-batch review-manifest.json
+mem map reviews --json -limit 100
+mem map export
+```
+
+`map build` использует тот же hybrid retrieval и локальную chat/instruct-модель,
+что и `mem ask`, но берёт только chunks с versioned document provenance. Модели
+передаются недоверенный evidence JSON и точные citation ID. Она может предложить
+только тип, текст, confidence, временный ref и связи между refs. Source path,
+страница, block/chunk coordinates, document revision, hashes, постоянные node/edge
+ID и полные `EvidenceAnchor` восстанавливает сам `mem` из доверенного retrieval-
+контекста. Повтор одинакового извлечения получает те же IDs и не дублирует объекты.
+Все generated-узлы и связи сохраняются со статусом `draft`: наличие допустимой
+citation подтверждает происхождение, но не заменяет семантическую проверку.
+
+`map analyze <фокус>` выполняет отдельный междокументный проход по уже
+подтверждённым узлам `claim`. В prompt попадают только `active` claims, у которых
+каждый anchor остаётся `current`; draft/resolved claims и active claims со
+stale/missing evidence исключаются. До вызова модели должны поместиться минимум
+два claims и минимум два разных `document_id`, иначе команда сообщает о
+недостаточности данных и не вызывает модель.
+
+Модель может вернуть только findings типов `contradiction` и `gap`, ссылки вида
+`c1`/`c2` и точные citation ID. Для contradiction требуются ровно два claims; для
+gap — от двух до восьми. Каждый finding обязан цитировать evidence каждого
+указанного claim и охватывать минимум два документа. Постоянные IDs, endpoints и
+связи восстанавливает хост: contradiction получает прямую связь `contradicts` и
+две `derived_from`, gap связывается с исходными claims через `reveals_gap`.
+Findings и все их отношения сохраняются только как `draft`.
+
+Перед транзакцией `map build` и `map analyze` повторно проверяют evidence под той
+же write-lock, что используется для записи графа. Если документ изменился за
+время локальной генерации, весь результат отклоняется без частичной записи.
+
+`map status` строит review-отчёт по всем узлам и связям: `draft/active/resolved`,
+агрегированное состояние evidence, детерминированный `evidence_digest` и каждый отдельный anchor с состоянием
+`current/stale/missing`. В обычном режиме это читаемый список; `--json` даёт
+стабильный машинно-читаемый объект с summary и items. Draft считается готовым к
+подтверждению только при полностью current evidence. Для связи дополнительно оба
+endpoint-узла должны быть `active`.
+
+`map approve <node|edge> <id> --reviewer <имя>` выполняет единственный review-переход
+`draft -> active`. Автор обязателен, комментарий задаётся через `--comment`, а
+`--evidence-digest` позволяет закрепить точный набор просмотренных anchors.
+Проверка evidence, изменение статуса и добавление audit-записи выполняются атомарно;
+`stale`, `missing`, уже active/resolved объект или draft-связь с неактивным
+endpoint оставляют базу без изменений. Повторное generated-извлечение с теми же
+точными anchors сохраняет подтверждённый статус. Если изменились revision, hash,
+excerpt или набор anchors, объект снова становится `draft` и требует проверки.
+Если при этом generated-узел перестал быть active, его ранее active generated-связи
+также транзакционно возвращаются в `draft`.
+
+Для пакетной проверки используется явный манифест, а не команда «подтвердить всё»:
+
+```json
+{
+  "reviewer": "Руслан",
+  "comment": "Проверено по первичным источникам",
+  "objects": [
+    {
+      "object_type": "node",
+      "id": "kn-0123456789abcdef0123456789abcdef",
+      "expected_evidence_digest": "sha256:..."
+    }
+  ]
+}
+```
+
+`mem map approve-batch review-manifest.json` строго отклоняет неизвестные поля,
+дубликаты, пустой пакет и объекты без digest. Узлы и их связи можно включить в
+один манифест в любом порядке. Все статусы и audit-записи фиксируются одной
+SQLite-транзакцией; несовпадение хотя бы одного digest, stale/missing evidence или
+неактивный endpoint откатывает пакет целиком. `mem map reviews [--json] [-limit N]`
+показывает append-only историю решений, которая не стирается при повторном
+извлечении или смене evidence.
+
+Поле `reviewer` сейчас является локально заявленной строкой, а audit-журнал —
+локальной метаинформацией SQLite, не криптографической подписью и не проверенной
+учётной записью. Защита от UPDATE/DELETE реализована в схеме БД, но владелец файла
+базы всё равно может удалить или заменить сам файл.
+
+Ответ модели обязан быть одним строгим JSON object: `nodes`/`edges` либо
+`insufficient_evidence`. Лишние поля, неизвестная citation, связь с неизвестным
+ref, пропущенный confidence/evidence, неподдерживаемый тип и превышение лимитов
+100 nodes / 300 edges отклоняют весь результат до транзакции. При честном
+`insufficient_evidence` или отсутствии versioned chunks модель либо не вызывается,
+либо база остаётся без изменений. `map export` пишет полный сохранённый граф в JSON
+на `stdout`.
+
+Эта проверка доказывает структурную привязку каждого объекта к реально переданному
+evidence, но не доказывает семантическое следование утверждения из цитаты.
+`map analyze` — ограниченный focus-driven проход по помещающимся в context budget
+active claims, а не доказательство отсутствия иных противоречий во всём корпусе.
+Полного автоматического обхода/кластеризации всех claims, объединения близких по
+смыслу узлов и интерактивной визуализации пока нет.
 
 ### Версия 1.8 — Re-ranking (повторное ранжирование)
 После гибридного поиска оценки докручиваются:
@@ -116,6 +285,10 @@ Re-ranking не радикально меняет порядок, а лишь «
 - `mem delete <id>` — удалить (безвозвратно)
 - `mem edit <id> "новый текст" [-title "Заголовок"]` — изменить (с переэмбеддингом)
 - `mem retag <id> -tags "новые,теги"` — изменить теги
+
+Текст source-anchored чанков, созданных `mem import`, через `mem edit` не меняется:
+это нарушило бы сохранённые revision/hash. Измените исходный документ и повторите
+`mem import`; title/tags можно менять отдельно.
 
 *(В v1.11 delete стал hard delete в SQLite, без полной перезаписи файла.)*
 
@@ -409,7 +582,9 @@ mem> _
 - **Команды:**
   - `mem-index init <dir>` — создать `.fileindex/` + первый scan.
   - `mem-index scan <dir> [-enrich] [-no-embed]` — инкрементальный rescan.
-    Быстрый skip для файлов с неизменившимся mtime (без Enrich).
+    Быстрый skip применяется только к активной записи с неизменными mtime/size и
+    актуальным embedding-бэкендом. `-no-embed` сохраняет новые файлы как metadata-only;
+    они появятся в семантическом поиске после обычного `scan`/`enrich` с embedding.
   - `mem-index enrich <dir>` — повторный scan с извлечением аннотаций.
   - `mem-index find "запрос"` — семантический поиск с гибридным boost.
   - `mem-index list [-limit N] [-include-stale]` — последние записи.
@@ -420,7 +595,9 @@ mem> _
 - **Stale-handling:** записи с удалёнными/перемещёнными файлами помечаются `stale=1`,
   не удаляются. `list` по умолчанию скрывает их, `list -include-stale` показывает
   с пометкой `[STALE]`. Если файл вернулся на диск — следующий scan автоматически
-  снимает stale (через Upsert со `stale=0`).
+  снимает stale (через Upsert со `stale=0`), даже если mtime и размер не изменились.
+  Если обход файловой системы был неполным, stale-reconciliation не выполняется,
+  ошибки печатаются, а команда завершается с ненулевым кодом.
 - **Аннотации по форматам:**
   | Формат | Метод                                                                                  |
   |--------|----------------------------------------------------------------------------------------|
@@ -435,6 +612,8 @@ mem> _
   скорее всего изменится, вызовется re-embed).
 - **Embedding:** переиспользует `mem.GetEmbedding(cfg, text)` (Ollama bge-m3 1024-dim
   или Polza text-embedding-3-small 1536-dim). Тот же config.json, что у `mem`.
+  Поиск использует только активные векторы текущего backend; после смены backend
+  обычный scan пересчитывает даже файлы с неизменными mtime/size.
 - **Архитектурные решения:**
   - **Отдельный бинарь** (а не подкоманда `mem fileindex`) — пользователь явно попросил
     «отдельную программу», плюс нет лишних зависимостей (bubbletea, TUI) в `mem-index`.
@@ -636,16 +815,16 @@ CREATE INDEX idx_backend ON entries(backend);
 
 Настройка:
 ```
-mem config set-chunk-size 800    # размер чанка в символах (100-10000)
+mem config set-chunk-size 800    # размер чанка в символах (100-2000)
 mem config set-chunk-overlap 100 # перекрытие между чанками
 mem config set-chunk-strategy sentence
 ```
 
 Если абзац больше maxSize — он дробится на предложения внутри себя.
 
-**Важно:** Если PDF-извлечение выдаёт текст без границ предложений (нет точек с заглавными буквами), `splitSentences` может не найти, где разорвать. В этом случае предложение режется **фиксированно** — по символам с разрывом по пробелам. Это гарантирует, что ни один чанк не превысит `maxSize` и не вызовет ошибку `"input length exceeds the context length"` в Ollama.
+**Важно:** Если PDF-извлечение выдаёт текст без границ предложений (нет точек с заглавными буквами), `splitSentences` может не найти, где разорвать. В этом случае предложение режется **фиксированно** — по символам с разрывом по пробелам. Overlap также учитывается внутри `maxSize`, поэтому ни одна стратегия не создаёт чанк длиннее настроенного лимита.
 
-Дополнительная защита в `embed.go`: текст длиннее лимита embedding отклоняется с ясной ошибкой и советом уменьшить `chunk_max_size`. Тихого усечения больше нет: сохранённый текст всегда совпадает с текстом, для которого рассчитан вектор.
+Дополнительная защита в `embed.go`: текст длиннее 2000 рун отклоняется с ясной ошибкой и советом уменьшить `chunk_max_size`. HTTP-клиент embedding имеет общий timeout 5 минут, а переданный context может отменить запрос раньше. Тихого усечения больше нет: сохранённый текст всегда совпадает с текстом, для которого рассчитан вектор.
 
 ---
 
@@ -795,7 +974,9 @@ mem import ./scan.djvu -tags "скан,справочник"
 Текст второй страницы...
 ```
 
-Пустой текст не считается успехом. OCR выполняется по одной странице, временный raster удаляется перед переходом к следующей странице, а общий временный каталог очищается при успехе, ошибке и отмене. `Ctrl+C` также отменяет активный запрос embedding. Все чанки повторного импорта заменяются одной SQLite-транзакцией: при ошибке записи прежняя версия документа остаётся целой. В базе сохраняются физическая страница, метод extraction, средняя Tesseract confidence и предупреждения low-confidence. LLM-коррекция OCR не выполняется.
+Пустой текст не считается успехом. OCR выполняется по одной странице, временный raster удаляется перед переходом к следующей странице, а общий временный каталог очищается при успехе, ошибке и отмене. `Ctrl+C` также отменяет активный запрос embedding. До embedding проверяется provenance-контракт: identity/path документа, SHA-256 ревизия канонического извлечённого содержимого, непрерывные block indices, неотрицательные страницы, непустой текст, допустимый extraction method и конечная OCR confidence. Для каждого чанка вычисляется отдельный SHA-256 хеш точного текста, отправленного в embedding.
+
+Все чанки повторного импорта валидируются как единый набор и заменяются одной SQLite-транзакцией: смешанные document identity/revision/media type, неверный chunk hash, разные размерности embedding, разрывы block-local координат или ошибка записи оставляют прежнюю версию документа целой. Изменение файла сохраняет path-derived `document_id`, но меняет `document_revision`; неизменившийся текст чанка сохраняет `chunk_hash`. В базе также сохраняются физическая страница, метод extraction, средняя Tesseract confidence и предупреждения low-confidence. LLM-коррекция OCR не выполняется.
 
 Явные пути и OCR-настройки задаются в `.mem/config.json` в секции `ingest`; эквивалентные env: `MEM_PDFTOTEXT`, `MEM_MUTOOL`, `MEM_PDFINFO`, `MEM_PDFTOPPM`, `MEM_DJVUTXT`, `MEM_DJVUSED`, `MEM_DDJVU`, `MEM_TESSERACT`, `MEM_TESSDATA_DIR`, `MEM_OCR_LANGS`. Все requested languages (например, `rus+eng`) должны находиться в одном tessdata-каталоге.
 
@@ -971,6 +1152,14 @@ mem init
     "base_url": "http://localhost:11434",
     "model": "bge-m3"
   },
+  "answer": {
+    "base_url": "http://localhost:11434",
+    "model": "",
+    "timeout_seconds": 60,
+    "max_tokens": 512,
+    "context_chars": 12000,
+    "temperature": 0.1
+  },
   "polza": {
     "base_url": "https://polza.ai/api/v1",
     "api_key": "",
@@ -999,9 +1188,15 @@ mem init
 | `backend` | `ollama` | Бэкенд эмбеддингов: `ollama` или `polza` |
 | `ollama.base_url` | `http://localhost:11434` | URL Ollama API |
 | `ollama.model` | `bge-m3` | Модель эмбеддингов Ollama |
+| `answer.base_url` | `http://localhost:11434` | Только loopback URL локального Ollama chat API; redirects запрещены |
+| `answer.model` | (пусто) | Отдельная chat/instruct-модель для `mem ask`; `bge-m3` запрещена |
+| `answer.timeout_seconds` | `60` | Общий deadline retrieval и generation |
+| `answer.max_tokens` | `512` | Верхняя граница ответа |
+| `answer.context_chars` | `12000` | Бюджет system + question + serialized evidence |
+| `answer.temperature` | `0.1` | Параметр генерации Ollama |
 | `polza.api_key` | (пусто) | API-ключ Polza AI (per-project!) |
 | `polza.model` | `openai/text-embedding-3-small` | Модель Polza AI |
-| `chunking.chunk_max_size` | 1000 | Макс. размер чанка в символах (100–10000) |
+| `chunking.chunk_max_size` | 1000 | Макс. размер чанка в символах (100–2000) |
 | `chunking.chunk_overlap` | 100 | Перекрытие между чанками (0–1000) |
 | `chunking.chunk_strategy` | `paragraph` | Стратегия: `paragraph`, `sentence`, `fixed` |
 
@@ -1011,7 +1206,7 @@ mem init
 
 ## Запуск Ollama
 
-Для локальной работы нужен запущенный Ollama с моделью bge-m3:
+Для поиска нужен запущенный Ollama с моделью `bge-m3`:
 
 ```powershell
 # В отдельном терминале:
@@ -1022,6 +1217,18 @@ ollama pull bge-m3
 ```
 
 Ollama должна быть доступна на `http://localhost:11434`.
+
+Для `mem ask` установите отдельную локальную chat/instruct-модель и задайте её
+в текущем проекте:
+
+```powershell
+mem config set-answer-model "<локальная-chat-модель>"
+mem config set-answer-timeout 60
+mem config set-answer-context-chars 12000
+```
+
+Без `answer.model` команда завершится явной ошибкой и не переключится на
+embedding-модель. Удалённые answer URL отклоняются до отправки evidence.
 
 ---
 
@@ -1077,11 +1284,15 @@ mem search "команды линукс" -from 2026-07-01
 | `chunk_index` | INTEGER | Номер чанка в файле (0-based) |
 | `total_chunks` | INTEGER | Всего чанков в файле |
 | `document_id` | TEXT | Стабильная identity импортированного документа |
+| `document_revision` | TEXT | SHA-256 ревизия канонического извлечённого содержимого |
+| `chunk_hash` | TEXT | SHA-256 точного текста этого чанка |
 | `source_path` | TEXT | Канонический абсолютный путь источника |
 | `media_type` | TEXT | Тип источника (`text/markdown`, `application/pdf`) |
 | `page` | INTEGER | Номер страницы, 0 если неизвестен |
 | `block_index` | INTEGER | Номер исходного staged-блока (0-based) |
 | `block_marker` | TEXT | Исходный маркер страницы/блока |
+| `block_chunk_index` | INTEGER | Номер чанка внутри исходного блока (0-based) |
+| `block_total_chunks` | INTEGER | Число чанков, полученных из исходного блока; 0 у старых строк |
 | `extraction_method` | TEXT | `text` для embedded/Markdown или `ocr` для Tesseract |
 | `ocr_confidence` | REAL | Средняя word-confidence Tesseract; `-1`, если OCR не применялся |
 | `warnings` | TEXT | JSON-массив предупреждений extraction/OCR |

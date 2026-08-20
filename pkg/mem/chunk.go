@@ -120,7 +120,11 @@ func chunkByParagraph(text string, maxSize, overlap int) []Chunk {
 					continue
 				}
 
-				if subSize+sentSize > maxSize && subBuilder.Len() > 0 {
+				separatorSize := 0
+				if subBuilder.Len() > 0 {
+					separatorSize = 1
+				}
+				if subSize+separatorSize+sentSize > maxSize && subBuilder.Len() > 0 {
 					chunks = append(chunks, Chunk{
 						Text:  strings.TrimSpace(subBuilder.String()),
 						Label: firstLine(subBuilder.String()),
@@ -134,7 +138,7 @@ func chunkByParagraph(text string, maxSize, overlap int) []Chunk {
 					subBuilder.WriteString(" ")
 				}
 				subBuilder.WriteString(sent)
-				subSize += sentSize
+				subSize += separatorSize + sentSize
 			}
 			if subBuilder.Len() > 0 {
 				chunks = append(chunks, Chunk{
@@ -175,7 +179,7 @@ func chunkByParagraph(text string, maxSize, overlap int) []Chunk {
 
 	// Добавляем перекрытие между чанками
 	if overlap > 0 && len(chunks) > 1 {
-		chunks = addOverlap(chunks, overlap)
+		chunks = addOverlap(chunks, overlap, maxSize)
 	}
 
 	return chunks
@@ -250,7 +254,7 @@ func chunkBySentence(text string, maxSize, overlap int) []Chunk {
 	}
 
 	if overlap > 0 && len(chunks) > 1 {
-		chunks = addOverlap(chunks, overlap)
+		chunks = addOverlap(chunks, overlap, maxSize)
 	}
 
 	return chunks
@@ -376,21 +380,32 @@ func splitSentences(text string) []string {
 	return sentences
 }
 
-// addOverlap добавляет перекрытие: последние overlap символов из чанка N
-// добавляются в начало чанка N+1 как контекст
-func addOverlap(chunks []Chunk, overlap int) []Chunk {
+// addOverlap добавляет хвост чанка N в начало N+1, не нарушая maxSize.
+// Берём исходный предыдущий чанк, чтобы overlap не переносился цепочкой.
+func addOverlap(chunks []Chunk, overlap, maxSize int) []Chunk {
 	result := make([]Chunk, len(chunks))
 	copy(result, chunks)
 
 	for i := 1; i < len(chunks); i++ {
-		prevRunes := []rune(result[i-1].Text)
-		if len(prevRunes) > overlap {
-			overlapText := string(prevRunes[len(prevRunes)-overlap:])
-			// Проверяем, не начинается ли уже следующий чанк с этого текста
-			currText := result[i].Text
-			if !strings.HasPrefix(currText, overlapText) {
-				result[i].Text = overlapText + "\n" + currText
-			}
+		currRunes := []rune(chunks[i].Text)
+		available := maxSize - len(currRunes) - 1 // один символ на "\n"
+		if available <= 0 {
+			continue
+		}
+		prefixSize := overlap
+		if prefixSize > available {
+			prefixSize = available
+		}
+		prevRunes := []rune(chunks[i-1].Text)
+		if prefixSize > len(prevRunes) {
+			prefixSize = len(prevRunes)
+		}
+		if prefixSize == 0 {
+			continue
+		}
+		overlapText := string(prevRunes[len(prevRunes)-prefixSize:])
+		if !strings.HasPrefix(chunks[i].Text, overlapText) {
+			result[i].Text = overlapText + "\n" + chunks[i].Text
 		}
 	}
 

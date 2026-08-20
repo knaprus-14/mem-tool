@@ -187,7 +187,7 @@ func indexFileWithEmbedder(cfg *Config, store *Store, filePath string, embed emb
 			Text: chunk.Text, Title: fileName, Tags: tags, Backend: cfg.Backend,
 			Embedding: embeddings[i], ChunkLabel: chunk.Label,
 			ChunkIndex: chunk.Index, TotalChunks: len(chunks),
-			Provenance: Provenance{SourcePath: absPath},
+			Provenance: Provenance{SourcePath: absPath, OCRConfidence: -1},
 		}
 	}
 	if err = store.ReplaceDocumentChunks(absPath, storedChunks); err != nil {

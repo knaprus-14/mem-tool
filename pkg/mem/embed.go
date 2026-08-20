@@ -7,13 +7,23 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"time"
 	"unicode/utf8"
 )
 
-// maxEmbedChars — максимальное количество символов (рун) для одного эмбеддинга.
+// MaxEmbeddingChars — максимальное количество символов (рун) для одного эмбеддинга.
 // bge-m3 через Ollama имеет лимит ~2000 токенов для embedding endpoint.
 // Ставим 2000 как безопасный предел.
-const maxEmbedChars = 2000
+const MaxEmbeddingChars = 2000
+
+const maxEmbedChars = MaxEmbeddingChars
+
+// embeddingHTTPTimeout ограничивает вызовы без deadline (например, CLI).
+// Контекст вызывающего кода может завершить запрос раньше.
+const embeddingHTTPTimeout = 5 * time.Minute
+
+// Один клиент переиспользует TCP-соединения между последовательными чанками.
+var embeddingHTTPClient = &http.Client{Timeout: embeddingHTTPTimeout}
 
 // === Ollama ===
 
@@ -47,7 +57,7 @@ func embedOllamaContext(ctx context.Context, cfg *Config, text string) ([]float3
 		return nil, fmt.Errorf("ollama: ошибка запроса: %w", err)
 	}
 	httpReq.Header.Set("Content-Type", "application/json")
-	resp, err := http.DefaultClient.Do(httpReq)
+	resp, err := embeddingHTTPClient.Do(httpReq)
 	if err != nil {
 		return nil, fmt.Errorf("ollama: не удалось connected: %w", err)
 	}
@@ -115,8 +125,7 @@ func embedPolzaContext(ctx context.Context, cfg *Config, text string) ([]float32
 	httpReq.Header.Set("Content-Type", "application/json")
 	httpReq.Header.Set("Authorization", "Bearer "+cfg.Polza.APIKey)
 
-	client := &http.Client{}
-	resp, err := client.Do(httpReq)
+	resp, err := embeddingHTTPClient.Do(httpReq)
 	if err != nil {
 		return nil, fmt.Errorf("polza: не удалось connected: %w", err)
 	}
@@ -156,6 +165,12 @@ func GetEmbedding(cfg *Config, text string) ([]float32, error) {
 // GetEmbeddingContext builds an embedding while allowing callers such as
 // document import to cancel an in-flight Ollama or Polza HTTP request.
 func GetEmbeddingContext(ctx context.Context, cfg *Config, text string) ([]float32, error) {
+	if ctx == nil {
+		return nil, fmt.Errorf("embedding: nil context")
+	}
+	if cfg == nil {
+		return nil, fmt.Errorf("embedding: nil config")
+	}
 	switch cfg.Backend {
 	case "ollama":
 		return embedOllamaContext(ctx, cfg, text)

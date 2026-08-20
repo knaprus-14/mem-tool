@@ -5,14 +5,15 @@
 // Поиск — косинусом по embedding.
 //
 // Использование:
-//   mem-index init <dir>            — создать .fileindex/, первый scan
-//   mem-index scan <dir>            — инкрементальный rescan
-//   mem-index enrich <dir>          — обновить аннотации (extract text из PDF/FB2/EPUB/...)
-//   mem-index find "запрос"         — семантический поиск
-//   mem-index list [-limit N]       — последние записи
-//   mem-index show <id>             — одна запись целиком
-//   mem-index stats                 — статистика
-//   mem-index rm <id>               — удалить запись
+//
+//	mem-index init <dir>            — создать .fileindex/, первый scan
+//	mem-index scan <dir>            — инкрементальный rescan
+//	mem-index enrich <dir>          — обновить аннотации (extract text из PDF/FB2/EPUB/...)
+//	mem-index find "запрос"         — семантический поиск
+//	mem-index list [-limit N]       — последние записи
+//	mem-index show <id>             — одна запись целиком
+//	mem-index stats                 — статистика
+//	mem-index rm <id>               — удалить запись
 //
 // Глобальные флаги: --global, --dir <path>, --color/--no-color.
 //
@@ -184,6 +185,9 @@ func handleInit(args []string) int {
 		return 1
 	}
 	printReport(report)
+	if len(report.Errors) > 0 {
+		return 1
+	}
 	fmt.Println()
 	fmt.Printf("Готово. Аннотации пока пустые — запустите: mem-index enrich %s\n", root)
 	return 0
@@ -227,6 +231,9 @@ func handleScan(args []string) int {
 		return 1
 	}
 	printReport(report)
+	if len(report.Errors) > 0 {
+		return 1
+	}
 	return 0
 }
 
@@ -269,6 +276,9 @@ func handleEnrich(args []string) int {
 		return 1
 	}
 	printReport(report)
+	if len(report.Errors) > 0 {
+		return 1
+	}
 	return 0
 }
 
@@ -307,7 +317,7 @@ func handleFind(args []string) int {
 	}
 	fmt.Printf("вектор %d измерений\n", len(queryVec))
 
-	results, err := store.Search(queryVec, limit, query)
+	results, err := store.Search(queryVec, cfg.Backend, limit, query)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "ошибка поиска: %v\n", err)
 		return 1

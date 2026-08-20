@@ -3,6 +3,7 @@ package mem
 import (
 	"strings"
 	"testing"
+	"unicode/utf8"
 )
 
 func TestSplitSentencesPreservesBoundaryCharacters(t *testing.T) {
@@ -23,6 +24,36 @@ func TestSplitSentencesPreservesBoundaryCharacters(t *testing.T) {
 			for i := range tt.want {
 				if got[i] != tt.want[i] {
 					t.Errorf("part %d = %q, want %q", i, got[i], tt.want[i])
+				}
+			}
+		})
+	}
+}
+
+func TestChunkDocumentNeverExceedsConfiguredRuneLimit(t *testing.T) {
+	tests := []struct {
+		strategy string
+		text     string
+	}{
+		{"paragraph", strings.Repeat("абзац один два три\n\n", 12)},
+		{"sentence", strings.Repeat("Первое предложение. Второе предложение! ", 12)},
+		{"fixed", strings.Repeat("данные ", 40)},
+	}
+	const maxSize = 36
+	const overlap = 12
+
+	for _, tt := range tests {
+		t.Run(tt.strategy, func(t *testing.T) {
+			chunks := ChunkDocument(tt.text, maxSize, overlap, tt.strategy)
+			if len(chunks) < 2 {
+				t.Fatalf("test setup produced %d chunk(s)", len(chunks))
+			}
+			for i, chunk := range chunks {
+				if chunk.Index != i {
+					t.Fatalf("chunk index=%d, want %d", chunk.Index, i)
+				}
+				if size := utf8.RuneCountInString(chunk.Text); size > maxSize {
+					t.Fatalf("chunk %d has %d runes, max=%d: %q", i, size, maxSize, chunk.Text)
 				}
 			}
 		})

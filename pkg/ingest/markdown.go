@@ -89,5 +89,6 @@ func ParseMarkdown(sourcePath, markdown string) (Document, error) {
 	if len(doc.Blocks) == 0 {
 		return Document{}, fmt.Errorf("Markdown document contains no text blocks: %s", canonicalPath)
 	}
+	doc.Revision = ContentRevision(doc)
 	return doc, nil
 }

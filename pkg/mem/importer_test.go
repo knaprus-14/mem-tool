@@ -32,7 +32,7 @@ func TestMarkdownImportStoresSearchablePageProvenance(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if result.SourcePath != doc.SourcePath || result.DocumentID != doc.ID || result.Chunks != 3 {
+	if result.SourcePath != doc.SourcePath || result.DocumentID != doc.ID || result.DocumentRevision != doc.Revision || result.Chunks != 3 {
 		t.Fatalf("unexpected import result: %#v", result)
 	}
 
@@ -50,9 +50,95 @@ func TestMarkdownImportStoresSearchablePageProvenance(t *testing.T) {
 	if got.BlockMarker != "<!-- page: 7 -->" || got.BlockIndex != 1 || got.MediaType != "text/markdown" {
 		t.Fatalf("search result has incomplete block metadata: %#v", got)
 	}
+	if got.BlockChunkIndex != 0 || got.BlockTotalChunks != 1 {
+		t.Fatalf("search result lost block-local chunk coordinates: %#v", got)
+	}
+	if got.DocumentRevision != doc.Revision || got.ChunkHash != ChunkContentHash(got.Text) {
+		t.Fatalf("search result lost versioned content provenance: %#v", got)
+	}
 	if got.ExtractionMethod != "text" || got.OCRConfidence != -1 {
 		t.Fatalf("Markdown extraction provenance changed: %#v", got)
 	}
+}
+
+func TestDocumentImportRejectsInvalidProvenanceBeforeEmbedding(t *testing.T) {
+	root := t.TempDir()
+	doc, err := ingest.ParseMarkdown(filepath.Join(root, "book.md"), "first\n\n<!-- page: 2 -->\n\nsecond")
+	if err != nil {
+		t.Fatal(err)
+	}
+	doc.Blocks[1].Index = 7
+	store, err := NewStore(filepath.Join(root, "db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	embedCalls := 0
+	_, err = importExtractedDocumentWithEmbedder(testConfig(100, "paragraph"), store, doc, ImportOptions{}, func(*Config, string) ([]float32, error) {
+		embedCalls++
+		return []float32{1}, nil
+	})
+	if err == nil || !strings.Contains(err.Error(), "indices must be contiguous") {
+		t.Fatalf("invalid block provenance was accepted: %v", err)
+	}
+	if embedCalls != 0 || len(store.GetBySourceFile(doc.SourcePath)) != 0 {
+		t.Fatalf("invalid provenance caused work or writes: embed calls=%d", embedCalls)
+	}
+}
+
+func TestReimportKeepsLaterBlockCitationWhenEarlierBlockGrows(t *testing.T) {
+	root := t.TempDir()
+	source := filepath.Join(root, "book.md")
+	store, err := NewStore(filepath.Join(root, "db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	cfg := testConfig(10, "fixed")
+
+	first, err := ingest.ParseMarkdown(source, "short\n\n<!-- page: 2 -->\n\ntarget text")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := importExtractedDocumentWithEmbedder(cfg, store, first, ImportOptions{}, fakeEmbedding); err != nil {
+		t.Fatal(err)
+	}
+	before := entryForPage(t, store.GetBySourceFile(first.SourcePath), 2)
+	beforeID, _ := CitationForEntry(before)
+	beforeRevision, beforeChunkHash := before.DocumentRevision, before.ChunkHash
+
+	second, err := ingest.ParseMarkdown(source, "a much longer earlier block that creates several chunks\n\n<!-- page: 2 -->\n\ntarget text")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := importExtractedDocumentWithEmbedder(cfg, store, second, ImportOptions{}, fakeEmbedding); err != nil {
+		t.Fatal(err)
+	}
+	after := entryForPage(t, store.GetBySourceFile(second.SourcePath), 2)
+	afterID, _ := CitationForEntry(after)
+	if after.ChunkIndex == before.ChunkIndex {
+		t.Fatalf("test setup did not shift global chunk index: before=%d after=%d", before.ChunkIndex, after.ChunkIndex)
+	}
+	if afterID != beforeID {
+		t.Fatalf("later source anchor changed after earlier block grew: %q vs %q", beforeID, afterID)
+	}
+	if after.DocumentID != before.DocumentID || after.DocumentRevision == beforeRevision {
+		t.Fatalf("reimport should preserve path identity and change content revision: before=%#v after=%#v", before, after)
+	}
+	if after.ChunkHash != beforeChunkHash {
+		t.Fatalf("unchanged target evidence changed chunk hash: %q vs %q", beforeChunkHash, after.ChunkHash)
+	}
+}
+
+func entryForPage(t *testing.T, entries []Entry, page int) Entry {
+	t.Helper()
+	for _, entry := range entries {
+		if entry.Page == page {
+			return entry
+		}
+	}
+	t.Fatalf("no entry for page %d in %#v", page, entries)
+	return Entry{}
 }
 
 func TestDocumentImportRollsBackAllChunksOnWriteFailure(t *testing.T) {

@@ -16,12 +16,13 @@ type ImportOptions struct {
 }
 
 type ImportResult struct {
-	DocumentID string
-	SourcePath string
-	Blocks     int
-	Chunks     int
-	Pages      []int
-	Warnings   []string
+	DocumentID       string
+	DocumentRevision string
+	SourcePath       string
+	Blocks           int
+	Chunks           int
+	Pages            []int
+	Warnings         []string
 }
 
 // ImportDocument runs staged extraction and then indexes the resulting blocks.
@@ -55,14 +56,16 @@ func ImportDocument(ctx context.Context, cfg *Config, store *Store, path string,
 }
 
 type importPiece struct {
-	text       string
-	label      string
-	page       int
-	blockIndex int
-	marker     string
-	extraction string
-	confidence float64
-	warnings   []string
+	text             string
+	label            string
+	page             int
+	blockIndex       int
+	blockChunkIndex  int
+	blockTotalChunks int
+	marker           string
+	extraction       string
+	confidence       float64
+	warnings         []string
 }
 
 func importExtractedDocumentWithEmbedder(cfg *Config, store *Store, doc ingest.Document,
@@ -77,20 +80,36 @@ type contextEmbeddingFunc func(context.Context, *Config, string) ([]float32, err
 
 func importExtractedDocumentWithContextEmbedder(ctx context.Context, cfg *Config, store *Store, doc ingest.Document,
 	options ImportOptions, embed contextEmbeddingFunc) (ImportResult, error) {
-	result := ImportResult{DocumentID: doc.ID, SourcePath: doc.SourcePath, Blocks: len(doc.Blocks), Warnings: append([]string(nil), doc.Warnings...)}
-	if doc.ID == "" || doc.SourcePath == "" {
-		return result, fmt.Errorf("extracted document is missing identity or source path")
+	result := ImportResult{
+		DocumentID: doc.ID, DocumentRevision: doc.Revision, SourcePath: doc.SourcePath,
+		Blocks: len(doc.Blocks), Warnings: append([]string(nil), doc.Warnings...),
+	}
+	if ctx == nil {
+		return result, fmt.Errorf("import context is nil")
+	}
+	if cfg == nil {
+		return result, fmt.Errorf("import config is nil")
+	}
+	if store == nil {
+		return result, fmt.Errorf("import store is nil")
+	}
+	if embed == nil {
+		return result, fmt.Errorf("import embedder is nil")
+	}
+	if err := ingest.ValidateDocument(doc); err != nil {
+		return result, fmt.Errorf("invalid extracted document: %w", err)
 	}
 
 	var pieces []importPiece
 	pageSet := make(map[int]bool)
 	for _, block := range doc.Blocks {
 		chunks := ChunkDocument(block.Text, cfg.Chunking.MaxSize, cfg.Chunking.Overlap, cfg.Chunking.Strategy)
-		for _, chunk := range chunks {
+		for blockChunkIndex, chunk := range chunks {
 			label := block.Heading
 			pieces = append(pieces, importPiece{
 				text: chunk.Text, label: label, page: block.Page,
-				blockIndex: block.Index, marker: block.Marker,
+				blockIndex: block.Index, blockChunkIndex: blockChunkIndex,
+				blockTotalChunks: len(chunks), marker: block.Marker,
 				extraction: block.Extraction, confidence: block.OCRConfidence,
 				warnings: append([]string(nil), block.Warnings...),
 			})
@@ -127,8 +146,10 @@ func importExtractedDocumentWithContextEmbedder(ctx context.Context, cfg *Config
 			Embedding: embeddings[i], ChunkLabel: piece.label,
 			ChunkIndex: i, TotalChunks: len(pieces), Important: options.Important,
 			Provenance: Provenance{
-				DocumentID: doc.ID, SourcePath: doc.SourcePath, MediaType: doc.MediaType,
+				DocumentID: doc.ID, DocumentRevision: doc.Revision,
+				ChunkHash: ChunkContentHash(piece.text), SourcePath: doc.SourcePath, MediaType: doc.MediaType,
 				Page: piece.page, BlockIndex: piece.blockIndex, BlockMarker: piece.marker,
+				BlockChunkIndex: piece.blockChunkIndex, BlockTotalChunks: piece.blockTotalChunks,
 				ExtractionMethod: piece.extraction, OCRConfidence: piece.confidence,
 				Warnings: piece.warnings,
 			},

@@ -4,6 +4,7 @@
 mem-bot-linux
 mem-bot-linux.exe
 .mem/
+.fileindex/
 .env.local
 .env
 !.gitkeep

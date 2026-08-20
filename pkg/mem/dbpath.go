@@ -78,6 +78,14 @@ func DefaultLocalConfig() *Config {
 			BaseURL: "http://localhost:11434",
 			Model:   "bge-m3",
 		},
+		Answer: AnswerConfig{
+			BaseURL:        "http://localhost:11434",
+			Model:          "",
+			TimeoutSeconds: DefaultAnswerTimeoutSeconds,
+			MaxTokens:      DefaultAnswerMaxTokens,
+			ContextChars:   DefaultAnswerContextChars,
+			Temperature:    DefaultAnswerTemperature,
+		},
 		Polza: PolzaConfig{
 			BaseURL: "https://polza.ai/api/v1",
 			APIKey:  "",

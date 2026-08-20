@@ -2,14 +2,17 @@ package mem
 
 import (
 	"bytes"
+	"crypto/sha256"
 	"database/sql"
 	"encoding/binary"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"math"
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 
@@ -38,11 +41,15 @@ type Entry struct {
 	ChunkIndex       int       `json:"chunk_index,omitempty"`
 	TotalChunks      int       `json:"total_chunks,omitempty"`
 	DocumentID       string    `json:"document_id,omitempty"`
+	DocumentRevision string    `json:"document_revision,omitempty"`
+	ChunkHash        string    `json:"chunk_hash,omitempty"`
 	SourcePath       string    `json:"source_path,omitempty"`
 	MediaType        string    `json:"media_type,omitempty"`
 	Page             int       `json:"page,omitempty"`
 	BlockIndex       int       `json:"block_index,omitempty"`
 	BlockMarker      string    `json:"block_marker,omitempty"`
+	BlockChunkIndex  int       `json:"block_chunk_index,omitempty"`
+	BlockTotalChunks int       `json:"block_total_chunks,omitempty"`
 	ExtractionMethod string    `json:"extraction_method,omitempty"`
 	OCRConfidence    float64   `json:"ocr_confidence,omitempty"`
 	Warnings         []string  `json:"warnings,omitempty"`
@@ -53,11 +60,15 @@ type Entry struct {
 // a stored chunk was derived. Page is zero when the extractor cannot know it.
 type Provenance struct {
 	DocumentID       string
+	DocumentRevision string
+	ChunkHash        string
 	SourcePath       string
 	MediaType        string
 	Page             int
 	BlockIndex       int
 	BlockMarker      string
+	BlockChunkIndex  int
+	BlockTotalChunks int
 	ExtractionMethod string
 	OCRConfidence    float64
 	Warnings         []string
@@ -81,11 +92,12 @@ type DocumentChunk struct {
 
 // Store — потокобезопасное хранилище векторов на базе SQLite
 type Store struct {
-	mu          sync.RWMutex
-	db          *sql.DB
-	entries     []Entry
-	vectors     [][]float32
-	lexicalMode string
+	mu           sync.RWMutex
+	db           *sql.DB
+	entries      []Entry
+	vectors      [][]float32
+	lexicalMode  string
+	lexicalDirty bool
 }
 
 // Схема БД (создаётся при инициализации)
@@ -104,11 +116,15 @@ CREATE TABLE IF NOT EXISTS entries (
     chunk_index INTEGER NOT NULL DEFAULT 0,
     total_chunks INTEGER NOT NULL DEFAULT 0,
     document_id TEXT NOT NULL DEFAULT '',
+	 document_revision TEXT NOT NULL DEFAULT '',
+	 chunk_hash TEXT NOT NULL DEFAULT '',
     source_path TEXT NOT NULL DEFAULT '',
     media_type TEXT NOT NULL DEFAULT '',
     page INTEGER NOT NULL DEFAULT 0,
     block_index INTEGER NOT NULL DEFAULT 0,
     block_marker TEXT NOT NULL DEFAULT '',
+	 block_chunk_index INTEGER NOT NULL DEFAULT 0,
+	 block_total_chunks INTEGER NOT NULL DEFAULT 0,
 	 extraction_method TEXT NOT NULL DEFAULT '',
 	 ocr_confidence REAL NOT NULL DEFAULT -1,
 	 warnings TEXT NOT NULL DEFAULT '[]',
@@ -127,9 +143,11 @@ CREATE INDEX IF NOT EXISTS idx_backend ON entries(backend);
 const upsertChunkSQL = `INSERT INTO entries
 		(title, text, tags, created, backend, dims, embedding,
 		 source_file, chunk_label, chunk_index, total_chunks,
-		 document_id, source_path, media_type, page, block_index, block_marker,
+		 document_id, document_revision, chunk_hash,
+		 source_path, media_type, page, block_index, block_marker,
+		 block_chunk_index, block_total_chunks,
 		 extraction_method, ocr_confidence, warnings, important)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT(source_file, chunk_index) WHERE source_file != ''
 		DO UPDATE SET
 			text = excluded.text,
@@ -140,11 +158,15 @@ const upsertChunkSQL = `INSERT INTO entries
 			chunk_label = excluded.chunk_label,
 			total_chunks = excluded.total_chunks,
 			document_id = excluded.document_id,
+			document_revision = excluded.document_revision,
+			chunk_hash = excluded.chunk_hash,
 			source_path = excluded.source_path,
 			media_type = excluded.media_type,
 			page = excluded.page,
 			block_index = excluded.block_index,
 			block_marker = excluded.block_marker,
+			block_chunk_index = excluded.block_chunk_index,
+			block_total_chunks = excluded.block_total_chunks,
 			extraction_method = excluded.extraction_method,
 			ocr_confidence = excluded.ocr_confidence,
 			warnings = excluded.warnings,
@@ -172,7 +194,7 @@ func NewStore(dir string) (*Store, error) {
 		return nil, fmt.Errorf("создание схемы: %w", err)
 	}
 
-	s := &Store{db: db, lexicalMode: initLexicalIndex(db)}
+	s := &Store{db: db, lexicalMode: initLexicalIndex(db), lexicalDirty: true}
 	if err := s.loadAll(); err != nil {
 		db.Close()
 		return nil, err
@@ -191,6 +213,10 @@ func initSchema(db *sql.DB) error {
 		_ = tx.Rollback()
 		return err
 	}
+	if _, err := tx.Exec(knowledgeGraphSchema); err != nil {
+		_ = tx.Rollback()
+		return err
+	}
 	if err := migrateEntryProvenance(tx); err != nil {
 		_ = tx.Rollback()
 		return err
@@ -204,6 +230,9 @@ func initSchema(db *sql.DB) error {
 		// Fallback: если commit не прошёл по любой причине, проверим через Exec напрямую —
 		// CREATE TABLE IF NOT EXISTS идемпотентен, безопасно.
 		if _, err := db.Exec(storeSchema); err != nil {
+			return err
+		}
+		if _, err := db.Exec(knowledgeGraphSchema); err != nil {
 			return err
 		}
 		if err := migrateEntryProvenanceDB(db); err != nil {
@@ -246,11 +275,15 @@ func ensureEntryProvenanceColumns(q schemaQuerier) error {
 
 	columns := []struct{ name, definition string }{
 		{"document_id", "TEXT NOT NULL DEFAULT ''"},
+		{"document_revision", "TEXT NOT NULL DEFAULT ''"},
+		{"chunk_hash", "TEXT NOT NULL DEFAULT ''"},
 		{"source_path", "TEXT NOT NULL DEFAULT ''"},
 		{"media_type", "TEXT NOT NULL DEFAULT ''"},
 		{"page", "INTEGER NOT NULL DEFAULT 0"},
 		{"block_index", "INTEGER NOT NULL DEFAULT 0"},
 		{"block_marker", "TEXT NOT NULL DEFAULT ''"},
+		{"block_chunk_index", "INTEGER NOT NULL DEFAULT 0"},
+		{"block_total_chunks", "INTEGER NOT NULL DEFAULT 0"},
 		{"extraction_method", "TEXT NOT NULL DEFAULT ''"},
 		{"ocr_confidence", "REAL NOT NULL DEFAULT -1"},
 		{"warnings", "TEXT NOT NULL DEFAULT '[]'"},
@@ -282,7 +315,9 @@ func (s *Store) Close() error {
 func (s *Store) loadAll() error {
 	rows, err := s.db.Query(`SELECT id, title, text, tags, created, backend, dims, embedding,
 		source_file, chunk_label, chunk_index, total_chunks,
-		document_id, source_path, media_type, page, block_index, block_marker,
+		document_id, document_revision, chunk_hash,
+		source_path, media_type, page, block_index, block_marker,
+		block_chunk_index, block_total_chunks,
 		extraction_method, ocr_confidence, warnings, important
 		FROM entries ORDER BY id`)
 	if err != nil {
@@ -299,8 +334,10 @@ func (s *Store) loadAll() error {
 
 		if err := rows.Scan(&e.ID, &e.Title, &e.Text, &tagsJSON, &e.Created, &e.Backend,
 			&e.Dims, &embBytes, &e.SourceFile, &e.ChunkLabel, &e.ChunkIndex,
-			&e.TotalChunks, &e.DocumentID, &e.SourcePath, &e.MediaType, &e.Page,
-			&e.BlockIndex, &e.BlockMarker, &e.ExtractionMethod, &e.OCRConfidence,
+			&e.TotalChunks, &e.DocumentID, &e.DocumentRevision, &e.ChunkHash,
+			&e.SourcePath, &e.MediaType, &e.Page,
+			&e.BlockIndex, &e.BlockMarker, &e.BlockChunkIndex, &e.BlockTotalChunks,
+			&e.ExtractionMethod, &e.OCRConfidence,
 			&warningsJSON, &important); err != nil {
 			return err
 		}
@@ -441,6 +478,7 @@ func (s *Store) Add(text string, title string, tags []string, backend string, em
 	}
 	s.entries = append(s.entries, entry)
 	s.vectors = append(s.vectors, embCopy)
+	s.lexicalDirty = true
 	result := cloneEntry(entry)
 	return &result, nil
 }
@@ -452,7 +490,7 @@ func (s *Store) Add(text string, title string, tags []string, backend string, em
 func (s *Store) AddChunk(text string, title string, tags []string, backend string, embedding []float32,
 	sourceFile, chunkLabel string, chunkIndex, totalChunks int, important bool) (*Entry, error) {
 	return s.addChunk(text, title, tags, backend, embedding, sourceFile, chunkLabel,
-		chunkIndex, totalChunks, important, Provenance{SourcePath: sourceFile})
+		chunkIndex, totalChunks, important, Provenance{SourcePath: sourceFile, OCRConfidence: -1})
 }
 
 // AddDocumentChunk stores an imported chunk together with page/block
@@ -462,6 +500,13 @@ func (s *Store) AddDocumentChunk(text string, title string, tags []string, backe
 	chunkLabel string, chunkIndex, totalChunks int, important bool, provenance Provenance) (*Entry, error) {
 	if provenance.SourcePath == "" {
 		return nil, fmt.Errorf("document chunk provenance has an empty source path")
+	}
+	chunk := DocumentChunk{
+		Text: text, Backend: backend, Embedding: embedding,
+		ChunkIndex: chunkIndex, TotalChunks: totalChunks, Provenance: provenance,
+	}
+	if err := validateDocumentChunk(chunk, provenance.SourcePath, chunkIndex, totalChunks); err != nil {
+		return nil, err
 	}
 	return s.addChunk(text, title, tags, backend, embedding, provenance.SourcePath,
 		chunkLabel, chunkIndex, totalChunks, important, provenance)
@@ -497,8 +542,10 @@ func (s *Store) addChunk(text string, title string, tags []string, backend strin
 	_, err = s.db.Exec(upsertChunkSQL,
 		title, text, tagsStr, now, backend, len(embCopy), embBytes,
 		sourceFile, chunkLabel, chunkIndex, totalChunks,
-		provenance.DocumentID, provenance.SourcePath, provenance.MediaType,
+		provenance.DocumentID, provenance.DocumentRevision, provenance.ChunkHash,
+		provenance.SourcePath, provenance.MediaType,
 		provenance.Page, provenance.BlockIndex, provenance.BlockMarker,
+		provenance.BlockChunkIndex, provenance.BlockTotalChunks,
 		provenance.ExtractionMethod, provenance.OCRConfidence, string(warningsBytes), impInt)
 
 	if err != nil {
@@ -520,9 +567,11 @@ func (s *Store) addChunk(text string, title string, tags []string, backend strin
 		Created: now, Backend: backend, Dims: len(embCopy),
 		Embedding: embCopy, SourceFile: sourceFile, ChunkLabel: chunkLabel,
 		ChunkIndex: chunkIndex, TotalChunks: totalChunks,
-		DocumentID: provenance.DocumentID, SourcePath: provenance.SourcePath,
+		DocumentID: provenance.DocumentID, DocumentRevision: provenance.DocumentRevision,
+		ChunkHash: provenance.ChunkHash, SourcePath: provenance.SourcePath,
 		MediaType: provenance.MediaType, Page: provenance.Page,
 		BlockIndex: provenance.BlockIndex, BlockMarker: provenance.BlockMarker,
+		BlockChunkIndex: provenance.BlockChunkIndex, BlockTotalChunks: provenance.BlockTotalChunks,
 		ExtractionMethod: provenance.ExtractionMethod, OCRConfidence: provenance.OCRConfidence,
 		Warnings:  warningsCopy,
 		Important: important,
@@ -540,6 +589,7 @@ func (s *Store) addChunk(text string, title string, tags []string, backend strin
 		s.entries = append(s.entries, entry)
 		s.vectors = append(s.vectors, embCopy)
 	}
+	s.lexicalDirty = true
 	result := cloneEntry(entry)
 	return &result, nil
 }
@@ -549,6 +599,93 @@ type preparedDocumentChunk struct {
 	tagsJSON      string
 	embeddingBLOB []byte
 	warningsJSON  string
+}
+
+// ChunkContentHash identifies the exact text embedded for one stored chunk.
+// It is separate from the source anchor so an anchor can remain stable while
+// its evidence text changes across document revisions.
+func ChunkContentHash(text string) string {
+	sum := sha256.Sum256([]byte(text))
+	return "sha256:" + hex.EncodeToString(sum[:])
+}
+
+func isSHA256ContentHash(value string) bool {
+	if !strings.HasPrefix(value, "sha256:") || len(value) != len("sha256:")+sha256.Size*2 {
+		return false
+	}
+	_, err := hex.DecodeString(strings.TrimPrefix(value, "sha256:"))
+	return err == nil
+}
+
+func validateDocumentChunk(chunk DocumentChunk, sourcePath string, position, total int) error {
+	if strings.TrimSpace(sourcePath) == "" {
+		return fmt.Errorf("document replacement has an empty source path")
+	}
+	if total <= 0 || position < 0 || position >= total {
+		return fmt.Errorf("document chunk has invalid global index/total %d/%d", position, total)
+	}
+	if chunk.ChunkIndex != position || chunk.TotalChunks != total {
+		return fmt.Errorf("document chunk %d has inconsistent index/total %d/%d", position, chunk.ChunkIndex, chunk.TotalChunks)
+	}
+	if chunk.Provenance.SourcePath != sourcePath {
+		return fmt.Errorf("document chunk %d source path does not match replacement identity", position)
+	}
+	if strings.TrimSpace(chunk.Text) == "" {
+		return fmt.Errorf("document chunk %d has empty text", position)
+	}
+	if strings.TrimSpace(chunk.Backend) == "" {
+		return fmt.Errorf("document chunk %d has an empty embedding backend", position)
+	}
+	if len(chunk.Embedding) == 0 {
+		return fmt.Errorf("document chunk %d has an empty embedding", position)
+	}
+	for dimension, value := range chunk.Embedding {
+		if math.IsNaN(float64(value)) || math.IsInf(float64(value), 0) {
+			return fmt.Errorf("document chunk %d embedding dimension %d is not finite", position, dimension)
+		}
+	}
+	p := chunk.Provenance
+	if p.Page < 0 || p.BlockIndex < 0 || p.BlockChunkIndex < 0 || p.BlockTotalChunks < 0 {
+		return fmt.Errorf("document chunk %d has negative provenance coordinates", position)
+	}
+	if p.BlockTotalChunks == 0 && p.BlockChunkIndex != 0 {
+		return fmt.Errorf("document chunk %d has a block-local index without a block total", position)
+	}
+	if p.BlockTotalChunks > 0 && p.BlockChunkIndex >= p.BlockTotalChunks {
+		return fmt.Errorf("document chunk %d has inconsistent block-local index/total %d/%d", position, p.BlockChunkIndex, p.BlockTotalChunks)
+	}
+	if math.IsNaN(p.OCRConfidence) || math.IsInf(p.OCRConfidence, 0) || p.OCRConfidence < -1 || p.OCRConfidence > 100 {
+		return fmt.Errorf("document chunk %d has invalid OCR confidence %v", position, p.OCRConfidence)
+	}
+	if strings.TrimSpace(p.DocumentID) == "" {
+		if p.DocumentID != "" || p.DocumentRevision != "" || p.ChunkHash != "" || p.MediaType != "" || p.Page != 0 || p.BlockIndex != 0 || p.BlockMarker != "" ||
+			p.ExtractionMethod != "" || p.OCRConfidence != -1 || p.BlockTotalChunks != 0 || len(p.Warnings) != 0 {
+			return fmt.Errorf("document chunk %d has partial provenance without a document identity", position)
+		}
+		return nil
+	}
+	if strings.TrimSpace(p.MediaType) == "" {
+		return fmt.Errorf("document chunk %d has an empty media type", position)
+	}
+	if !isSHA256ContentHash(p.DocumentRevision) {
+		return fmt.Errorf("document chunk %d has an invalid document content revision", position)
+	}
+	if !isSHA256ContentHash(p.ChunkHash) {
+		return fmt.Errorf("document chunk %d has an invalid chunk content hash", position)
+	}
+	if expected := ChunkContentHash(chunk.Text); p.ChunkHash != expected {
+		return fmt.Errorf("document chunk %d content hash does not match its text", position)
+	}
+	if p.BlockTotalChunks == 0 {
+		return fmt.Errorf("document chunk %d has no block-local chunk coordinates", position)
+	}
+	if p.ExtractionMethod != "text" && p.ExtractionMethod != "ocr" {
+		return fmt.Errorf("document chunk %d has unsupported extraction method %q", position, p.ExtractionMethod)
+	}
+	if p.ExtractionMethod != "ocr" && p.OCRConfidence != -1 {
+		return fmt.Errorf("document chunk %d has OCR confidence for %q extraction", position, p.ExtractionMethod)
+	}
+	return nil
 }
 
 // ReplaceDocumentChunks atomically upserts a complete imported document and
@@ -564,12 +701,53 @@ func (s *Store) ReplaceDocumentChunks(sourcePath string, chunks []DocumentChunk)
 
 	now := time.Now().UTC().Format(time.RFC3339)
 	prepared := make([]preparedDocumentChunk, len(chunks))
+	expectedDocumentID := chunks[0].Provenance.DocumentID
+	expectedDocumentRevision := chunks[0].Provenance.DocumentRevision
+	expectedMediaType := chunks[0].Provenance.MediaType
+	expectedDimensions := len(chunks[0].Embedding)
+	previousBlock := -1
+	previousPage := 0
+	blockTotal := 0
 	for i, chunk := range chunks {
-		if chunk.ChunkIndex != i || chunk.TotalChunks != len(chunks) {
-			return fmt.Errorf("document chunk %d has inconsistent index/total %d/%d", i, chunk.ChunkIndex, chunk.TotalChunks)
+		if err := validateDocumentChunk(chunk, sourcePath, i, len(chunks)); err != nil {
+			return err
 		}
-		if chunk.Provenance.SourcePath != sourcePath {
-			return fmt.Errorf("document chunk %d source path does not match replacement identity", i)
+		if chunk.Provenance.DocumentID != expectedDocumentID {
+			return fmt.Errorf("document chunk %d document identity does not match earlier chunks", i)
+		}
+		if chunk.Provenance.DocumentRevision != expectedDocumentRevision {
+			return fmt.Errorf("document chunk %d content revision does not match earlier chunks", i)
+		}
+		if chunk.Provenance.MediaType != expectedMediaType {
+			return fmt.Errorf("document chunk %d media type does not match earlier chunks", i)
+		}
+		if len(chunk.Embedding) != expectedDimensions {
+			return fmt.Errorf("document chunk %d embedding dimensions %d do not match document dimensions %d", i, len(chunk.Embedding), expectedDimensions)
+		}
+		if expectedDocumentID != "" {
+			p := chunk.Provenance
+			if p.BlockIndex == previousBlock {
+				previous := chunks[i-1].Provenance
+				if p.Page != previousPage || p.BlockTotalChunks != blockTotal || p.BlockChunkIndex == 0 ||
+					p.BlockMarker != previous.BlockMarker || p.ExtractionMethod != previous.ExtractionMethod ||
+					p.OCRConfidence != previous.OCRConfidence {
+					return fmt.Errorf("document chunk %d has inconsistent metadata within block %d", i, p.BlockIndex)
+				}
+				if p.BlockChunkIndex != previous.BlockChunkIndex+1 {
+					return fmt.Errorf("document chunk %d has non-contiguous block-local index %d", i, p.BlockChunkIndex)
+				}
+			} else {
+				if previousBlock >= 0 && chunks[i-1].Provenance.BlockChunkIndex+1 != blockTotal {
+					return fmt.Errorf("source block %d ended after %d/%d chunks", previousBlock, chunks[i-1].Provenance.BlockChunkIndex+1, blockTotal)
+				}
+				if p.BlockIndex != previousBlock+1 || p.BlockChunkIndex != 0 {
+					return fmt.Errorf("document chunk %d does not start the next contiguous source block", i)
+				}
+				if p.Page > 0 && previousPage > p.Page {
+					return fmt.Errorf("document chunk %d page %d precedes earlier page %d", i, p.Page, previousPage)
+				}
+				previousBlock, previousPage, blockTotal = p.BlockIndex, p.Page, p.BlockTotalChunks
+			}
 		}
 		tagsCopy := append([]string(nil), chunk.Tags...)
 		embeddingCopy := append([]float32(nil), chunk.Embedding...)
@@ -592,15 +770,22 @@ func (s *Store) ReplaceDocumentChunks(sourcePath string, chunks []DocumentChunk)
 				Backend: chunk.Backend, Dims: len(embeddingCopy), Embedding: embeddingCopy,
 				SourceFile: sourcePath, ChunkLabel: chunk.ChunkLabel,
 				ChunkIndex: chunk.ChunkIndex, TotalChunks: chunk.TotalChunks,
-				DocumentID: chunk.Provenance.DocumentID, SourcePath: chunk.Provenance.SourcePath,
+				DocumentID:       chunk.Provenance.DocumentID,
+				DocumentRevision: chunk.Provenance.DocumentRevision,
+				ChunkHash:        chunk.Provenance.ChunkHash, SourcePath: chunk.Provenance.SourcePath,
 				MediaType: chunk.Provenance.MediaType, Page: chunk.Provenance.Page,
 				BlockIndex: chunk.Provenance.BlockIndex, BlockMarker: chunk.Provenance.BlockMarker,
+				BlockChunkIndex:  chunk.Provenance.BlockChunkIndex,
+				BlockTotalChunks: chunk.Provenance.BlockTotalChunks,
 				ExtractionMethod: chunk.Provenance.ExtractionMethod,
 				OCRConfidence:    chunk.Provenance.OCRConfidence, Warnings: warningsCopy,
 				Important: chunk.Important,
 			},
 			tagsJSON: tagsJSON, embeddingBLOB: embeddingBLOB, warningsJSON: string(warningsBytes),
 		}
+	}
+	if expectedDocumentID != "" && chunks[len(chunks)-1].Provenance.BlockChunkIndex+1 != blockTotal {
+		return fmt.Errorf("source block %d ended after %d/%d chunks", previousBlock, chunks[len(chunks)-1].Provenance.BlockChunkIndex+1, blockTotal)
 	}
 
 	s.mu.Lock()
@@ -622,7 +807,9 @@ func (s *Store) ReplaceDocumentChunks(sourcePath string, chunks []DocumentChunk)
 		_, err = tx.Exec(upsertChunkSQL,
 			e.Title, e.Text, p.tagsJSON, e.Created, e.Backend, e.Dims, p.embeddingBLOB,
 			e.SourceFile, e.ChunkLabel, e.ChunkIndex, e.TotalChunks,
-			e.DocumentID, e.SourcePath, e.MediaType, e.Page, e.BlockIndex, e.BlockMarker,
+			e.DocumentID, e.DocumentRevision, e.ChunkHash,
+			e.SourcePath, e.MediaType, e.Page, e.BlockIndex, e.BlockMarker,
+			e.BlockChunkIndex, e.BlockTotalChunks,
 			e.ExtractionMethod, e.OCRConfidence, p.warningsJSON, boolToInt(e.Important))
 		if err != nil {
 			return rollback(fmt.Errorf("write document chunk %d/%d: %w", i+1, len(prepared), err))
@@ -654,6 +841,7 @@ func (s *Store) ReplaceDocumentChunks(sourcePath string, chunks []DocumentChunk)
 	}
 	s.entries = entries
 	s.vectors = vectors
+	s.lexicalDirty = true
 	return nil
 }
 
@@ -694,6 +882,7 @@ func (s *Store) PruneSourceChunks(sourceFile string, firstStaleIndex int) (int64
 	}
 	s.entries = entries
 	s.vectors = vectors
+	s.lexicalDirty = true
 	return deleted, nil
 }
 
@@ -713,6 +902,7 @@ func (s *Store) DeleteById(id int64) error {
 	if n == 0 {
 		return fmt.Errorf("запись #%d не найдена", id)
 	}
+	s.lexicalDirty = true
 
 	// Удаляем из кэша
 	for i := range s.entries {
@@ -731,6 +921,19 @@ func (s *Store) DeleteById(id int64) error {
 func (s *Store) UpdateById(id int64, text string, title string, tags []string, embedding []float32) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	entryIndex := -1
+	for i := range s.entries {
+		if s.entries[i].ID == id {
+			entryIndex = i
+			break
+		}
+	}
+	if entryIndex < 0 {
+		return fmt.Errorf("запись #%d не найдена", id)
+	}
+	if s.entries[entryIndex].DocumentID != "" && text != s.entries[entryIndex].Text {
+		return fmt.Errorf("запись #%d является source-anchored chunk; измените исходный документ и повторите mem import", id)
+	}
 
 	now := time.Now().UTC().Format(time.RFC3339)
 	// Копируем tags — caller может мутировать свой слайс после возврата.
@@ -756,6 +959,7 @@ func (s *Store) UpdateById(id int64, text string, title string, tags []string, e
 		} else if n == 0 {
 			return fmt.Errorf("запись #%d не найдена", id)
 		}
+		s.lexicalDirty = true
 		for i := range s.entries {
 			if s.entries[i].ID == id {
 				s.entries[i].Text = text
@@ -780,6 +984,7 @@ func (s *Store) UpdateById(id int64, text string, title string, tags []string, e
 		} else if n == 0 {
 			return fmt.Errorf("запись #%d не найдена", id)
 		}
+		s.lexicalDirty = true
 		for i := range s.entries {
 			if s.entries[i].ID == id {
 				s.entries[i].Text = text

@@ -4,17 +4,20 @@
 
 [Unit]
 Description=mem-bot — Telegram interface for mem-tool
-After=network.target
+After=network-online.target
 Wants=network-online.target
 
 [Service]
 Type=simple
 User=membot
 Group=membot
+UMask=0077
 WorkingDirectory=/opt/mem-bot
 ExecStart=/opt/mem-bot/mem-bot
 Restart=always
 RestartSec=5
+KillSignal=SIGTERM
+TimeoutStopSec=30s
 EnvironmentFile=/opt/mem-bot/.env
 
 # Sandboxing

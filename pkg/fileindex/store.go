@@ -20,15 +20,15 @@ import (
 // Path хранится ОТНОСИТЕЛЬНО scan-root (для портабельности БД).
 type FileEntry struct {
 	ID         int64
-	Path       string     // relative to scan-root
-	Name       string     // basename
-	Ext        string     // ".fb2", ".pdf", ...
+	Path       string // relative to scan-root
+	Name       string // basename
+	Ext        string // ".fb2", ".pdf", ...
 	Size       int64
-	Mtime      int64      // unix seconds
-	ParentDir  string     // последние 2 уровня parent_dir_chain
-	Hash       string     // xxhash первых 64 KB (опционально)
-	Annotation string     // извлечённый текст аннотации
-	Backend    string     // ollama / polza
+	Mtime      int64  // unix seconds
+	ParentDir  string // последние 2 уровня parent_dir_chain
+	Hash       string // xxhash первых 64 KB (опционально)
+	Annotation string // извлечённый текст аннотации
+	Backend    string // ollama / polza
 	Embedding  []float32
 	Dims       int
 	Tags       []string
@@ -46,11 +46,11 @@ type Scored struct {
 
 // Stats — статистика базы fileindex.
 type Stats struct {
-	Total       int
-	NotStale    int
-	Stale       int
-	ByExt       map[string]int
-	StorePath   string
+	Total     int
+	NotStale  int
+	Stale     int
+	ByExt     map[string]int
+	StorePath string
 }
 
 // Store — потокобезопасное хранилище файлов на базе SQLite + in-memory кэш.
@@ -166,9 +166,6 @@ func (s *Store) Upsert(entry *FileEntry) error {
 	if entry.Backend == "" {
 		return fmt.Errorf("Upsert: пустой Backend")
 	}
-	if entry.Embedding == nil {
-		return fmt.Errorf("Upsert: пустой Embedding (нужен предварительный mem.GetEmbedding)")
-	}
 	if entry.LastSeenAt == "" {
 		entry.LastSeenAt = time.Now().UTC().Format(time.RFC3339)
 	}
@@ -177,9 +174,12 @@ func (s *Store) Upsert(entry *FileEntry) error {
 	if err != nil {
 		return err
 	}
-	embBytes, err := mem.FloatsToBytes(entry.Embedding)
-	if err != nil {
-		return err
+	embBytes := []byte{}
+	if len(entry.Embedding) > 0 {
+		embBytes, err = mem.FloatsToBytes(entry.Embedding)
+		if err != nil {
+			return err
+		}
 	}
 	entry.Dims = len(entry.Embedding)
 
@@ -210,7 +210,7 @@ func (s *Store) Upsert(entry *FileEntry) error {
 		entry.ID = id
 
 		// Cache.
-		cp := *entry
+		cp := cloneFileEntry(*entry)
 		s.files = append(s.files, cp)
 		s.vectors = append(s.vectors, cp.Embedding)
 		return nil
@@ -238,14 +238,14 @@ func (s *Store) Upsert(entry *FileEntry) error {
 	// Cache: обновляем на месте.
 	for i := range s.files {
 		if s.files[i].ID == existingID {
-			cp := *entry
+			cp := cloneFileEntry(*entry)
 			s.files[i] = cp
 			s.vectors[i] = cp.Embedding
 			return nil
 		}
 	}
 	// Если не нашли в кэше (странно) — добавляем.
-	cp := *entry
+	cp := cloneFileEntry(*entry)
 	s.files = append(s.files, cp)
 	s.vectors = append(s.vectors, cp.Embedding)
 	return nil
@@ -258,9 +258,7 @@ func (s *Store) Get(id int64) (*FileEntry, error) {
 
 	for i := range s.files {
 		if s.files[i].ID == id {
-			cp := s.files[i]
-			cp.Tags = append([]string(nil), s.files[i].Tags...)
-			cp.Embedding = append([]float32(nil), s.files[i].Embedding...)
+			cp := cloneFileEntry(s.files[i])
 			return &cp, nil
 		}
 	}
@@ -275,7 +273,7 @@ func (s *Store) GetByPath(relPath string) (FileEntry, bool) {
 	norm := filepath.ToSlash(relPath)
 	for i := range s.files {
 		if filepath.ToSlash(s.files[i].Path) == norm {
-			return s.files[i], true
+			return cloneFileEntry(s.files[i]), true
 		}
 	}
 	return FileEntry{}, false
@@ -295,9 +293,7 @@ func (s *Store) List(limit int, includeStale bool) ([]FileEntry, error) {
 		if s.files[i].Stale && !includeStale {
 			continue
 		}
-		cp := s.files[i]
-		cp.Tags = append([]string(nil), s.files[i].Tags...)
-		cp.Embedding = append([]float32(nil), s.files[i].Embedding...)
+		cp := cloneFileEntry(s.files[i])
 		all = append(all, cp)
 	}
 
@@ -315,12 +311,18 @@ func (s *Store) List(limit int, includeStale bool) ([]FileEntry, error) {
 }
 
 // Search ищет top-K ближайших к queryVec записей (cosine similarity in-Go).
-// Исключает stale. Применяет гибридный boost: +0.05 если query substring
-// встречается в Name (lower-case).
-func (s *Store) Search(queryVec []float32, k int, query string) ([]Scored, error) {
+// Исключает stale, metadata-only записи и векторы от другого backend.
+// Применяет гибридный boost: +0.05 если query substring встречается в Name.
+func (s *Store) Search(queryVec []float32, backend string, k int, query string) ([]Scored, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
+	if strings.TrimSpace(backend) == "" {
+		return nil, fmt.Errorf("Search: пустой backend")
+	}
+	if len(queryVec) == 0 {
+		return nil, fmt.Errorf("Search: пустой query vector")
+	}
 	if k <= 0 {
 		k = 10
 	}
@@ -329,10 +331,10 @@ func (s *Store) Search(queryVec []float32, k int, query string) ([]Scored, error
 	var results []Scored
 	for i := range s.files {
 		e := s.files[i]
-		if e.Stale {
+		if e.Stale || e.Backend != backend {
 			continue
 		}
-		if len(e.Embedding) != len(queryVec) {
+		if len(e.Embedding) == 0 || len(e.Embedding) != len(queryVec) {
 			continue
 		}
 		score := mem.CosineSimilarity(queryVec, s.vectors[i])
@@ -343,7 +345,7 @@ func (s *Store) Search(queryVec []float32, k int, query string) ([]Scored, error
 				score = 1.0
 			}
 		}
-		results = append(results, Scored{Entry: e, Score: score})
+		results = append(results, Scored{Entry: cloneFileEntry(e), Score: score})
 	}
 
 	if len(results) == 0 {
@@ -523,4 +525,10 @@ func tagsFromJSON(s string) ([]string, error) {
 		return nil, fmt.Errorf("десериализация тегов: %w", err)
 	}
 	return tags, nil
+}
+
+func cloneFileEntry(entry FileEntry) FileEntry {
+	entry.Tags = append([]string(nil), entry.Tags...)
+	entry.Embedding = append([]float32(nil), entry.Embedding...)
+	return entry
 }

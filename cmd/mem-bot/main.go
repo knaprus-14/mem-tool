@@ -2,14 +2,15 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log"
-	"net/http"
 	"os"
 	"os/signal"
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
@@ -24,6 +25,9 @@ const (
 	defaultDataDir = "./data"
 	// botVersion — версия бота (отображается в /start)
 	botVersion = "0.1.0"
+	// botWorkers ограничивает параллелизм и позволяет Start дождаться активных
+	// handler-ов перед закрытием пользовательских SQLite-баз.
+	botWorkers = 4
 )
 
 // userStore — кеш *mem.Store per user_id (чтобы не открывать SQLite на каждое сообщение)
@@ -36,6 +40,7 @@ type userStore struct {
 // botData — глобальное состояние бота
 type botData struct {
 	dataDir string
+	mu      sync.Mutex
 	stores  map[int64]*userStore // user_id → userStore
 }
 
@@ -62,6 +67,11 @@ func main() {
 		dataDir: dataDir,
 		stores:  make(map[int64]*userStore),
 	}
+	defer func() {
+		if err := data.closeStores(); err != nil {
+			log.Printf("ошибка закрытия пользовательских баз: %v", err)
+		}
+	}()
 
 	// === Telegram bot ===
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
@@ -70,6 +80,8 @@ func main() {
 	opts := []bot.Option{
 		bot.WithDefaultHandler(defaultHandler),
 		bot.WithCallbackQueryDataHandler("noop", bot.MatchTypeExact, noopCallback),
+		bot.WithWorkers(botWorkers),
+		bot.WithNotAsyncHandlers(),
 	}
 
 	b, err := bot.New(token, opts...)
@@ -95,6 +107,12 @@ func main() {
 
 // getOrCreateStore возвращает (или создаёт) Store для пользователя
 func (d *botData) getOrCreateStore(userID int64) (*userStore, error) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if d.stores == nil {
+		d.stores = make(map[int64]*userStore)
+	}
+
 	if us, ok := d.stores[userID]; ok {
 		return us, nil
 	}
@@ -112,9 +130,9 @@ func (d *botData) getOrCreateStore(userID int64) (*userStore, error) {
 	}
 
 	// Конфиг
-	cfg := mem.DefaultLocalConfig()
-	if c, err := mem.LoadConfigIn(memDir); err == nil {
-		cfg = c
+	cfg, err := mem.LoadConfigIn(memDir)
+	if err != nil {
+		return nil, fmt.Errorf("config: %w", err)
 	}
 
 	// Store
@@ -126,6 +144,31 @@ func (d *botData) getOrCreateStore(userID int64) (*userStore, error) {
 	us := &userStore{dir: memDir, store: store, cfg: cfg}
 	d.stores[userID] = us
 	return us, nil
+}
+
+// closeStores атомарно отсоединяет кеш пользовательских баз и закрывает все
+// SQLite-соединения после остановки polling. Новые handler-ы после отмены
+// root-context больше не должны запускаться.
+func (d *botData) closeStores() error {
+	if d == nil {
+		return nil
+	}
+
+	d.mu.Lock()
+	stores := d.stores
+	d.stores = make(map[int64]*userStore)
+	d.mu.Unlock()
+
+	var closeErrors []error
+	for userID, us := range stores {
+		if us == nil || us.store == nil {
+			continue
+		}
+		if err := us.store.Close(); err != nil {
+			closeErrors = append(closeErrors, fmt.Errorf("user %d: %w", userID, err))
+		}
+	}
+	return errors.Join(closeErrors...)
 }
 
 // === Handlers ===
@@ -176,7 +219,7 @@ func cmdAdd(ctx context.Context, b *bot.Bot, update *models.Update) {
 	}
 
 	// Эмбеддинг
-	emb, err := mem.GetEmbedding(us.cfg, text)
+	emb, err := mem.GetEmbeddingContext(ctx, us.cfg, text)
 	if err != nil {
 		sendMessage(ctx, b, update.Message.Chat.ID, "❌ Ошибка эмбеддинга: "+err.Error()+"\n\nПроверьте, запущен ли Ollama с моделью bge-m3.")
 		return
@@ -208,7 +251,7 @@ func cmdSearch(ctx context.Context, b *bot.Bot, update *models.Update) {
 	}
 
 	// Embedding запроса
-	emb, err := mem.GetEmbedding(us.cfg, query)
+	emb, err := mem.GetEmbeddingContext(ctx, us.cfg, query)
 	if err != nil {
 		sendMessage(ctx, b, update.Message.Chat.ID, "❌ Ошибка эмбеддинга: "+err.Error())
 		return
@@ -305,7 +348,7 @@ func defaultHandler(ctx context.Context, b *bot.Bot, update *models.Update) {
 		return
 	}
 
-	emb, err := mem.GetEmbedding(us.cfg, text)
+	emb, err := mem.GetEmbeddingContext(ctx, us.cfg, text)
 	if err != nil {
 		sendMessage(ctx, b, update.Message.Chat.ID, "❌ Ошибка эмбеддинга: "+err.Error())
 		return
@@ -329,9 +372,7 @@ func noopCallback(ctx context.Context, b *bot.Bot, update *models.Update) {
 
 func sendMessage(ctx context.Context, b *bot.Bot, chatID int64, text string) {
 	// Telegram лимит — 4096 символов на сообщение
-	if len(text) > 4000 {
-		text = text[:4000] + "\n\n... _(обрезано)_"
-	}
+	text = truncateMessage(text)
 	_, err := b.SendMessage(ctx, &bot.SendMessageParams{
 		ChatID:    chatID,
 		Text:      text,
@@ -364,11 +405,25 @@ func helpText() string {
 }
 
 func truncate(s string, maxLen int) string {
-	if len(s) <= maxLen {
+	if maxLen <= 0 {
+		return ""
+	}
+	runes := []rune(s)
+	if len(runes) <= maxLen {
 		return s
 	}
-	return s[:maxLen] + "..."
+	return string(runes[:maxLen]) + "..."
 }
 
-// suppress unused imports warning
-var _ = http.StatusOK
+func truncateMessage(text string) string {
+	const limit = 4000
+	const suffix = "\n\n... _(обрезано)_"
+
+	runes := []rune(text)
+	if len(runes) <= limit {
+		return text
+	}
+	suffixRunes := []rune(suffix)
+	keep := limit - len(suffixRunes)
+	return string(runes[:keep]) + suffix
+}

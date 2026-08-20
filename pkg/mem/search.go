@@ -201,11 +201,16 @@ func normalizeCosine(score float64) float64 {
 
 func (s *Store) lexicalScoresLocked(query string) (map[int64]float64, error) {
 	if s.lexicalMode == lexicalFTS5 {
-		if err := s.rebuildFTSLocked(); err == nil {
-			scores, queryErr := s.queryFTSLocked(query)
-			if queryErr == nil {
-				return scores, nil
+		if s.lexicalDirty {
+			if err := s.rebuildFTSLocked(); err != nil {
+				s.lexicalMode = lexicalFallback
+				return fallbackLexicalScores(s.entries, query), nil
 			}
+			s.lexicalDirty = false
+		}
+		scores, queryErr := s.queryFTSLocked(query)
+		if queryErr == nil {
+			return scores, nil
 		}
 		// A runtime FTS failure degrades this Store instance to a deterministic
 		// scan instead of making search unavailable.
@@ -215,14 +220,27 @@ func (s *Store) lexicalScoresLocked(query string) (map[int64]float64, error) {
 }
 
 func (s *Store) rebuildFTSLocked() error {
-	if _, err := s.db.Exec(`DELETE FROM entries_fts`); err != nil {
+	tx, err := s.db.Begin()
+	if err != nil {
 		return err
 	}
-	for _, entry := range s.entries {
-		if _, err := s.db.Exec(`INSERT INTO entries_fts(rowid, entry_id, title, text, tags)
-			VALUES (?, ?, ?, ?, ?)`, entry.ID, entry.ID, entry.Title, entry.Text, strings.Join(entry.Tags, " ")); err != nil {
-			return err
+	rollback := func(cause error) error {
+		if rollbackErr := tx.Rollback(); rollbackErr != nil && rollbackErr != sql.ErrTxDone {
+			return fmt.Errorf("%v; FTS rollback failed: %w", cause, rollbackErr)
 		}
+		return cause
+	}
+	if _, err := tx.Exec(`DELETE FROM entries_fts`); err != nil {
+		return rollback(err)
+	}
+	for _, entry := range s.entries {
+		if _, err := tx.Exec(`INSERT INTO entries_fts(rowid, entry_id, title, text, tags)
+			VALUES (?, ?, ?, ?, ?)`, entry.ID, entry.ID, entry.Title, entry.Text, strings.Join(entry.Tags, " ")); err != nil {
+			return rollback(err)
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return rollback(err)
 	}
 	return nil
 }
@@ -381,7 +399,11 @@ func CitationForEntry(entry Entry) (string, string) {
 		key = source
 	}
 	digest := sha256.Sum256([]byte(key))
-	id := fmt.Sprintf("cite-%s-%d-%d", hex.EncodeToString(digest[:]), entry.BlockIndex+1, entry.ChunkIndex+1)
+	chunkWithinBlock := entry.ChunkIndex
+	if entry.BlockTotalChunks > 0 {
+		chunkWithinBlock = entry.BlockChunkIndex
+	}
+	id := fmt.Sprintf("cite-%s-p%d-b%d-c%d", hex.EncodeToString(digest[:]), entry.Page, entry.BlockIndex+1, chunkWithinBlock+1)
 	parts := []string{source}
 	if entry.Page > 0 {
 		parts = append(parts, fmt.Sprintf("page %d", entry.Page))

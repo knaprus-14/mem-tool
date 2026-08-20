@@ -18,6 +18,24 @@ func TestValidateEmbeddingTextRejectsSilentTruncation(t *testing.T) {
 	}
 }
 
+func TestEmbeddingHTTPClientHasFiniteTimeout(t *testing.T) {
+	if embeddingHTTPClient.Timeout <= 0 {
+		t.Fatal("embedding HTTP client has no timeout")
+	}
+	if embeddingHTTPClient.Timeout != embeddingHTTPTimeout {
+		t.Fatalf("timeout=%v, want %v", embeddingHTTPClient.Timeout, embeddingHTTPTimeout)
+	}
+}
+
+func TestGetEmbeddingContextRejectsNilDependencies(t *testing.T) {
+	if _, err := GetEmbeddingContext(nil, DefaultLocalConfig(), "text"); err == nil {
+		t.Fatal("nil context should fail")
+	}
+	if _, err := GetEmbeddingContext(context.Background(), nil, "text"); err == nil {
+		t.Fatal("nil config should fail")
+	}
+}
+
 func TestGetEmbeddingContextCancelsInflightOllamaRequest(t *testing.T) {
 	requestStarted := make(chan struct{})
 	releaseHandler := make(chan struct{})

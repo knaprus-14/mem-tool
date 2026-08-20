@@ -1,9 +1,12 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io"
 	"os"
 	"os/signal"
 	"path/filepath"
@@ -27,28 +30,33 @@ type (
 	Entry        = mem.Entry
 	IndexResult  = mem.IndexResult
 	OllamaConfig = mem.OllamaConfig
+	AnswerConfig = mem.AnswerConfig
 	PolzaConfig  = mem.PolzaConfig
 	ChunkConfig  = mem.ChunkConfig
 )
 
 // Алиасы функций
 var (
-	loadConfig         = mem.LoadConfig
-	saveConfig         = mem.SaveConfig
-	newStore           = mem.NewStore
-	ChunkDocument      = mem.ChunkDocument
-	IndexDirectory     = mem.IndexDirectory
-	IndexFile          = mem.IndexFile
-	IndexSummary       = mem.IndexSummary
-	getEmbedding       = mem.GetEmbedding
-	cosineSimilarity   = mem.CosineSimilarity
-	configPath         = mem.ConfigPath
-	memExists          = mem.MemExists
-	memDir             = mem.MemDir
-	initMem            = mem.InitMem
-	ensureMem          = mem.EnsureMem
-	defaultLocalConfig = mem.DefaultLocalConfig
-	defaultConfig      = mem.DefaultConfig
+	loadConfig          = mem.LoadConfig
+	saveConfig          = mem.SaveConfig
+	newStore            = mem.NewStore
+	ChunkDocument       = mem.ChunkDocument
+	IndexDirectory      = mem.IndexDirectory
+	IndexFile           = mem.IndexFile
+	IndexSummary        = mem.IndexSummary
+	getEmbedding        = mem.GetEmbedding
+	getEmbeddingContext = mem.GetEmbeddingContext
+	cosineSimilarity    = mem.CosineSimilarity
+	configPath          = mem.ConfigPath
+	memExists           = mem.MemExists
+	memDir              = mem.MemDir
+	initMem             = mem.InitMem
+	ensureMem           = mem.EnsureMem
+	defaultLocalConfig  = mem.DefaultLocalConfig
+	defaultConfig       = mem.DefaultConfig
+	newAnswerProvider   = func(cfg mem.AnswerConfig) (mem.AnswerProvider, error) {
+		return mem.NewOllamaAnswerProvider(cfg)
+	}
 )
 
 const memDirName = mem.MemDirName
@@ -72,7 +80,7 @@ const version = "1.15.13"
 var cmdRequiresDB = map[string]bool{
 	"add": true, "add-file": true, "import": true, "index": true,
 	"config": true,
-	"search": true, "recent": true, "stats": true,
+	"search": true, "ask": true, "map": true, "recent": true, "stats": true,
 	"source": true, "sources": true,
 	"show": true, "get": true, "view": true,
 	"delete": true, "rm": true,
@@ -193,6 +201,16 @@ func run() int {
 		}
 	case "search":
 		if err := handleSearch(cfg, store, args); err != nil {
+			fmt.Fprintf(os.Stderr, "Ошибка: %v\n", err)
+			return 1
+		}
+	case "ask":
+		if err := handleAsk(cfg, store, args); err != nil {
+			fmt.Fprintf(os.Stderr, "Ошибка: %v\n", err)
+			return 1
+		}
+	case "map":
+		if err := handleMap(cfg, store, args); err != nil {
 			fmt.Fprintf(os.Stderr, "Ошибка: %v\n", err)
 			return 1
 		}
@@ -530,6 +548,507 @@ func handleSearch(cfg *Config, store *Store, args []string) error {
 	return nil
 }
 
+func handleAsk(cfg *Config, store *Store, args []string) error {
+	searchArgs, contextOverride, err := parseAskArgs(args)
+	if err != nil {
+		return err
+	}
+	positional, _, tags, limit, from, to, minScore, vectorOnly, _, tagFilter := parseFlags(searchArgs)
+	if len(positional) == 0 {
+		return fmt.Errorf("укажи вопрос\nПример: mem ask \"где описан порядок запуска?\" -limit 5")
+	}
+	question := strings.Join(positional, " ")
+	answerCfg := cfg.Answer.WithDefaults()
+	provider, err := newAnswerProvider(answerCfg)
+	if err != nil {
+		return err
+	}
+
+	fmt.Fprintln(os.Stderr, "[ASK] retrieval: строю embedding и ищу evidence...")
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
+	defer stop()
+	ctx, cancel := mem.AnswerContext(ctx, answerCfg)
+	defer cancel()
+	queryVector, err := getEmbeddingContext(ctx, cfg, question)
+	if err != nil {
+		return fmt.Errorf("ask retrieval: %w", err)
+	}
+	results, err := store.SearchWithOptions(mem.SearchOptions{
+		Query: question, QueryVector: queryVector, Backend: cfg.Backend,
+		Tags: tags, TagFilter: tagFilter, From: from, To: to, VectorOnly: vectorOnly,
+	})
+	if err != nil {
+		return fmt.Errorf("ask retrieval: %w", err)
+	}
+	if len(results) > 0 {
+		reRankResults(results, question)
+		sortSearchResults(results)
+	}
+	if minScore > 0 {
+		filtered := results[:0]
+		for _, result := range results {
+			if result.Score >= minScore {
+				filtered = append(filtered, result)
+			}
+		}
+		results = filtered
+	}
+	if limit > len(results) {
+		limit = len(results)
+	}
+	results = results[:limit]
+	if len(results) == 0 {
+		fmt.Fprintln(os.Stdout, "Недостаточно подтверждённых данных: поиск не вернул подходящих фрагментов.")
+		return nil
+	}
+
+	contextBudget := answerCfg.ContextChars
+	if contextOverride > 0 {
+		contextBudget = contextOverride
+	}
+	prompt, err := mem.BuildGroundedPromptWithOptions(question, results, contextBudget, cfg.Ingest.LowConfidence)
+	if err != nil {
+		return err
+	}
+	if len(prompt.Evidence) == 0 {
+		fmt.Fprintln(os.Stdout, "Недостаточно подтверждённых данных: evidence не помещается в заданный context budget.")
+		return nil
+	}
+	for _, evidence := range prompt.Evidence {
+		for _, warning := range evidence.Warnings {
+			fmt.Fprintf(os.Stderr, "[ASK] warning %s: %s\n", evidence.CitationID, warning)
+		}
+	}
+	fmt.Fprintf(os.Stderr, "[ASK] evidence: %d фрагм.; generation через %s...\n", len(prompt.Evidence), answerCfg.Model)
+	rawAnswer, err := provider.Generate(ctx, mem.AnswerRequest{
+		Model: answerCfg.Model, System: prompt.System, Prompt: prompt.User,
+		MaxTokens: answerCfg.MaxTokens, Temperature: answerCfg.Temperature,
+	})
+	if err != nil {
+		return fmt.Errorf("ask generation: %w", err)
+	}
+	validated := mem.ValidateGroundedAnswer(rawAnswer, prompt.Evidence)
+	if validated.Rejected {
+		if len(validated.UnknownIDs) > 0 {
+			return fmt.Errorf("grounded answer rejected: %s (%s)", validated.Reason, strings.Join(validated.UnknownIDs, ", "))
+		}
+		return fmt.Errorf("grounded answer rejected: %s", validated.Reason)
+	}
+	fmt.Fprintln(os.Stdout, validated.Answer)
+	if len(validated.Used) > 0 {
+		fmt.Fprintln(os.Stdout, "\nИсточники:")
+		for _, evidence := range validated.Used {
+			fmt.Fprintf(os.Stdout, "- %s — %s\n", evidence.CitationID, evidence.CitationLabel)
+			if evidence.DocumentRevision != "" {
+				fmt.Fprintf(os.Stdout, "  revision=%s evidence=%s\n", evidence.DocumentRevision, evidence.EvidenceHash)
+			}
+		}
+	}
+	return nil
+}
+
+func parseAskArgs(args []string) ([]string, int, error) {
+	contextBudget := 0
+	out := make([]string, 0, len(args))
+	for i := 0; i < len(args); i++ {
+		if args[i] != "-context-chars" {
+			out = append(out, args[i])
+			continue
+		}
+		if i+1 >= len(args) {
+			return nil, 0, errors.New("использование: -context-chars <положительное число>")
+		}
+		i++
+		n, parseErr := strconv.Atoi(args[i])
+		if parseErr != nil || n <= 0 || n > mem.MaxAnswerContextChars {
+			return nil, 0, fmt.Errorf("-context-chars должен быть от 1 до %d", mem.MaxAnswerContextChars)
+		}
+		contextBudget = n
+	}
+	return out, contextBudget, nil
+}
+
+func handleMap(cfg *Config, store *Store, args []string) error {
+	if len(args) == 0 {
+		return errors.New("использование: mem map <build|analyze|status|approve|approve-batch|reviews|export>\n  mem map build <фокус> [-limit N] [-context-chars N]\n  mem map analyze <фокус> [-context-chars N]\n  mem map status [--json]\n  mem map approve <node|edge> <id> --reviewer <имя> [--comment <текст>] [--evidence-digest <sha256>]\n  mem map approve-batch <manifest.json>\n  mem map reviews [--json] [-limit N]\n  mem map export")
+	}
+	switch args[0] {
+	case "export":
+		if len(args) != 1 {
+			return errors.New("использование: mem map export")
+		}
+		graph, err := store.LoadKnowledgeGraph()
+		if err != nil {
+			return fmt.Errorf("map export: %w", err)
+		}
+		encoded, err := json.MarshalIndent(graph, "", "  ")
+		if err != nil {
+			return fmt.Errorf("map export: encode graph: %w", err)
+		}
+		fmt.Fprintln(os.Stdout, string(encoded))
+		return nil
+	case "status":
+		return handleMapStatus(store, args[1:])
+	case "approve":
+		return handleMapApprove(store, args[1:])
+	case "approve-batch":
+		return handleMapApproveBatch(store, args[1:])
+	case "reviews":
+		return handleMapReviews(store, args[1:])
+	case "analyze":
+		return handleMapAnalyze(cfg, store, args[1:])
+	case "build":
+		return handleMapBuild(cfg, store, args[1:])
+	default:
+		return fmt.Errorf("неизвестная подкоманда map: %s (доступны build, analyze, status, approve, approve-batch, reviews, export)", args[0])
+	}
+}
+
+func handleMapStatus(store *Store, args []string) error {
+	jsonOutput := false
+	if len(args) > 1 || (len(args) == 1 && args[0] != "--json") {
+		return errors.New("использование: mem map status [--json]")
+	}
+	if len(args) == 1 {
+		jsonOutput = true
+	}
+	report, err := store.ReviewKnowledgeGraph()
+	if err != nil {
+		return fmt.Errorf("map status: %w", err)
+	}
+	if jsonOutput {
+		encoded, err := json.MarshalIndent(report, "", "  ")
+		if err != nil {
+			return fmt.Errorf("map status: encode report: %w", err)
+		}
+		fmt.Fprintln(os.Stdout, string(encoded))
+		return nil
+	}
+	fmt.Fprintf(os.Stdout, "Карта: total=%d draft=%d active=%d resolved=%d ready=%d\n",
+		report.Summary.Total, report.Summary.Draft, report.Summary.Active, report.Summary.Resolved, report.Summary.Ready)
+	fmt.Fprintf(os.Stdout, "Evidence: current=%d stale=%d missing=%d\n",
+		report.Summary.CurrentEvidence, report.Summary.StaleEvidence, report.Summary.MissingEvidence)
+	for _, item := range report.Items {
+		ready := ""
+		if item.ReadyForApproval {
+			ready = " ready"
+		}
+		label := strings.Join(strings.Fields(item.Label), " ")
+		fmt.Fprintf(os.Stdout, "- %s %s [%s/%s evidence=%s%s] %s\n",
+			item.ObjectType, item.ID, item.Kind, item.Status, item.EvidenceState, ready, label)
+		fmt.Fprintf(os.Stdout, "  digest %s\n", item.EvidenceDigest)
+		for _, evidence := range item.Evidence {
+			fmt.Fprintf(os.Stdout, "  %s %s\n", evidence.State, evidence.Anchor.CitationID)
+		}
+	}
+	return nil
+}
+
+func handleMapApprove(store *Store, args []string) error {
+	if len(args) < 4 {
+		return errors.New("использование: mem map approve <node|edge> <id> --reviewer <имя> [--comment <текст>] [--evidence-digest <sha256>]")
+	}
+	objectType := mem.KnowledgeObjectType(args[0])
+	if objectType != mem.KnowledgeObjectNode && objectType != mem.KnowledgeObjectEdge {
+		return errors.New("тип объекта должен быть node или edge")
+	}
+	request := mem.KnowledgeApprovalRequest{ObjectType: objectType, ID: args[1]}
+	for i := 2; i < len(args); i++ {
+		if i+1 >= len(args) {
+			return fmt.Errorf("для %s требуется значение", args[i])
+		}
+		value := args[i+1]
+		switch args[i] {
+		case "--reviewer":
+			request.Reviewer = value
+		case "--comment":
+			request.Comment = value
+		case "--evidence-digest":
+			request.ExpectedEvidenceDigest = value
+		default:
+			return fmt.Errorf("неизвестный флаг map approve: %s", args[i])
+		}
+		i++
+	}
+	approved, err := store.ApproveKnowledgeObjectWithReview(request)
+	if err != nil {
+		return fmt.Errorf("map approve: %w", err)
+	}
+	fmt.Fprintf(os.Stdout, "Подтверждено: %s %s %s->%s evidence=%d review=%d digest=%s\n",
+		approved.ObjectType, approved.ID, approved.PreviousStatus, approved.Status,
+		len(approved.Evidence), approved.Review.ID, approved.EvidenceDigest)
+	return nil
+}
+
+func handleMapApproveBatch(store *Store, args []string) error {
+	if len(args) != 1 {
+		return errors.New("использование: mem map approve-batch <manifest.json>")
+	}
+	file, err := os.Open(args[0])
+	if err != nil {
+		return fmt.Errorf("map approve-batch: read manifest: %w", err)
+	}
+	defer file.Close()
+	data, err := io.ReadAll(io.LimitReader(file, (1<<20)+1))
+	if err != nil {
+		return fmt.Errorf("map approve-batch: read manifest: %w", err)
+	}
+	if len(data) > 1<<20 {
+		return errors.New("map approve-batch: manifest exceeds 1 MiB")
+	}
+	var manifest mem.KnowledgeApprovalManifest
+	decoder := json.NewDecoder(bytes.NewReader(data))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&manifest); err != nil {
+		return fmt.Errorf("map approve-batch: decode manifest: %w", err)
+	}
+	if err := ensureJSONEOF(decoder); err != nil {
+		return fmt.Errorf("map approve-batch: decode manifest: %w", err)
+	}
+	requests := make([]mem.KnowledgeApprovalRequest, 0, len(manifest.Objects))
+	for _, object := range manifest.Objects {
+		comment := object.Comment
+		if comment == "" {
+			comment = manifest.Comment
+		}
+		requests = append(requests, mem.KnowledgeApprovalRequest{
+			ObjectType: object.ObjectType, ID: object.ID, Reviewer: manifest.Reviewer,
+			Comment: comment, ExpectedEvidenceDigest: object.ExpectedEvidenceDigest,
+		})
+	}
+	result, err := store.ApproveKnowledgeObjects(requests)
+	if err != nil {
+		return fmt.Errorf("map approve-batch: %w", err)
+	}
+	fmt.Fprintf(os.Stdout, "Пакет подтверждён: objects=%d reviewer=%s\n", len(result.Approved), strings.TrimSpace(manifest.Reviewer))
+	for _, approved := range result.Approved {
+		fmt.Fprintf(os.Stdout, "- %s %s review=%d digest=%s\n", approved.ObjectType, approved.ID, approved.Review.ID, approved.EvidenceDigest)
+	}
+	return nil
+}
+
+func ensureJSONEOF(decoder *json.Decoder) error {
+	var extra any
+	if err := decoder.Decode(&extra); err != io.EOF {
+		if err == nil {
+			return errors.New("expected one JSON object")
+		}
+		return err
+	}
+	return nil
+}
+
+func handleMapReviews(store *Store, args []string) error {
+	jsonOutput, limit := false, 100
+	for i := 0; i < len(args); i++ {
+		switch args[i] {
+		case "--json":
+			jsonOutput = true
+		case "-limit":
+			if i+1 >= len(args) {
+				return errors.New("использование: mem map reviews [--json] [-limit N]")
+			}
+			i++
+			parsed, err := strconv.Atoi(args[i])
+			if err != nil || parsed < 1 || parsed > 1000 {
+				return errors.New("map reviews: -limit должен быть от 1 до 1000")
+			}
+			limit = parsed
+		default:
+			return fmt.Errorf("неизвестный аргумент map reviews: %s", args[i])
+		}
+	}
+	reviews, err := store.ListKnowledgeReviews(limit)
+	if err != nil {
+		return fmt.Errorf("map reviews: %w", err)
+	}
+	if jsonOutput {
+		encoded, err := json.MarshalIndent(reviews, "", "  ")
+		if err != nil {
+			return fmt.Errorf("map reviews: encode report: %w", err)
+		}
+		fmt.Fprintln(os.Stdout, string(encoded))
+		return nil
+	}
+	fmt.Fprintf(os.Stdout, "Review history: records=%d limit=%d\n", len(reviews), limit)
+	for _, review := range reviews {
+		fmt.Fprintf(os.Stdout, "- #%d %s %s %s->%s reviewer=%s created=%s\n",
+			review.ID, review.ObjectType, review.ObjectID, review.PreviousStatus,
+			review.NewStatus, review.Reviewer, review.Created)
+		if review.Comment != "" {
+			fmt.Fprintf(os.Stdout, "  comment %s\n", strings.Join(strings.Fields(review.Comment), " "))
+		}
+		fmt.Fprintf(os.Stdout, "  digest %s\n", review.EvidenceDigest)
+	}
+	return nil
+}
+
+func handleMapAnalyze(cfg *Config, store *Store, args []string) error {
+	focusParts := make([]string, 0, len(args))
+	contextBudget := cfg.Answer.WithDefaults().ContextChars
+	for i := 0; i < len(args); i++ {
+		if args[i] != "-context-chars" {
+			if strings.HasPrefix(args[i], "-") {
+				return fmt.Errorf("неизвестный аргумент map analyze: %s", args[i])
+			}
+			focusParts = append(focusParts, args[i])
+			continue
+		}
+		if i+1 >= len(args) {
+			return errors.New("использование: mem map analyze <фокус> [-context-chars N]")
+		}
+		i++
+		parsed, err := strconv.Atoi(args[i])
+		if err != nil || parsed < 1 || parsed > mem.MaxAnswerContextChars {
+			return fmt.Errorf("-context-chars должен быть от 1 до %d", mem.MaxAnswerContextChars)
+		}
+		contextBudget = parsed
+	}
+	if len(focusParts) == 0 {
+		return errors.New("укажи фокус междокументного анализа\nПример: mem map analyze \"требования к давлению\"")
+	}
+	focus := strings.Join(focusParts, " ")
+	prompt, err := store.BuildCorpusAnalysisPrompt(focus, contextBudget)
+	if err != nil {
+		return fmt.Errorf("map analyze: %w", err)
+	}
+	if prompt.SkippedNonCurrent > 0 {
+		fmt.Fprintf(os.Stderr, "[MAP ANALYZE] пропущено active claims с stale/missing evidence: %d\n", prompt.SkippedNonCurrent)
+	}
+	if len(prompt.Claims) < 2 || prompt.DocumentCount < 2 {
+		fmt.Fprintf(os.Stdout, "Недостаточно подтверждённых данных: нужны минимум два active claim с current evidence из разных документов (eligible=%d selected=%d documents=%d).\n",
+			prompt.EligibleClaims, len(prompt.Claims), prompt.DocumentCount)
+		return nil
+	}
+	answerCfg := cfg.Answer.WithDefaults()
+	provider, err := newAnswerProvider(answerCfg)
+	if err != nil {
+		return err
+	}
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
+	defer stop()
+	ctx, cancel := mem.AnswerContext(ctx, answerCfg)
+	defer cancel()
+	fmt.Fprintf(os.Stderr, "[MAP ANALYZE] active claims=%d documents=%d; analysis через %s...\n",
+		len(prompt.Claims), prompt.DocumentCount, answerCfg.Model)
+	raw, err := provider.Generate(ctx, mem.AnswerRequest{
+		Model: answerCfg.Model, System: prompt.System, Prompt: prompt.User,
+		MaxTokens: answerCfg.MaxTokens, Temperature: answerCfg.Temperature,
+	})
+	if err != nil {
+		return fmt.Errorf("map analyze: %w", err)
+	}
+	analyzed, err := mem.DecodeCorpusAnalysis(raw, prompt.Claims)
+	if err != nil {
+		return fmt.Errorf("map analyze rejected: %w", err)
+	}
+	if analyzed.Insufficient {
+		fmt.Fprintf(os.Stdout, "Недостаточно подтверждённых данных: %s\n", analyzed.Reason)
+		return nil
+	}
+	if err := store.UpsertCorpusAnalysisGraph(analyzed.Graph); err != nil {
+		return fmt.Errorf("map analyze persistence: %w", err)
+	}
+	fmt.Fprintf(os.Stdout, "Междокументный анализ сохранён как draft: findings=%d relations=%d claims=%d documents=%d\n",
+		len(analyzed.Graph.Nodes), len(analyzed.Graph.Edges), len(prompt.Claims), prompt.DocumentCount)
+	return nil
+}
+
+func handleMapBuild(cfg *Config, store *Store, args []string) error {
+	searchArgs, contextOverride, err := parseAskArgs(args)
+	if err != nil {
+		return err
+	}
+	positional, _, tags, limit, from, to, minScore, vectorOnly, _, tagFilter := parseFlags(searchArgs)
+	if len(positional) == 0 {
+		return errors.New("укажи фокус карты\nПример: mem map build \"архитектура импорта\" -limit 10")
+	}
+	focus := strings.Join(positional, " ")
+	answerCfg := cfg.Answer.WithDefaults()
+
+	fmt.Fprintln(os.Stderr, "[MAP] retrieval: строю embedding и ищу versioned evidence...")
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
+	defer stop()
+	ctx, cancel := mem.AnswerContext(ctx, answerCfg)
+	defer cancel()
+	queryVector, err := getEmbeddingContext(ctx, cfg, focus)
+	if err != nil {
+		return fmt.Errorf("map retrieval: %w", err)
+	}
+	results, err := store.SearchWithOptions(mem.SearchOptions{
+		Query: focus, QueryVector: queryVector, Backend: cfg.Backend,
+		Tags: tags, TagFilter: tagFilter, From: from, To: to, VectorOnly: vectorOnly,
+	})
+	if err != nil {
+		return fmt.Errorf("map retrieval: %w", err)
+	}
+	if len(results) > 0 {
+		reRankResults(results, focus)
+		sortSearchResults(results)
+	}
+	if minScore > 0 {
+		filtered := results[:0]
+		for _, result := range results {
+			if result.Score >= minScore {
+				filtered = append(filtered, result)
+			}
+		}
+		results = filtered
+	}
+	if limit > len(results) {
+		limit = len(results)
+	}
+	results = results[:limit]
+	if len(results) == 0 {
+		fmt.Fprintln(os.Stdout, "Недостаточно подтверждённых данных: поиск не вернул подходящих фрагментов.")
+		return nil
+	}
+
+	contextBudget := answerCfg.ContextChars
+	if contextOverride > 0 {
+		contextBudget = contextOverride
+	}
+	prompt, err := mem.BuildKnowledgeExtractionPrompt(focus, results, contextBudget, cfg.Ingest.LowConfidence)
+	if err != nil {
+		return err
+	}
+	if len(prompt.Evidence) == 0 {
+		fmt.Fprintln(os.Stdout, "Недостаточно подтверждённых данных: среди результатов нет versioned document evidence, помещающегося в context budget.")
+		return nil
+	}
+	for _, evidence := range prompt.Evidence {
+		for _, warning := range evidence.Warnings {
+			fmt.Fprintf(os.Stderr, "[MAP] warning %s: %s\n", evidence.CitationID, warning)
+		}
+	}
+	provider, err := newAnswerProvider(answerCfg)
+	if err != nil {
+		return err
+	}
+	fmt.Fprintf(os.Stderr, "[MAP] evidence: %d фрагм.; extraction через %s...\n", len(prompt.Evidence), answerCfg.Model)
+	raw, err := provider.Generate(ctx, mem.AnswerRequest{
+		Model: answerCfg.Model, System: prompt.System, Prompt: prompt.User,
+		MaxTokens: answerCfg.MaxTokens, Temperature: answerCfg.Temperature,
+	})
+	if err != nil {
+		return fmt.Errorf("map extraction: %w", err)
+	}
+	extracted, err := mem.DecodeKnowledgeExtraction(raw, prompt.Evidence)
+	if err != nil {
+		return fmt.Errorf("map extraction rejected: %w", err)
+	}
+	if extracted.Insufficient {
+		fmt.Fprintf(os.Stdout, "Недостаточно подтверждённых данных: %s\n", extracted.Reason)
+		return nil
+	}
+	if err := store.UpsertCurrentKnowledgeGraph(extracted.Graph); err != nil {
+		return fmt.Errorf("map persistence: %w", err)
+	}
+	fmt.Fprintf(os.Stdout, "Карта обновлена: nodes=%d edges=%d evidence=%d\n",
+		len(extracted.Graph.Nodes), len(extracted.Graph.Edges), len(prompt.Evidence))
+	return nil
+}
+
 func sourceReference(entry Entry) string {
 	_, ref := mem.CitationForEntry(entry)
 	return ref
@@ -713,7 +1232,7 @@ func handleAddFile(cfg *Config, store *Store, args []string) error {
 			Text: chunk.Text, Title: chunkTitle, Tags: tags, Backend: cfg.Backend,
 			Embedding: embeddings[i], ChunkLabel: chunk.Label,
 			ChunkIndex: chunk.Index, TotalChunks: len(chunks), Important: important,
-			Provenance: mem.Provenance{SourcePath: sourcePath},
+			Provenance: mem.Provenance{SourcePath: sourcePath, OCRConfidence: -1},
 		}
 	}
 	if err := store.ReplaceDocumentChunks(sourcePath, storedChunks); err != nil {
@@ -768,6 +1287,7 @@ func handleImport(cfg *Config, store *Store, args []string) error {
 	fmt.Printf("[OK] Документ импортирован: %s\n", result.SourcePath)
 	fmt.Printf("     document=%s | blocks=%d | chunks=%d | %s\n",
 		result.DocumentID, result.Blocks, result.Chunks, pageSummary)
+	fmt.Printf("     revision=%s\n", result.DocumentRevision)
 	for _, warning := range result.Warnings {
 		fmt.Printf("[WARN] %s\n", warning)
 	}
@@ -1188,6 +1708,39 @@ func printUsage() {
       rule / decision / bug / best-practice). Отличается от -tags (любой из списка).
       Текст каждой записи выводится полностью (без обрезки).
 
+  mem ask <вопрос> [-limit N] [-tags "тег1,тег2"] [-tag "категория"] [-from 2026-01-01] [-to 2026-07-01] [-min-score 0.5] [-vector-only] [-context-chars N]
+      Сформировать локальный ответ только по найденным evidence-фрагментам.
+      Каждый тезис требует точного citation ID; статусы идут в stderr,
+      проверенный ответ и источники — в stdout. mem search не меняется.
+
+  mem map build <фокус> [-limit N] [-tags "тег1,тег2"] [-tag "категория"] [-from 2026-01-01] [-to 2026-07-01] [-min-score 0.5] [-vector-only] [-context-chars N]
+      Извлечь типизированные узлы и связи только из versioned document evidence.
+      Citation, координаты, ревизии, хеши и постоянные ID назначаются самим mem;
+      невалидный ответ модели отклоняется целиком без частичной записи.
+
+  mem map analyze <фокус> [-context-chars N]
+      Сравнить active claim с current evidence из разных документов и предложить
+      draft-узлы contradiction/gap. Endpoints, anchors и связи назначает mem;
+      при смене evidence во время анализа результат не сохраняется.
+
+  mem map status [--json]
+      Показать draft/active/resolved, состояние current/stale/missing для каждого
+      evidence anchor и очередь объектов, готовых к подтверждению.
+
+  mem map approve <node|edge> <id> --reviewer <имя> [--comment <текст>] [--evidence-digest <sha256>]
+      Подтвердить один draft-объект и записать автора/комментарий в append-only
+      журнал. Все evidence должны оставаться current; digest можно закрепить.
+
+  mem map approve-batch <manifest.json>
+      Атомарно подтвердить явный пакет объектов. Каждый объект обязан содержать
+      expected_evidence_digest из map status --json; частичный успех невозможен.
+
+  mem map reviews [--json] [-limit N]
+      Показать локальный журнал review-решений, новые записи первыми.
+
+  mem map export
+      Вывести сохранённый граф знаний в JSON (stdout).
+
   mem recent [-limit N]
       Показать последние записи
 
@@ -1246,6 +1799,21 @@ func printUsage() {
   mem config set-ollama-model <model>
       Установить модель Ollama (по умолч. bge-m3)
 
+  mem config set-answer-model <model>
+      Установить отдельную локальную chat/instruct модель для mem ask
+
+  mem config set-answer-base-url <url>
+      Установить loopback URL Ollama для mem ask
+
+  mem config set-answer-timeout <секунды>
+      Таймаут retrieval и генерации ответа
+
+  mem config set-answer-max-tokens <число>
+      Максимум токенов ответа
+
+  mem config set-answer-context-chars <число>
+      Бюджет сериализованного evidence-контекста
+
   mem stats
       Статистика базы
 
@@ -1278,6 +1846,14 @@ func printUsage() {
   mem --global search "архитектура" -tag best-practice
   mem search "архитектура" -from 2026-07-01 -to 2026-07-26
   mem search "сервер" -min-score 0.5 -vector-only
+  mem ask "каков порядок запуска?" -limit 5
+  mem map build "архитектура импорта" -limit 10
+  mem map analyze "требования к рабочему давлению"
+  mem map status
+  mem map approve node kn-0123456789abcdef0123456789abcdef --reviewer "Руслан"
+  mem map approve-batch review-manifest.json
+  mem map reviews --json
+  mem map export
   mem show 50                            # одна запись целиком
   mem show --from-file docs/arch.md      # все чанки документа
   mem add-file ./документация.txt
@@ -1351,13 +1927,69 @@ func handleConfig(args []string) error {
 		cfg.Ollama.Model = args[1]
 		return saveConfig(cfg)
 
+	case "set-answer-model":
+		if len(args) < 2 || strings.TrimSpace(args[1]) == "" {
+			return fmt.Errorf("использование: mem config set-answer-model <model_name>")
+		}
+		candidate := cfg.Answer
+		candidate.Model = strings.TrimSpace(args[1])
+		if _, err := mem.NewOllamaAnswerProvider(candidate); err != nil {
+			return err
+		}
+		cfg.Answer.Model = candidate.Model
+		return saveConfig(cfg)
+
+	case "set-answer-base-url":
+		if len(args) < 2 {
+			return fmt.Errorf("использование: mem config set-answer-base-url <local-url>")
+		}
+		baseURL, err := mem.NormalizeLocalAnswerBaseURL(args[1])
+		if err != nil {
+			return err
+		}
+		cfg.Answer.BaseURL = baseURL
+		return saveConfig(cfg)
+
+	case "set-answer-timeout":
+		if len(args) < 2 {
+			return fmt.Errorf("использование: mem config set-answer-timeout <секунды>")
+		}
+		n, err := strconv.Atoi(args[1])
+		if err != nil || n <= 0 || n > mem.MaxAnswerTimeoutSeconds {
+			return fmt.Errorf("таймаут ответа должен быть от 1 до %d секунд", mem.MaxAnswerTimeoutSeconds)
+		}
+		cfg.Answer.TimeoutSeconds = n
+		return saveConfig(cfg)
+
+	case "set-answer-max-tokens":
+		if len(args) < 2 {
+			return fmt.Errorf("использование: mem config set-answer-max-tokens <число>")
+		}
+		n, err := strconv.Atoi(args[1])
+		if err != nil || n <= 0 || n > mem.MaxAnswerTokens {
+			return fmt.Errorf("максимум токенов ответа должен быть от 1 до %d", mem.MaxAnswerTokens)
+		}
+		cfg.Answer.MaxTokens = n
+		return saveConfig(cfg)
+
+	case "set-answer-context-chars":
+		if len(args) < 2 {
+			return fmt.Errorf("использование: mem config set-answer-context-chars <число>")
+		}
+		n, err := strconv.Atoi(args[1])
+		if err != nil || n <= 0 || n > mem.MaxAnswerContextChars {
+			return fmt.Errorf("бюджет evidence должен быть от 1 до %d символов", mem.MaxAnswerContextChars)
+		}
+		cfg.Answer.ContextChars = n
+		return saveConfig(cfg)
+
 	case "set-chunk-size":
 		if len(args) < 2 {
 			return fmt.Errorf("использование: mem config set-chunk-size <символов>")
 		}
 		n, err := strconv.Atoi(args[1])
-		if err != nil || n < 100 || n > 10000 {
-			return fmt.Errorf("размер чанка должен быть от 100 до 10000")
+		if err != nil || n < 100 || n > mem.MaxEmbeddingChars {
+			return fmt.Errorf("размер чанка должен быть от 100 до %d", mem.MaxEmbeddingChars)
 		}
 		cfg.Chunking.MaxSize = n
 		return saveConfig(cfg)

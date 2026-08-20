@@ -68,7 +68,7 @@ func TestHandleAskKeepsStatusOnStderrAndVerifiedAnswerOnStdout(t *testing.T) {
 	fake := &fakeAnswerProvider{answer: `{"claims":[{"text":"Ответ подтверждён","citations":["` + citationID + `"]}]}`}
 	cfg := testCLIConfig(1500, "paragraph")
 	cfg.Answer.Model = "fake-chat"
-	cfg.Answer.ContextChars = 1000
+	cfg.Answer.ContextChars = 5000
 	originalEmbedding := getEmbeddingContext
 	originalProvider := newAnswerProvider
 	defer func() { getEmbeddingContext = originalEmbedding; newAnswerProvider = originalProvider }()

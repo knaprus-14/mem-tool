@@ -65,7 +65,7 @@ func TestHandleAskKeepsStatusOnStderrAndVerifiedAnswerOnStdout(t *testing.T) {
 		t.Fatal(err)
 	}
 	citationID, _ := mem.CitationForEntry(*entry)
-	fake := &fakeAnswerProvider{answer: "Ответ подтверждён [" + citationID + "]"}
+	fake := &fakeAnswerProvider{answer: `{"claims":[{"text":"Ответ подтверждён","citations":["` + citationID + `"]}]}`}
 	cfg := testCLIConfig(1500, "paragraph")
 	cfg.Answer.Model = "fake-chat"
 	cfg.Answer.ContextChars = 1000
@@ -85,6 +85,30 @@ func TestHandleAskKeepsStatusOnStderrAndVerifiedAnswerOnStdout(t *testing.T) {
 	}
 	if !strings.Contains(stderr, "[ASK] retrieval") || !strings.Contains(stderr, "[ASK] evidence") || fake.calls != 1 {
 		t.Fatalf("stderr/provider status contract failed: stderr=%q calls=%d", stderr, fake.calls)
+	}
+}
+
+func TestHandleConfigRejectsRemoteAnswerURLBeforeSave(t *testing.T) {
+	originalLoadConfig, originalSaveConfig := loadConfig, saveConfig
+	defer func() { loadConfig, saveConfig = originalLoadConfig, originalSaveConfig }()
+	cfg := mem.DefaultLocalConfig()
+	saved := false
+	loadConfig = func() (*Config, error) { return cfg, nil }
+	saveConfig = func(*Config) error {
+		saved = true
+		return nil
+	}
+	if err := handleConfig([]string{"set-answer-base-url", "https://example.com"}); err == nil {
+		t.Fatal("remote answer URL was accepted")
+	}
+	if saved {
+		t.Fatal("remote answer URL was persisted")
+	}
+	if err := handleConfig([]string{"set-answer-base-url", "http://127.0.0.1:11434/"}); err != nil {
+		t.Fatalf("loopback answer URL was rejected: %v", err)
+	}
+	if !saved || cfg.Answer.BaseURL != "http://127.0.0.1:11434" {
+		t.Fatalf("loopback URL was not normalized/persisted: saved=%v cfg=%#v", saved, cfg.Answer)
 	}
 }
 

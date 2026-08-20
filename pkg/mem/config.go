@@ -24,11 +24,29 @@ type ChunkConfig struct {
 	Strategy string `json:"chunk_strategy"` // "paragraph", "sentence", "fixed"
 }
 
+// IngestConfig contains project-local paths and OCR settings. Empty tool paths
+// fall back to MEM_* environment variables, PATH, and standard Windows installs.
+type IngestConfig struct {
+	PDFToText     string  `json:"pdftotext,omitempty"`
+	MuTool        string  `json:"mutool,omitempty"`
+	PDFInfo       string  `json:"pdfinfo,omitempty"`
+	PDFToPPM      string  `json:"pdftoppm,omitempty"`
+	DjVuText      string  `json:"djvutxt,omitempty"`
+	DjVuUsed      string  `json:"djvused,omitempty"`
+	DjVuRender    string  `json:"ddjvu,omitempty"`
+	Tesseract     string  `json:"tesseract,omitempty"`
+	TessdataDir   string  `json:"tessdata_dir,omitempty"`
+	OCRLanguages  string  `json:"ocr_languages,omitempty"`
+	OCRDPI        int     `json:"ocr_dpi,omitempty"`
+	LowConfidence float64 `json:"ocr_low_confidence,omitempty"`
+}
+
 type Config struct {
 	Backend  string       `json:"backend"` // "ollama" or "polza"
 	Ollama   OllamaConfig `json:"ollama"`
 	Polza    PolzaConfig  `json:"polza"`
 	Chunking ChunkConfig  `json:"chunking"`
+	Ingest   IngestConfig `json:"ingest,omitempty"`
 }
 
 // DefaultConfig возвращает дефолтный конфиг (алиас для DefaultLocalConfig)

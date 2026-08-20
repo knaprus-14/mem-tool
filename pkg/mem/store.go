@@ -18,20 +18,59 @@ import (
 
 // Entry — одна запись в базе памяти
 type Entry struct {
-	ID          int64     `json:"id"`
-	Title       string    `json:"title,omitempty"`
-	Text        string    `json:"text"`
-	Tags        []string  `json:"tags,omitempty"`
-	Created     string    `json:"created"`
-	Backend     string    `json:"backend"`
-	Dims        int       `json:"dims"`
-	Embedding   []float32 `json:"-"`
-	Score       float64   `json:"-"` // для результатов поиска
-	SourceFile  string    `json:"source_file,omitempty"`
-	ChunkLabel  string    `json:"chunk_label,omitempty"`
-	ChunkIndex  int       `json:"chunk_index,omitempty"`
-	TotalChunks int       `json:"total_chunks,omitempty"`
-	Important   bool      `json:"important,omitempty"`
+	ID               int64     `json:"id"`
+	Title            string    `json:"title,omitempty"`
+	Text             string    `json:"text"`
+	Tags             []string  `json:"tags,omitempty"`
+	Created          string    `json:"created"`
+	Backend          string    `json:"backend"`
+	Dims             int       `json:"dims"`
+	Embedding        []float32 `json:"-"`
+	Score            float64   `json:"-"` // для результатов поиска
+	SourceFile       string    `json:"source_file,omitempty"`
+	ChunkLabel       string    `json:"chunk_label,omitempty"`
+	ChunkIndex       int       `json:"chunk_index,omitempty"`
+	TotalChunks      int       `json:"total_chunks,omitempty"`
+	DocumentID       string    `json:"document_id,omitempty"`
+	SourcePath       string    `json:"source_path,omitempty"`
+	MediaType        string    `json:"media_type,omitempty"`
+	Page             int       `json:"page,omitempty"`
+	BlockIndex       int       `json:"block_index,omitempty"`
+	BlockMarker      string    `json:"block_marker,omitempty"`
+	ExtractionMethod string    `json:"extraction_method,omitempty"`
+	OCRConfidence    float64   `json:"ocr_confidence,omitempty"`
+	Warnings         []string  `json:"warnings,omitempty"`
+	Important        bool      `json:"important,omitempty"`
+}
+
+// Provenance identifies an imported document and the source block from which
+// a stored chunk was derived. Page is zero when the extractor cannot know it.
+type Provenance struct {
+	DocumentID       string
+	SourcePath       string
+	MediaType        string
+	Page             int
+	BlockIndex       int
+	BlockMarker      string
+	ExtractionMethod string
+	OCRConfidence    float64
+	Warnings         []string
+}
+
+// DocumentChunk is one fully embedded chunk prepared for an atomic document
+// replacement. All chunks passed to ReplaceDocumentChunks are committed or
+// rolled back together.
+type DocumentChunk struct {
+	Text        string
+	Title       string
+	Tags        []string
+	Backend     string
+	Embedding   []float32
+	ChunkLabel  string
+	ChunkIndex  int
+	TotalChunks int
+	Important   bool
+	Provenance  Provenance
 }
 
 // Store — потокобезопасное хранилище векторов на базе SQLite
@@ -57,6 +96,15 @@ CREATE TABLE IF NOT EXISTS entries (
     chunk_label TEXT NOT NULL DEFAULT '',
     chunk_index INTEGER NOT NULL DEFAULT 0,
     total_chunks INTEGER NOT NULL DEFAULT 0,
+    document_id TEXT NOT NULL DEFAULT '',
+    source_path TEXT NOT NULL DEFAULT '',
+    media_type TEXT NOT NULL DEFAULT '',
+    page INTEGER NOT NULL DEFAULT 0,
+    block_index INTEGER NOT NULL DEFAULT 0,
+    block_marker TEXT NOT NULL DEFAULT '',
+	 extraction_method TEXT NOT NULL DEFAULT '',
+	 ocr_confidence REAL NOT NULL DEFAULT -1,
+	 warnings TEXT NOT NULL DEFAULT '[]',
     important INTEGER NOT NULL DEFAULT 0
 );
 
@@ -68,6 +116,34 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_source_chunk
 
 CREATE INDEX IF NOT EXISTS idx_backend ON entries(backend);
 `
+
+const upsertChunkSQL = `INSERT INTO entries
+		(title, text, tags, created, backend, dims, embedding,
+		 source_file, chunk_label, chunk_index, total_chunks,
+		 document_id, source_path, media_type, page, block_index, block_marker,
+		 extraction_method, ocr_confidence, warnings, important)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		ON CONFLICT(source_file, chunk_index) WHERE source_file != ''
+		DO UPDATE SET
+			text = excluded.text,
+			title = excluded.title,
+			tags = excluded.tags,
+			embedding = excluded.embedding,
+			dims = excluded.dims,
+			chunk_label = excluded.chunk_label,
+			total_chunks = excluded.total_chunks,
+			document_id = excluded.document_id,
+			source_path = excluded.source_path,
+			media_type = excluded.media_type,
+			page = excluded.page,
+			block_index = excluded.block_index,
+			block_marker = excluded.block_marker,
+			extraction_method = excluded.extraction_method,
+			ocr_confidence = excluded.ocr_confidence,
+			warnings = excluded.warnings,
+			important = excluded.important,
+			created = excluded.created,
+			backend = excluded.backend`
 
 // newStore открывает (или создаёт) SQLite-базу в указанной директории
 func NewStore(dir string) (*Store, error) {
@@ -108,6 +184,10 @@ func initSchema(db *sql.DB) error {
 		_ = tx.Rollback()
 		return err
 	}
+	if err := migrateEntryProvenance(tx); err != nil {
+		_ = tx.Rollback()
+		return err
+	}
 	if err := tx.Commit(); err != nil {
 		// Commit может упасть, если другая горутина уже создала схему —
 		// это нормально для CREATE TABLE IF NOT EXISTS, просто проглатываем.
@@ -119,11 +199,69 @@ func initSchema(db *sql.DB) error {
 		if _, err := db.Exec(storeSchema); err != nil {
 			return err
 		}
+		if err := migrateEntryProvenanceDB(db); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+type schemaQuerier interface {
+	Query(string, ...any) (*sql.Rows, error)
+	Exec(string, ...any) (sql.Result, error)
+}
+
+func migrateEntryProvenance(tx *sql.Tx) error   { return ensureEntryProvenanceColumns(tx) }
+func migrateEntryProvenanceDB(db *sql.DB) error { return ensureEntryProvenanceColumns(db) }
+
+// ensureEntryProvenanceColumns makes existing Stage 1 databases readable by
+// adding nullable-by-default metadata columns in place. Existing rows retain
+// their original source_file/chunk metadata unchanged.
+func ensureEntryProvenanceColumns(q schemaQuerier) error {
+	rows, err := q.Query(`PRAGMA table_info(entries)`)
+	if err != nil {
+		return fmt.Errorf("inspect entries schema: %w", err)
+	}
+	existing := make(map[string]bool)
+	for rows.Next() {
+		var cid, notNull, primaryKey int
+		var name, columnType string
+		var defaultValue any
+		if err := rows.Scan(&cid, &name, &columnType, &notNull, &defaultValue, &primaryKey); err != nil {
+			rows.Close()
+			return fmt.Errorf("read entries schema: %w", err)
+		}
+		existing[name] = true
+	}
+	if err := rows.Close(); err != nil {
+		return err
+	}
+
+	columns := []struct{ name, definition string }{
+		{"document_id", "TEXT NOT NULL DEFAULT ''"},
+		{"source_path", "TEXT NOT NULL DEFAULT ''"},
+		{"media_type", "TEXT NOT NULL DEFAULT ''"},
+		{"page", "INTEGER NOT NULL DEFAULT 0"},
+		{"block_index", "INTEGER NOT NULL DEFAULT 0"},
+		{"block_marker", "TEXT NOT NULL DEFAULT ''"},
+		{"extraction_method", "TEXT NOT NULL DEFAULT ''"},
+		{"ocr_confidence", "REAL NOT NULL DEFAULT -1"},
+		{"warnings", "TEXT NOT NULL DEFAULT '[]'"},
+	}
+	for _, column := range columns {
+		if existing[column.name] {
+			continue
+		}
+		statement := fmt.Sprintf("ALTER TABLE entries ADD COLUMN %s %s", column.name, column.definition)
+		if _, err := q.Exec(statement); err != nil {
+			return fmt.Errorf("add entries.%s: %w", column.name, err)
+		}
 	}
 	return nil
 }
 
 // Close закрывает соединение с БД. Должен вызываться через defer сразу после NewStore:
+//
 //	defer store, err := mem.NewStore(...)
 //	if err != nil { ... }
 //	defer store.Close()
@@ -136,7 +274,9 @@ func (s *Store) Close() error {
 // через возвращаемый wrapped error), чтобы битый row не сломал загрузку всей базы.
 func (s *Store) loadAll() error {
 	rows, err := s.db.Query(`SELECT id, title, text, tags, created, backend, dims, embedding,
-		source_file, chunk_label, chunk_index, total_chunks, important
+		source_file, chunk_label, chunk_index, total_chunks,
+		document_id, source_path, media_type, page, block_index, block_marker,
+		extraction_method, ocr_confidence, warnings, important
 		FROM entries ORDER BY id`)
 	if err != nil {
 		return err
@@ -146,12 +286,15 @@ func (s *Store) loadAll() error {
 	for rows.Next() {
 		var e Entry
 		var tagsJSON string
+		var warningsJSON string
 		var embBytes []byte
 		var important int
 
 		if err := rows.Scan(&e.ID, &e.Title, &e.Text, &tagsJSON, &e.Created, &e.Backend,
 			&e.Dims, &embBytes, &e.SourceFile, &e.ChunkLabel, &e.ChunkIndex,
-			&e.TotalChunks, &important); err != nil {
+			&e.TotalChunks, &e.DocumentID, &e.SourcePath, &e.MediaType, &e.Page,
+			&e.BlockIndex, &e.BlockMarker, &e.ExtractionMethod, &e.OCRConfidence,
+			&warningsJSON, &important); err != nil {
 			return err
 		}
 
@@ -164,6 +307,9 @@ func (s *Store) loadAll() error {
 			return fmt.Errorf("запись #%d: %w", e.ID, err)
 		}
 		e.Tags = tags
+		if err := json.Unmarshal([]byte(warningsJSON), &e.Warnings); err != nil {
+			return fmt.Errorf("запись #%d: повреждены warnings: %w", e.ID, err)
+		}
 		e.Embedding = embedding
 		e.Important = important != 0
 
@@ -239,6 +385,13 @@ func boolToInt(b bool) int {
 	return 0
 }
 
+func cloneEntry(entry Entry) Entry {
+	entry.Tags = append([]string(nil), entry.Tags...)
+	entry.Embedding = append([]float32(nil), entry.Embedding...)
+	entry.Warnings = append([]string(nil), entry.Warnings...)
+	return entry
+}
+
 // === CRUD ===
 
 // Add добавляет ручную запись (без source_file, без дедупликации)
@@ -281,7 +434,8 @@ func (s *Store) Add(text string, title string, tags []string, backend string, em
 	}
 	s.entries = append(s.entries, entry)
 	s.vectors = append(s.vectors, embCopy)
-	return &entry, nil
+	result := cloneEntry(entry)
+	return &result, nil
 }
 
 // AddChunk добавляет чанк документа с дедупликацией по (source_file, chunk_index):
@@ -290,6 +444,24 @@ func (s *Store) Add(text string, title string, tags []string, backend string, em
 //   - если такого чанка нет → вставляет
 func (s *Store) AddChunk(text string, title string, tags []string, backend string, embedding []float32,
 	sourceFile, chunkLabel string, chunkIndex, totalChunks int, important bool) (*Entry, error) {
+	return s.addChunk(text, title, tags, backend, embedding, sourceFile, chunkLabel,
+		chunkIndex, totalChunks, important, Provenance{SourcePath: sourceFile})
+}
+
+// AddDocumentChunk stores an imported chunk together with page/block
+// provenance. SourcePath is also the canonical source identity used for safe
+// repeat-import UPSERT behavior.
+func (s *Store) AddDocumentChunk(text string, title string, tags []string, backend string, embedding []float32,
+	chunkLabel string, chunkIndex, totalChunks int, important bool, provenance Provenance) (*Entry, error) {
+	if provenance.SourcePath == "" {
+		return nil, fmt.Errorf("document chunk provenance has an empty source path")
+	}
+	return s.addChunk(text, title, tags, backend, embedding, provenance.SourcePath,
+		chunkLabel, chunkIndex, totalChunks, important, provenance)
+}
+
+func (s *Store) addChunk(text string, title string, tags []string, backend string, embedding []float32,
+	sourceFile, chunkLabel string, chunkIndex, totalChunks int, important bool, provenance Provenance) (*Entry, error) {
 
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -307,43 +479,32 @@ func (s *Store) AddChunk(text string, title string, tags []string, backend strin
 	if err != nil {
 		return nil, fmt.Errorf("сериализация тегов: %w", err)
 	}
+	warningsCopy := append([]string(nil), provenance.Warnings...)
+	warningsBytes, err := json.Marshal(warningsCopy)
+	if err != nil {
+		return nil, fmt.Errorf("сериализация warnings: %w", err)
+	}
 	impInt := boolToInt(important)
 
 	// Пытаемся вставить; если конфликт по (source_file, chunk_index) — обновляем
-	res, err := s.db.Exec(`INSERT INTO entries
-		(title, text, tags, created, backend, dims, embedding,
-		 source_file, chunk_label, chunk_index, total_chunks, important)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-		ON CONFLICT(source_file, chunk_index) WHERE source_file != ''
-		DO UPDATE SET
-			text = excluded.text,
-			title = excluded.title,
-			tags = excluded.tags,
-			embedding = excluded.embedding,
-			dims = excluded.dims,
-			chunk_label = excluded.chunk_label,
-			total_chunks = excluded.total_chunks,
-			important = excluded.important,
-			created = excluded.created,
-			backend = excluded.backend`,
+	_, err = s.db.Exec(upsertChunkSQL,
 		title, text, tagsStr, now, backend, len(embCopy), embBytes,
-		sourceFile, chunkLabel, chunkIndex, totalChunks, impInt)
+		sourceFile, chunkLabel, chunkIndex, totalChunks,
+		provenance.DocumentID, provenance.SourcePath, provenance.MediaType,
+		provenance.Page, provenance.BlockIndex, provenance.BlockMarker,
+		provenance.ExtractionMethod, provenance.OCRConfidence, string(warningsBytes), impInt)
 
 	if err != nil {
 		return nil, err
 	}
 
-	id, lastErr := res.LastInsertId()
-	if lastErr != nil {
-		return nil, fmt.Errorf("получение LastInsertId: %w", lastErr)
-	}
-	// LastInsertId() может вернуть 0 при UPDATE — тогда достаём ID через SELECT
-	if id == 0 {
-		err := s.db.QueryRow(`SELECT id FROM entries WHERE source_file = ? AND chunk_index = ?`,
-			sourceFile, chunkIndex).Scan(&id)
-		if err != nil {
-			return nil, err
-		}
+	// LastInsertId ненадёжен для UPSERT: при UPDATE SQLite может вернуть ID
+	// предыдущей вставки в соединении. Всегда читаем фактическую строку по
+	// уникальному ключу, иначе in-memory cache получает дубликат.
+	var id int64
+	if err := s.db.QueryRow(`SELECT id FROM entries WHERE source_file = ? AND chunk_index = ?`,
+		sourceFile, chunkIndex).Scan(&id); err != nil {
+		return nil, err
 	}
 
 	// Обновляем кэш в памяти
@@ -351,7 +512,13 @@ func (s *Store) AddChunk(text string, title string, tags []string, backend strin
 		ID: id, Title: title, Text: text, Tags: tagsCopy,
 		Created: now, Backend: backend, Dims: len(embCopy),
 		Embedding: embCopy, SourceFile: sourceFile, ChunkLabel: chunkLabel,
-		ChunkIndex: chunkIndex, TotalChunks: totalChunks, Important: important,
+		ChunkIndex: chunkIndex, TotalChunks: totalChunks,
+		DocumentID: provenance.DocumentID, SourcePath: provenance.SourcePath,
+		MediaType: provenance.MediaType, Page: provenance.Page,
+		BlockIndex: provenance.BlockIndex, BlockMarker: provenance.BlockMarker,
+		ExtractionMethod: provenance.ExtractionMethod, OCRConfidence: provenance.OCRConfidence,
+		Warnings:  warningsCopy,
+		Important: important,
 	}
 	cacheUpdated := false
 	for i := range s.entries {
@@ -366,7 +533,161 @@ func (s *Store) AddChunk(text string, title string, tags []string, backend strin
 		s.entries = append(s.entries, entry)
 		s.vectors = append(s.vectors, embCopy)
 	}
-	return &entry, nil
+	result := cloneEntry(entry)
+	return &result, nil
+}
+
+type preparedDocumentChunk struct {
+	entry         Entry
+	tagsJSON      string
+	embeddingBLOB []byte
+	warningsJSON  string
+}
+
+// ReplaceDocumentChunks atomically upserts a complete imported document and
+// removes any stale tail left by an earlier, longer version. The in-memory
+// cache changes only after the SQLite transaction commits.
+func (s *Store) ReplaceDocumentChunks(sourcePath string, chunks []DocumentChunk) error {
+	if sourcePath == "" {
+		return fmt.Errorf("document replacement has an empty source path")
+	}
+	if len(chunks) == 0 {
+		return fmt.Errorf("document replacement has no chunks")
+	}
+
+	now := time.Now().UTC().Format(time.RFC3339)
+	prepared := make([]preparedDocumentChunk, len(chunks))
+	for i, chunk := range chunks {
+		if chunk.ChunkIndex != i || chunk.TotalChunks != len(chunks) {
+			return fmt.Errorf("document chunk %d has inconsistent index/total %d/%d", i, chunk.ChunkIndex, chunk.TotalChunks)
+		}
+		if chunk.Provenance.SourcePath != sourcePath {
+			return fmt.Errorf("document chunk %d source path does not match replacement identity", i)
+		}
+		tagsCopy := append([]string(nil), chunk.Tags...)
+		embeddingCopy := append([]float32(nil), chunk.Embedding...)
+		warningsCopy := append([]string{}, chunk.Provenance.Warnings...)
+		tagsJSON, err := tagsToJSON(tagsCopy)
+		if err != nil {
+			return err
+		}
+		embeddingBLOB, err := floatsToBytes(embeddingCopy)
+		if err != nil {
+			return err
+		}
+		warningsBytes, err := json.Marshal(warningsCopy)
+		if err != nil {
+			return fmt.Errorf("serialize document chunk %d warnings: %w", i, err)
+		}
+		prepared[i] = preparedDocumentChunk{
+			entry: Entry{
+				Title: chunk.Title, Text: chunk.Text, Tags: tagsCopy, Created: now,
+				Backend: chunk.Backend, Dims: len(embeddingCopy), Embedding: embeddingCopy,
+				SourceFile: sourcePath, ChunkLabel: chunk.ChunkLabel,
+				ChunkIndex: chunk.ChunkIndex, TotalChunks: chunk.TotalChunks,
+				DocumentID: chunk.Provenance.DocumentID, SourcePath: chunk.Provenance.SourcePath,
+				MediaType: chunk.Provenance.MediaType, Page: chunk.Provenance.Page,
+				BlockIndex: chunk.Provenance.BlockIndex, BlockMarker: chunk.Provenance.BlockMarker,
+				ExtractionMethod: chunk.Provenance.ExtractionMethod,
+				OCRConfidence:    chunk.Provenance.OCRConfidence, Warnings: warningsCopy,
+				Important: chunk.Important,
+			},
+			tagsJSON: tagsJSON, embeddingBLOB: embeddingBLOB, warningsJSON: string(warningsBytes),
+		}
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	tx, err := s.db.Begin()
+	if err != nil {
+		return fmt.Errorf("begin document replacement: %w", err)
+	}
+	rollback := func(cause error) error {
+		if rollbackErr := tx.Rollback(); rollbackErr != nil && rollbackErr != sql.ErrTxDone {
+			return fmt.Errorf("%v; rollback failed: %w", cause, rollbackErr)
+		}
+		return cause
+	}
+
+	for i := range prepared {
+		p := &prepared[i]
+		e := &p.entry
+		_, err = tx.Exec(upsertChunkSQL,
+			e.Title, e.Text, p.tagsJSON, e.Created, e.Backend, e.Dims, p.embeddingBLOB,
+			e.SourceFile, e.ChunkLabel, e.ChunkIndex, e.TotalChunks,
+			e.DocumentID, e.SourcePath, e.MediaType, e.Page, e.BlockIndex, e.BlockMarker,
+			e.ExtractionMethod, e.OCRConfidence, p.warningsJSON, boolToInt(e.Important))
+		if err != nil {
+			return rollback(fmt.Errorf("write document chunk %d/%d: %w", i+1, len(prepared), err))
+		}
+		if err := tx.QueryRow(`SELECT id FROM entries WHERE source_file = ? AND chunk_index = ?`,
+			sourcePath, i).Scan(&e.ID); err != nil {
+			return rollback(fmt.Errorf("read document chunk %d id: %w", i+1, err))
+		}
+	}
+	if _, err := tx.Exec(`DELETE FROM entries WHERE source_file = ? AND chunk_index >= ?`, sourcePath, len(prepared)); err != nil {
+		return rollback(fmt.Errorf("prune stale document chunks: %w", err))
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit document replacement: %w", err)
+	}
+
+	entries := s.entries[:0]
+	vectors := s.vectors[:0]
+	for i := range s.entries {
+		if s.entries[i].SourceFile == sourcePath {
+			continue
+		}
+		entries = append(entries, s.entries[i])
+		vectors = append(vectors, s.vectors[i])
+	}
+	for i := range prepared {
+		entries = append(entries, prepared[i].entry)
+		vectors = append(vectors, prepared[i].entry.Embedding)
+	}
+	s.entries = entries
+	s.vectors = vectors
+	return nil
+}
+
+// PruneSourceChunks удаляет устаревшие хвостовые чанки документа после
+// успешной повторной индексации более короткой версии. Ручные записи и чанки
+// других источников не затрагиваются.
+func (s *Store) PruneSourceChunks(sourceFile string, firstStaleIndex int) (int64, error) {
+	if sourceFile == "" {
+		return 0, fmt.Errorf("удаление хвостовых чанков: пустой source_file")
+	}
+	if firstStaleIndex < 0 {
+		return 0, fmt.Errorf("удаление хвостовых чанков: отрицательный индекс %d", firstStaleIndex)
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	res, err := s.db.Exec(`DELETE FROM entries WHERE source_file = ? AND chunk_index >= ?`, sourceFile, firstStaleIndex)
+	if err != nil {
+		return 0, err
+	}
+	deleted, err := res.RowsAffected()
+	if err != nil {
+		return 0, fmt.Errorf("RowsAffected: %w", err)
+	}
+	if deleted == 0 {
+		return 0, nil
+	}
+
+	entries := s.entries[:0]
+	vectors := s.vectors[:0]
+	for i := range s.entries {
+		if s.entries[i].SourceFile == sourceFile && s.entries[i].ChunkIndex >= firstStaleIndex {
+			continue
+		}
+		entries = append(entries, s.entries[i])
+		vectors = append(vectors, s.vectors[i])
+	}
+	s.entries = entries
+	s.vectors = vectors
+	return deleted, nil
 }
 
 // DeleteById удаляет запись по ID (hard delete)
@@ -489,9 +810,7 @@ func (s *Store) ToggleImportant(id int64) (*Entry, error) {
 	for i := range s.entries {
 		if s.entries[i].ID == id {
 			s.entries[i].Important = newVal != 0
-			entry := s.entries[i]
-			entry.Tags = append([]string(nil), s.entries[i].Tags...)
-			entry.Embedding = append([]float32(nil), s.entries[i].Embedding...)
+			entry := cloneEntry(s.entries[i])
 			return &entry, nil
 		}
 	}
@@ -539,7 +858,7 @@ func (s *Store) Search(queryVector []float32, backend string, limit int) ([]Entr
 
 	out := make([]Entry, limit)
 	for i := 0; i < limit; i++ {
-		out[i] = results[i].entry
+		out[i] = cloneEntry(results[i].entry)
 		out[i].Score = results[i].score
 	}
 	return out, nil
@@ -575,7 +894,11 @@ func (s *Store) Recent(limit int) ([]Entry, error) {
 	if limit > n {
 		limit = n
 	}
-	return sorted[:limit], nil
+	out := make([]Entry, limit)
+	for i := 0; i < limit; i++ {
+		out[i] = cloneEntry(sorted[i])
+	}
+	return out, nil
 }
 
 // GetByID возвращает запись по ID.
@@ -587,9 +910,7 @@ func (s *Store) GetByID(id int64) (*Entry, error) {
 
 	for i := range s.entries {
 		if s.entries[i].ID == id {
-			entry := s.entries[i]
-			entry.Tags = append([]string(nil), s.entries[i].Tags...)
-			entry.Embedding = append([]float32(nil), s.entries[i].Embedding...)
+			entry := cloneEntry(s.entries[i])
 			return &entry, nil
 		}
 	}
@@ -606,9 +927,7 @@ func (s *Store) GetBySourceFile(sourceFile string) []Entry {
 	var out []Entry
 	for i := range s.entries {
 		if s.entries[i].SourceFile == sourceFile {
-			entry := s.entries[i]
-			entry.Tags = append([]string(nil), s.entries[i].Tags...)
-			entry.Embedding = append([]float32(nil), s.entries[i].Embedding...)
+			entry := cloneEntry(s.entries[i])
 			out = append(out, entry)
 		}
 	}

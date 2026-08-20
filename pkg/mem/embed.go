@@ -2,6 +2,7 @@ package mem
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -26,9 +27,12 @@ type ollamaEmbedResponse struct {
 }
 
 func embedOllama(cfg *Config, text string) ([]float32, error) {
-	// Защита от превышения контекста модели
-	if utf8.RuneCountInString(text) > maxEmbedChars {
-		text = string([]rune(text)[:maxEmbedChars])
+	return embedOllamaContext(context.Background(), cfg, text)
+}
+
+func embedOllamaContext(ctx context.Context, cfg *Config, text string) ([]float32, error) {
+	if err := validateEmbeddingText(text); err != nil {
+		return nil, err
 	}
 
 	url := cfg.Ollama.BaseURL + "/api/embeddings"
@@ -38,7 +42,12 @@ func embedOllama(cfg *Config, text string) ([]float32, error) {
 	}
 	body, _ := json.Marshal(req)
 
-	resp, err := http.Post(url, "application/json", bytes.NewReader(body))
+	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(body))
+	if err != nil {
+		return nil, fmt.Errorf("ollama: ошибка запроса: %w", err)
+	}
+	httpReq.Header.Set("Content-Type", "application/json")
+	resp, err := http.DefaultClient.Do(httpReq)
 	if err != nil {
 		return nil, fmt.Errorf("ollama: не удалось connected: %w", err)
 	}
@@ -80,13 +89,16 @@ type polzaEmbedResponse struct {
 }
 
 func embedPolza(cfg *Config, text string) ([]float32, error) {
+	return embedPolzaContext(context.Background(), cfg, text)
+}
+
+func embedPolzaContext(ctx context.Context, cfg *Config, text string) ([]float32, error) {
 	if cfg.Polza.APIKey == "" {
 		return nil, fmt.Errorf("polza: не указан API ключ. Настрой: mem config set-polza-key <key>")
 	}
 
-	// Защита от превышения контекста модели
-	if utf8.RuneCountInString(text) > maxEmbedChars {
-		text = string([]rune(text)[:maxEmbedChars])
+	if err := validateEmbeddingText(text); err != nil {
+		return nil, err
 	}
 
 	url := cfg.Polza.BaseURL + "/embeddings"
@@ -96,7 +108,7 @@ func embedPolza(cfg *Config, text string) ([]float32, error) {
 	}
 	body, _ := json.Marshal(req)
 
-	httpReq, err := http.NewRequest("POST", url, bytes.NewReader(body))
+	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(body))
 	if err != nil {
 		return nil, fmt.Errorf("polza: ошибка запроса: %w", err)
 	}
@@ -127,14 +139,28 @@ func embedPolza(cfg *Config, text string) ([]float32, error) {
 	return result.Data[0].Embedding, nil
 }
 
+func validateEmbeddingText(text string) error {
+	length := utf8.RuneCountInString(text)
+	if length > maxEmbedChars {
+		return fmt.Errorf("текст для embedding слишком длинный: %d символов, максимум %d; уменьшите chunk_max_size", length, maxEmbedChars)
+	}
+	return nil
+}
+
 // === Общий интерфейс ===
 
 func GetEmbedding(cfg *Config, text string) ([]float32, error) {
+	return GetEmbeddingContext(context.Background(), cfg, text)
+}
+
+// GetEmbeddingContext builds an embedding while allowing callers such as
+// document import to cancel an in-flight Ollama or Polza HTTP request.
+func GetEmbeddingContext(ctx context.Context, cfg *Config, text string) ([]float32, error) {
 	switch cfg.Backend {
 	case "ollama":
-		return embedOllama(cfg, text)
+		return embedOllamaContext(ctx, cfg, text)
 	case "polza":
-		return embedPolza(cfg, text)
+		return embedPolzaContext(ctx, cfg, text)
 	default:
 		return nil, fmt.Errorf("неизвестный бэкенд: %s (используй ollama или polza)", cfg.Backend)
 	}

@@ -217,6 +217,10 @@ func initSchema(db *sql.DB) error {
 		_ = tx.Rollback()
 		return err
 	}
+	if _, err := tx.Exec(corpusAnalysisRunSchema); err != nil {
+		_ = tx.Rollback()
+		return err
+	}
 	if err := migrateEntryProvenance(tx); err != nil {
 		_ = tx.Rollback()
 		return err
@@ -233,6 +237,9 @@ func initSchema(db *sql.DB) error {
 			return err
 		}
 		if _, err := db.Exec(knowledgeGraphSchema); err != nil {
+			return err
+		}
+		if _, err := db.Exec(corpusAnalysisRunSchema); err != nil {
 			return err
 		}
 		if err := migrateEntryProvenanceDB(db); err != nil {

@@ -10,11 +10,9 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
-	"runtime"
 	"sort"
 	"strconv"
 	"strings"
-	"syscall"
 	"time"
 
 	"github.com/knaprus-14/mem-tool/pkg/ingest"
@@ -60,19 +58,6 @@ var (
 )
 
 const memDirName = mem.MemDirName
-
-func init() {
-	// На Windows переключаем консоль в UTF-8, чтобы русские буквы не крокозябрились
-	if runtime.GOOS == "windows" {
-		kernel32 := syscall.NewLazyDLL("kernel32.dll")
-		if setCP := kernel32.NewProc("SetConsoleOutputCP"); setCP != nil {
-			setCP.Call(65001) // CP_UTF8
-		}
-		if setCP := kernel32.NewProc("SetConsoleCP"); setCP != nil {
-			setCP.Call(65001) // CP_UTF8
-		}
-	}
-}
 
 const version = "1.15.13"
 
@@ -670,7 +655,7 @@ func parseAskArgs(args []string) ([]string, int, error) {
 
 func handleMap(cfg *Config, store *Store, args []string) error {
 	if len(args) == 0 {
-		return errors.New("использование: mem map <build|analyze|status|approve|approve-batch|reviews|export>\n  mem map build <фокус> [-limit N] [-context-chars N]\n  mem map analyze <фокус> [-context-chars N]\n  mem map status [--json]\n  mem map approve <node|edge> <id> --reviewer <имя> [--comment <текст>] [--evidence-digest <sha256>]\n  mem map approve-batch <manifest.json>\n  mem map reviews [--json] [-limit N]\n  mem map export")
+		return errors.New("использование: mem map <build|analyze|status|approve|approve-batch|reviews|export>\n  mem map build <фокус> [-limit N] [-context-chars N]\n  mem map analyze <фокус> [-context-chars N] [-batches N] [-resume <run-id>]\n  mem map status [--json]\n  mem map approve <node|edge> <id> --reviewer <имя> [--comment <текст>] [--evidence-digest <sha256>]\n  mem map approve-batch <manifest.json>\n  mem map reviews [--json] [-limit N]\n  mem map export")
 	}
 	switch args[0] {
 	case "export":
@@ -886,71 +871,151 @@ func handleMapReviews(store *Store, args []string) error {
 func handleMapAnalyze(cfg *Config, store *Store, args []string) error {
 	focusParts := make([]string, 0, len(args))
 	contextBudget := cfg.Answer.WithDefaults().ContextChars
+	maxBatches := 1
+	resumeID := ""
 	for i := 0; i < len(args); i++ {
-		if args[i] != "-context-chars" {
+		switch args[i] {
+		case "-context-chars":
+			if i+1 >= len(args) {
+				return errors.New("использование: mem map analyze <фокус> [-context-chars N] [-batches N] [-resume <run-id>]")
+			}
+			i++
+			parsed, err := strconv.Atoi(args[i])
+			if err != nil || parsed < 1 || parsed > mem.MaxAnswerContextChars {
+				return fmt.Errorf("-context-chars должен быть от 1 до %d", mem.MaxAnswerContextChars)
+			}
+			contextBudget = parsed
+		case "-batches":
+			if i+1 >= len(args) {
+				return errors.New("использование: mem map analyze <фокус> [-context-chars N] [-batches N] [-resume <run-id>]")
+			}
+			i++
+			parsed, err := strconv.Atoi(args[i])
+			if err != nil || parsed < 1 || parsed > mem.MaxCorpusAnalysisBatches {
+				return fmt.Errorf("-batches должен быть от 1 до %d", mem.MaxCorpusAnalysisBatches)
+			}
+			maxBatches = parsed
+		case "-resume":
+			if i+1 >= len(args) || strings.TrimSpace(args[i+1]) == "" {
+				return errors.New("использование: mem map analyze <фокус> [-context-chars N] [-batches N] [-resume <run-id>]")
+			}
+			if resumeID != "" {
+				return errors.New("-resume указан более одного раза")
+			}
+			i++
+			resumeID = strings.TrimSpace(args[i])
+		default:
 			if strings.HasPrefix(args[i], "-") {
 				return fmt.Errorf("неизвестный аргумент map analyze: %s", args[i])
 			}
 			focusParts = append(focusParts, args[i])
-			continue
 		}
-		if i+1 >= len(args) {
-			return errors.New("использование: mem map analyze <фокус> [-context-chars N]")
-		}
-		i++
-		parsed, err := strconv.Atoi(args[i])
-		if err != nil || parsed < 1 || parsed > mem.MaxAnswerContextChars {
-			return fmt.Errorf("-context-chars должен быть от 1 до %d", mem.MaxAnswerContextChars)
-		}
-		contextBudget = parsed
 	}
 	if len(focusParts) == 0 {
 		return errors.New("укажи фокус междокументного анализа\nПример: mem map analyze \"требования к давлению\"")
 	}
 	focus := strings.Join(focusParts, " ")
-	prompt, err := store.BuildCorpusAnalysisPrompt(focus, contextBudget)
+	plan, err := store.BuildCorpusAnalysisPlan(focus, contextBudget, maxBatches)
 	if err != nil {
 		return fmt.Errorf("map analyze: %w", err)
 	}
-	if prompt.SkippedNonCurrent > 0 {
-		fmt.Fprintf(os.Stderr, "[MAP ANALYZE] пропущено active claims с stale/missing evidence: %d\n", prompt.SkippedNonCurrent)
+	if plan.SkippedNonCurrent > 0 {
+		fmt.Fprintf(os.Stderr, "[MAP ANALYZE] пропущено active claims с stale/missing evidence: %d\n", plan.SkippedNonCurrent)
 	}
-	if len(prompt.Claims) < 2 || prompt.DocumentCount < 2 {
-		fmt.Fprintf(os.Stdout, "Недостаточно подтверждённых данных: нужны минимум два active claim с current evidence из разных документов (eligible=%d selected=%d documents=%d).\n",
-			prompt.EligibleClaims, len(prompt.Claims), prompt.DocumentCount)
+	if len(plan.Batches) == 0 {
+		fmt.Fprintf(os.Stdout, "Недостаточно подтверждённых данных: нужны минимум два active claim с current evidence из разных документов, помещающиеся в context budget (eligible=%d documents=%d).\n",
+			plan.EligibleClaims, plan.EligibleDocuments)
 		return nil
 	}
+	if plan.UncoveredClaims > 0 {
+		fmt.Fprintf(os.Stderr, "[MAP ANALYZE] покрытие ограничено: covered=%d eligible=%d uncovered=%d; увеличь -batches или -context-chars\n",
+			plan.CoveredClaims, plan.EligibleClaims, plan.UncoveredClaims)
+	}
 	answerCfg := cfg.Answer.WithDefaults()
+	run, err := store.PrepareCorpusAnalysisRun(focus, contextBudget, maxBatches, plan, answerCfg, resumeID)
+	if err != nil {
+		return fmt.Errorf("map analyze run: %w", err)
+	}
+	fmt.Fprintf(os.Stderr, "[MAP ANALYZE] run=%s status=%s batches=%d; повтор той же команды безопасно продолжит запуск\n",
+		run.ID, run.Status, len(run.Batches))
 	provider, err := newAnswerProvider(answerCfg)
 	if err != nil {
 		return err
 	}
-	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
+	rootCtx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
 	defer stop()
-	ctx, cancel := mem.AnswerContext(ctx, answerCfg)
-	defer cancel()
-	fmt.Fprintf(os.Stderr, "[MAP ANALYZE] active claims=%d documents=%d; analysis через %s...\n",
-		len(prompt.Claims), prompt.DocumentCount, answerCfg.Model)
-	raw, err := provider.Generate(ctx, mem.AnswerRequest{
-		Model: answerCfg.Model, System: prompt.System, Prompt: prompt.User,
-		MaxTokens: answerCfg.MaxTokens, Temperature: answerCfg.Temperature,
-	})
-	if err != nil {
-		return fmt.Errorf("map analyze: %w", err)
+	graphs := make([]mem.KnowledgeGraph, 0, len(plan.Batches))
+	insufficientBatches := 0
+	for i, prompt := range plan.Batches {
+		stored := run.Batches[i]
+		switch stored.Status {
+		case mem.CorpusAnalysisBatchCompleted:
+			graphs = append(graphs, stored.Graph)
+			fmt.Fprintf(os.Stderr, "[MAP ANALYZE] batch=%d/%d id=%s: восстановлен проверенный результат\n",
+				i+1, len(plan.Batches), prompt.BatchID)
+			continue
+		case mem.CorpusAnalysisBatchInsufficient:
+			insufficientBatches++
+			fmt.Fprintf(os.Stderr, "[MAP ANALYZE] batch=%d/%d id=%s: восстановлен insufficient result (%s)\n",
+				i+1, len(plan.Batches), prompt.BatchID, stored.Reason)
+			continue
+		}
+		fmt.Fprintf(os.Stderr, "[MAP ANALYZE] batch=%d/%d id=%s claims=%d documents=%d; analysis через %s...\n",
+			i+1, len(plan.Batches), prompt.BatchID, len(prompt.Claims), prompt.DocumentCount, answerCfg.Model)
+		ctx, cancel := mem.AnswerContext(rootCtx, answerCfg)
+		raw, generateErr := provider.Generate(ctx, mem.AnswerRequest{
+			Model: answerCfg.Model, System: prompt.System, Prompt: prompt.User,
+			MaxTokens: answerCfg.MaxTokens, Temperature: answerCfg.Temperature,
+		})
+		cancel()
+		if generateErr != nil {
+			if saveErr := store.SaveCorpusAnalysisBatchFailure(run.ID, prompt.BatchID, generateErr); saveErr != nil {
+				return fmt.Errorf("map analyze batch %d (%s), run=%s: %v; save failure state: %w", i+1, prompt.BatchID, run.ID, generateErr, saveErr)
+			}
+			return fmt.Errorf("map analyze batch %d (%s), run=%s: %w", i+1, prompt.BatchID, run.ID, generateErr)
+		}
+		analyzed, decodeErr := mem.DecodeCorpusAnalysis(raw, prompt.Claims)
+		if decodeErr != nil {
+			if saveErr := store.SaveCorpusAnalysisBatchFailure(run.ID, prompt.BatchID, decodeErr); saveErr != nil {
+				return fmt.Errorf("map analyze batch %d (%s) rejected, run=%s: %v; save failure state: %w", i+1, prompt.BatchID, run.ID, decodeErr, saveErr)
+			}
+			return fmt.Errorf("map analyze batch %d (%s) rejected, run=%s: %w", i+1, prompt.BatchID, run.ID, decodeErr)
+		}
+		if analyzed.Insufficient {
+			if err := store.SaveCorpusAnalysisBatchInsufficient(run.ID, prompt.BatchID, analyzed.Reason); err != nil {
+				return fmt.Errorf("map analyze batch %d (%s) checkpoint, run=%s: %w", i+1, prompt.BatchID, run.ID, err)
+			}
+			insufficientBatches++
+			fmt.Fprintf(os.Stderr, "[MAP ANALYZE] batch=%d/%d id=%s: insufficient evidence (%s)\n",
+				i+1, len(plan.Batches), prompt.BatchID, analyzed.Reason)
+			continue
+		}
+		if err := store.SaveCorpusAnalysisBatchGraph(run.ID, prompt.BatchID, analyzed.Graph); err != nil {
+			return fmt.Errorf("map analyze batch %d (%s) checkpoint, run=%s: %w", i+1, prompt.BatchID, run.ID, err)
+		}
+		graphs = append(graphs, analyzed.Graph)
 	}
-	analyzed, err := mem.DecodeCorpusAnalysis(raw, prompt.Claims)
+	merged, err := mem.MergeCorpusAnalysisGraphs(graphs...)
 	if err != nil {
-		return fmt.Errorf("map analyze rejected: %w", err)
+		return fmt.Errorf("map analyze merge: %w", err)
 	}
-	if analyzed.Insufficient {
-		fmt.Fprintf(os.Stdout, "Недостаточно подтверждённых данных: %s\n", analyzed.Reason)
+	if len(merged.Nodes) == 0 {
+		if err := store.CompleteCorpusAnalysisRun(run.ID); err != nil {
+			return fmt.Errorf("map analyze complete run %s: %w", run.ID, err)
+		}
+		fmt.Fprintf(os.Stdout, "Недостаточно подтверждённых данных: все пакеты завершились без findings (run=%s batches=%d covered=%d/%d).\n",
+			run.ID, insufficientBatches, plan.CoveredClaims, plan.EligibleClaims)
 		return nil
 	}
-	if err := store.UpsertCorpusAnalysisGraph(analyzed.Graph); err != nil {
+	if err := store.UpsertCorpusAnalysisGraph(merged); err != nil {
 		return fmt.Errorf("map analyze persistence: %w", err)
 	}
-	fmt.Fprintf(os.Stdout, "Междокументный анализ сохранён как draft: findings=%d relations=%d claims=%d documents=%d\n",
-		len(analyzed.Graph.Nodes), len(analyzed.Graph.Edges), len(prompt.Claims), prompt.DocumentCount)
+	if err := store.CompleteCorpusAnalysisRun(run.ID); err != nil {
+		return fmt.Errorf("map analyze complete run %s: %w", run.ID, err)
+	}
+	fmt.Fprintf(os.Stdout, "Междокументный анализ сохранён как draft: run=%s findings=%d relations=%d batches=%d insufficient=%d covered=%d/%d documents=%d/%d\n",
+		run.ID, len(merged.Nodes), len(merged.Edges), len(plan.Batches), insufficientBatches,
+		plan.CoveredClaims, plan.EligibleClaims, plan.CoveredDocuments, plan.EligibleDocuments)
 	return nil
 }
 
@@ -1718,10 +1783,12 @@ func printUsage() {
       Citation, координаты, ревизии, хеши и постоянные ID назначаются самим mem;
       невалидный ответ модели отклоняется целиком без частичной записи.
 
-  mem map analyze <фокус> [-context-chars N]
+  mem map analyze <фокус> [-context-chars N] [-batches N] [-resume <run-id>]
       Сравнить active claim с current evidence из разных документов и предложить
       draft-узлы contradiction/gap. Endpoints, anchors и связи назначает mem;
-      при смене evidence во время анализа результат не сохраняется.
+      -batches (1..32, по умолчанию 1) включает детерминированную пакетную обработку.
+      Проверенные batch-результаты сохраняются как checkpoints; повтор команды
+      продолжает run. Knowledge graph изменяется только после завершения всех пакетов.
 
   mem map status [--json]
       Показать draft/active/resolved, состояние current/stale/missing для каждого
@@ -1849,6 +1916,7 @@ func printUsage() {
   mem ask "каков порядок запуска?" -limit 5
   mem map build "архитектура импорта" -limit 10
   mem map analyze "требования к рабочему давлению"
+  mem map analyze "требования к рабочему давлению" -batches 8 -resume kar-0123456789abcdef0123456789abcdef
   mem map status
   mem map approve node kn-0123456789abcdef0123456789abcdef --reviewer "Руслан"
   mem map approve-batch review-manifest.json

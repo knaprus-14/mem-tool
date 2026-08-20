@@ -3,9 +3,115 @@ package mem
 import (
 	"errors"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 )
+
+func TestBuildCorpusAnalysisPlanIsDeterministicAndReportsCoverage(t *testing.T) {
+	store := corpusAnalysisStoreWithClaims(t, 5)
+	defer store.Close()
+
+	candidates, _, _, err := store.loadCorpusAnalysisCandidates("pressure")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(candidates) != 5 {
+		t.Fatalf("got %d candidates, want 5", len(candidates))
+	}
+	_, twoClaimBudget, err := buildCorpusAnalysisPromptPayload("pressure", []CorpusAnalysisClaim{candidates[0].claim, candidates[1].claim})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, threeClaimSize, err := buildCorpusAnalysisPromptPayload("pressure", []CorpusAnalysisClaim{candidates[0].claim, candidates[1].claim, candidates[2].claim})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if threeClaimSize <= twoClaimBudget {
+		t.Fatal("test fixture does not distinguish two- and three-claim prompts")
+	}
+
+	first, err := store.BuildCorpusAnalysisPlan("pressure", twoClaimBudget, 3)
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := store.BuildCorpusAnalysisPlan("pressure", twoClaimBudget, 3)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if first.EligibleClaims != 5 || first.CoveredClaims != 5 || first.UncoveredClaims != 0 ||
+		first.EligibleDocuments != 5 || first.CoveredDocuments != 5 || len(first.Batches) != 3 {
+		t.Fatalf("unexpected plan coverage: %#v", first)
+	}
+	if len(second.Batches) != len(first.Batches) {
+		t.Fatalf("plan batch count changed: first=%d second=%d", len(first.Batches), len(second.Batches))
+	}
+	covered := make(map[string]bool)
+	for i, batch := range first.Batches {
+		if batch.BatchID == "" || batch.BatchID != second.Batches[i].BatchID || batch.DocumentCount < 2 || len(batch.Claims) != 2 {
+			t.Fatalf("invalid or unstable batch %d: first=%#v second=%#v", i, batch, second.Batches[i])
+		}
+		for claimIndex, claim := range batch.Claims {
+			if claim.Ref != "c"+string(rune('1'+claimIndex)) {
+				t.Fatalf("batch-local refs are not deterministic: %#v", batch.Claims)
+			}
+			covered[claim.nodeID] = true
+		}
+	}
+	if len(covered) != 5 {
+		t.Fatalf("planner did not cover every claim: %#v", covered)
+	}
+
+	limited, err := store.BuildCorpusAnalysisPlan("pressure", twoClaimBudget, 2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if limited.CoveredClaims != 4 || limited.UncoveredClaims != 1 || len(limited.Batches) != 2 {
+		t.Fatalf("batch limit coverage is wrong: %#v", limited)
+	}
+	if _, err := store.BuildCorpusAnalysisPlan("pressure", twoClaimBudget, MaxCorpusAnalysisBatches+1); err == nil {
+		t.Fatal("planner accepted an excessive batch limit")
+	}
+}
+
+func TestMergeCorpusAnalysisGraphsDeduplicatesOrRejectsConflicts(t *testing.T) {
+	store, _ := corpusAnalysisStore(t)
+	defer store.Close()
+	prompt, err := store.BuildCorpusAnalysisPrompt("pressure", 100000)
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw := `{"findings":[{"kind":"gap","label":"Shared gap","confidence":0.7,"claim_refs":["c1","c2"],"citations":["` +
+		prompt.Claims[0].Evidence[0].CitationID + `","` + prompt.Claims[1].Evidence[0].CitationID + `"]}]}`
+	decoded, err := DecodeCorpusAnalysis(raw, prompt.Claims)
+	if err != nil {
+		t.Fatal(err)
+	}
+	duplicate := decoded.Graph
+	duplicate.Nodes = append([]KnowledgeNode(nil), duplicate.Nodes...)
+	duplicate.Edges = append([]KnowledgeEdge(nil), duplicate.Edges...)
+	duplicate.Nodes[0].Confidence = 0.9
+	for i := range duplicate.Edges {
+		duplicate.Edges[i].Confidence = 0.9
+	}
+	merged, err := MergeCorpusAnalysisGraphs(decoded.Graph, duplicate)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(merged.Nodes) != 1 || len(merged.Edges) != 2 || merged.Nodes[0].Confidence != 0.9 {
+		t.Fatalf("duplicate corpus graph was not merged deterministically: %#v", merged)
+	}
+
+	conflict := decoded.Graph
+	conflict.Nodes = append([]KnowledgeNode(nil), conflict.Nodes...)
+	conflict.Nodes[0].Body = "conflicting body"
+	if _, err := MergeCorpusAnalysisGraphs(decoded.Graph, conflict); err == nil || !strings.Contains(err.Error(), "disagree") {
+		t.Fatalf("conflicting stable node was accepted: %v", err)
+	}
+	if reflect.DeepEqual(KnowledgeGraph{}, merged) {
+		t.Fatal("merged graph unexpectedly empty")
+	}
+}
 
 func TestBuildCorpusAnalysisPromptUsesOnlyCurrentActiveClaimsAcrossDocuments(t *testing.T) {
 	store, anchors := corpusAnalysisStore(t)
@@ -246,4 +352,41 @@ func corpusAnalysisStore(t *testing.T) (*Store, []EvidenceAnchor) {
 		t.Fatal(err)
 	}
 	return store, anchors
+}
+
+func corpusAnalysisStoreWithClaims(t *testing.T, count int) *Store {
+	t.Helper()
+	store, err := NewStore(filepath.Join(t.TempDir(), "db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	nodes := make([]KnowledgeNode, 0, count)
+	for i := 0; i < count; i++ {
+		text := "Pressure requirement " + string(rune('A'+i)) + "."
+		source := filepath.ToSlash(filepath.Join(t.TempDir(), "plan-doc-"+string(rune('a'+i))+".md"))
+		entry, err := store.AddDocumentChunk(text, "Plan document", nil, "test", []float32{1, 0}, source, 0, 1, false, Provenance{
+			DocumentID: "plan-doc-" + string(rune('a'+i)), DocumentRevision: ChunkContentHash("plan-revision-" + string(rune('a'+i))),
+			ChunkHash: ChunkContentHash(text), SourcePath: source, MediaType: "text/markdown",
+			Page: 1, BlockIndex: 0, BlockChunkIndex: 0, BlockTotalChunks: 1, ExtractionMethod: "text", OCRConfidence: -1,
+		})
+		if err != nil {
+			store.Close()
+			t.Fatal(err)
+		}
+		anchor, err := EvidenceAnchorForEntry(*entry, entry.Text)
+		if err != nil {
+			store.Close()
+			t.Fatal(err)
+		}
+		nodes = append(nodes, KnowledgeNode{
+			ID: "plan-claim-" + string(rune('a'+i)), Kind: KnowledgeNodeClaim,
+			Label: "Pressure claim " + string(rune('A'+i)), Body: text,
+			Status: KnowledgeStatusActive, Origin: KnowledgeOriginGenerated, Evidence: []EvidenceAnchor{anchor},
+		})
+	}
+	if err := store.UpsertKnowledgeGraph(KnowledgeGraph{Nodes: nodes}); err != nil {
+		store.Close()
+		t.Fatal(err)
+	}
+	return store
 }

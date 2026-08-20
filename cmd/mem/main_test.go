@@ -8,6 +8,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -48,6 +49,42 @@ type fakeAnswerProvider struct {
 	answer  string
 	calls   int
 	request mem.AnswerRequest
+}
+
+type corpusBatchAnswerProvider struct {
+	calls  int
+	failAt int
+}
+
+func (p *corpusBatchAnswerProvider) Generate(_ context.Context, request mem.AnswerRequest) (string, error) {
+	p.calls++
+	if p.failAt > 0 && p.calls == p.failAt {
+		return "", errors.New("planned batch failure")
+	}
+	const begin = "CLAIMS_JSON_BEGIN\n"
+	const end = "\nCLAIMS_JSON_END"
+	start := strings.Index(request.Prompt, begin)
+	finish := strings.Index(request.Prompt, end)
+	if start < 0 || finish < 0 || finish <= start+len(begin) {
+		return "", errors.New("batch prompt has no claims JSON")
+	}
+	var claims []struct {
+		Ref      string                 `json:"ref"`
+		Evidence []mem.GroundedEvidence `json:"evidence"`
+	}
+	if err := json.Unmarshal([]byte(request.Prompt[start+len(begin):finish]), &claims); err != nil {
+		return "", err
+	}
+	if len(claims) < 2 || len(claims[0].Evidence) == 0 || len(claims[1].Evidence) == 0 {
+		return "", errors.New("batch prompt has insufficient claims")
+	}
+	response := map[string]any{"findings": []map[string]any{{
+		"kind": "gap", "label": fmt.Sprintf("Batch gap %d", p.calls), "confidence": 0.8,
+		"claim_refs": []string{claims[0].Ref, claims[1].Ref},
+		"citations":  []string{claims[0].Evidence[0].CitationID, claims[1].Evidence[0].CitationID},
+	}}}
+	encoded, err := json.Marshal(response)
+	return string(encoded), err
 }
 
 func (p *fakeAnswerProvider) Generate(_ context.Context, request mem.AnswerRequest) (string, error) {
@@ -461,6 +498,66 @@ func TestHandleMapAnalyzeSkipsModelWithoutTwoCurrentDocuments(t *testing.T) {
 	}
 }
 
+func TestHandleMapAnalyzeProcessesBatchesAndPersistsOnce(t *testing.T) {
+	store := cliCorpusStoreWithClaims(t, 5)
+	defer store.Close()
+	budget := cliCorpusTwoClaimBudget(t, store, "pressure")
+	provider := &corpusBatchAnswerProvider{}
+	cfg := testCLIConfig(1500, "paragraph")
+	cfg.Answer.Model = "fake-chat"
+	originalProvider := newAnswerProvider
+	defer func() { newAnswerProvider = originalProvider }()
+	newAnswerProvider = func(mem.AnswerConfig) (mem.AnswerProvider, error) { return provider, nil }
+
+	stdout, stderr, err := captureCLIStreams(func() error {
+		return handleMap(cfg, store, []string{"analyze", "pressure", "-context-chars", strconv.Itoa(budget), "-batches", "3"})
+	})
+	if err != nil || provider.calls != 3 || !strings.Contains(stdout, "batches=3") || !strings.Contains(stdout, "covered=5/5") ||
+		!strings.Contains(stderr, "batch=3/3") {
+		t.Fatalf("batched analysis failed: stdout=%q stderr=%q calls=%d err=%v", stdout, stderr, provider.calls, err)
+	}
+	graph, err := store.LoadKnowledgeGraph()
+	if err != nil || len(graph.Nodes) != 8 || len(graph.Edges) != 6 {
+		t.Fatalf("batched graph is incomplete: graph=%#v err=%v", graph, err)
+	}
+}
+
+func TestHandleMapAnalyzeBatchFailureLeavesGraphUntouched(t *testing.T) {
+	store := cliCorpusStoreWithClaims(t, 5)
+	defer store.Close()
+	budget := cliCorpusTwoClaimBudget(t, store, "pressure")
+	provider := &corpusBatchAnswerProvider{failAt: 2}
+	cfg := testCLIConfig(1500, "paragraph")
+	cfg.Answer.Model = "fake-chat"
+	originalProvider := newAnswerProvider
+	defer func() { newAnswerProvider = originalProvider }()
+	newAnswerProvider = func(mem.AnswerConfig) (mem.AnswerProvider, error) { return provider, nil }
+
+	_, _, err := captureCLIStreams(func() error {
+		return handleMap(cfg, store, []string{"analyze", "pressure", "-context-chars", strconv.Itoa(budget), "-batches", "3"})
+	})
+	if err == nil || !strings.Contains(err.Error(), "planned batch failure") || provider.calls != 2 {
+		t.Fatalf("batch failure was not propagated: calls=%d err=%v", provider.calls, err)
+	}
+	graph, loadErr := store.LoadKnowledgeGraph()
+	if loadErr != nil || len(graph.Nodes) != 5 || len(graph.Edges) != 0 {
+		t.Fatalf("failed batch analysis partially persisted: graph=%#v err=%v", graph, loadErr)
+	}
+
+	provider.failAt = 0
+	stdout, stderr, err := captureCLIStreams(func() error {
+		return handleMap(cfg, store, []string{"analyze", "pressure", "-context-chars", strconv.Itoa(budget), "-batches", "3"})
+	})
+	if err != nil || provider.calls != 4 || !strings.Contains(stderr, "восстановлен проверенный результат") ||
+		!strings.Contains(stdout, "сохранён как draft") {
+		t.Fatalf("failed run did not resume: stdout=%q stderr=%q calls=%d err=%v", stdout, stderr, provider.calls, err)
+	}
+	graph, loadErr = store.LoadKnowledgeGraph()
+	if loadErr != nil || len(graph.Nodes) != 8 || len(graph.Edges) != 6 {
+		t.Fatalf("resumed analysis graph is incomplete: graph=%#v err=%v", graph, loadErr)
+	}
+}
+
 func cliGraphStoreAndAnchor(t *testing.T) (*mem.Store, mem.EvidenceAnchor) {
 	t.Helper()
 	store, err := mem.NewStore(filepath.Join(t.TempDir(), "db"))
@@ -484,6 +581,64 @@ func cliGraphStoreAndAnchor(t *testing.T) (*mem.Store, mem.EvidenceAnchor) {
 		t.Fatal(err)
 	}
 	return store, anchor
+}
+
+func cliCorpusStoreWithClaims(t *testing.T, count int) *mem.Store {
+	t.Helper()
+	store, err := mem.NewStore(filepath.Join(t.TempDir(), "db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	nodes := make([]mem.KnowledgeNode, 0, count)
+	for i := 0; i < count; i++ {
+		text := fmt.Sprintf("Pressure requirement %d.", i+1)
+		source := fmt.Sprintf("C:/docs/batch-plan-%d.md", i+1)
+		entry, err := store.AddDocumentChunk(text, "Batch plan", nil, "test", []float32{1, 0}, source, 0, 1, false, mem.Provenance{
+			DocumentID: fmt.Sprintf("batch-plan-doc-%d", i+1), DocumentRevision: mem.ChunkContentHash(fmt.Sprintf("batch-plan-revision-%d", i+1)),
+			ChunkHash: mem.ChunkContentHash(text), SourcePath: source, MediaType: "text/markdown", Page: 1,
+			BlockIndex: 0, BlockChunkIndex: 0, BlockTotalChunks: 1, ExtractionMethod: "text", OCRConfidence: -1,
+		})
+		if err != nil {
+			store.Close()
+			t.Fatal(err)
+		}
+		anchor, err := mem.EvidenceAnchorForEntry(*entry, entry.Text)
+		if err != nil {
+			store.Close()
+			t.Fatal(err)
+		}
+		nodes = append(nodes, mem.KnowledgeNode{
+			ID: fmt.Sprintf("batch-plan-claim-%d", i+1), Kind: mem.KnowledgeNodeClaim,
+			Label: fmt.Sprintf("Pressure claim %d", i+1), Body: text,
+			Status: mem.KnowledgeStatusActive, Origin: mem.KnowledgeOriginGenerated, Evidence: []mem.EvidenceAnchor{anchor},
+		})
+	}
+	if err := store.UpsertKnowledgeGraph(mem.KnowledgeGraph{Nodes: nodes}); err != nil {
+		store.Close()
+		t.Fatal(err)
+	}
+	return store
+}
+
+func cliCorpusTwoClaimBudget(t *testing.T, store *mem.Store, focus string) int {
+	t.Helper()
+	prompt, err := store.BuildCorpusAnalysisPrompt(focus, mem.MaxAnswerContextChars)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(prompt.Claims) < 2 {
+		t.Fatalf("fixture produced only %d claims", len(prompt.Claims))
+	}
+	claims, err := json.MarshalIndent(prompt.Claims[:2], "", "  ")
+	if err != nil {
+		t.Fatal(err)
+	}
+	focusJSON, err := json.Marshal(focus)
+	if err != nil {
+		t.Fatal(err)
+	}
+	user := "Focus (user input): " + string(focusJSON) + "\n\nCLAIMS_JSON_BEGIN\n" + string(claims) + "\nCLAIMS_JSON_END\n"
+	return len([]rune(prompt.System)) + len([]rune(user))
 }
 
 func captureCLIStreams(fn func() error) (string, string, error) {

@@ -16,6 +16,7 @@ const (
 	MaxCorpusAnalysisClaims   = 200
 	MaxCorpusAnalysisFindings = 50
 	MaxCorpusFindingClaimRefs = 8
+	MaxCorpusAnalysisBatches  = 32
 )
 
 const corpusAnalysisSystemPrompt = `You compare approved claims from multiple documents using only supplied evidence.
@@ -45,9 +46,20 @@ type CorpusAnalysisPrompt struct {
 	System            string
 	User              string
 	Claims            []CorpusAnalysisClaim
+	BatchID           string
 	EligibleClaims    int
 	SkippedNonCurrent int
 	DocumentCount     int
+}
+
+type CorpusAnalysisPlan struct {
+	Batches           []CorpusAnalysisPrompt
+	EligibleClaims    int
+	CoveredClaims     int
+	UncoveredClaims   int
+	SkippedNonCurrent int
+	EligibleDocuments int
+	CoveredDocuments  int
 }
 
 type CorpusAnalysisResult struct {
@@ -90,61 +102,13 @@ func (s *Store) BuildCorpusAnalysisPrompt(focus string, contextBudget int) (Corp
 	if contextBudget > MaxAnswerContextChars {
 		return CorpusAnalysisPrompt{}, fmt.Errorf("corpus analysis context budget must not exceed %d", MaxAnswerContextChars)
 	}
-	graph, err := s.LoadKnowledgeGraph()
+	candidates, skippedNonCurrent, _, err := s.loadCorpusAnalysisCandidates(focus)
 	if err != nil {
 		return CorpusAnalysisPrompt{}, err
 	}
-	candidates := make([]corpusAnalysisCandidate, 0)
-	skippedNonCurrent := 0
-	for _, node := range graph.Nodes {
-		if node.Status != KnowledgeStatusActive || node.Kind != KnowledgeNodeClaim {
-			continue
-		}
-		current := true
-		for _, anchor := range node.Evidence {
-			if s.ResolveEvidenceAnchor(anchor).State != EvidenceCurrent {
-				current = false
-				break
-			}
-		}
-		if !current {
-			skippedNonCurrent++
-			continue
-		}
-		claim := CorpusAnalysisClaim{Label: node.Label, Body: node.Body, nodeID: node.ID, anchors: append([]EvidenceAnchor(nil), node.Evidence...)}
-		docs := make(map[string]bool)
-		for _, anchor := range node.Evidence {
-			docs[anchor.DocumentID] = true
-			claim.Evidence = append(claim.Evidence, groundedEvidenceForAnchor(anchor))
-		}
-		candidates = append(candidates, corpusAnalysisCandidate{claim: claim, score: corpusFocusScore(focus, node.Label+" "+node.Body), docs: docs})
-	}
-	sort.SliceStable(candidates, func(i, j int) bool {
-		if candidates[i].score != candidates[j].score {
-			return candidates[i].score > candidates[j].score
-		}
-		return candidates[i].claim.nodeID < candidates[j].claim.nodeID
-	})
 	eligibleClaims := len(candidates)
 
-	focusJSON, err := json.Marshal(focus)
-	if err != nil {
-		return CorpusAnalysisPrompt{}, fmt.Errorf("corpus analysis: encode focus: %w", err)
-	}
-	build := func(claims []CorpusAnalysisClaim) (CorpusAnalysisPrompt, int, error) {
-		serializable := append([]CorpusAnalysisClaim(nil), claims...)
-		for i := range serializable {
-			serializable[i].Ref = fmt.Sprintf("c%d", i+1)
-		}
-		encoded, err := json.MarshalIndent(serializable, "", "  ")
-		if err != nil {
-			return CorpusAnalysisPrompt{}, 0, fmt.Errorf("corpus analysis: encode claims: %w", err)
-		}
-		user := "Focus (user input): " + string(focusJSON) + "\n\nCLAIMS_JSON_BEGIN\n" + string(encoded) + "\nCLAIMS_JSON_END\n"
-		prompt := CorpusAnalysisPrompt{System: corpusAnalysisSystemPrompt, User: user, Claims: serializable}
-		return prompt, utf8.RuneCountInString(prompt.System) + utf8.RuneCountInString(prompt.User), nil
-	}
-	if _, baseSize, err := build(nil); err != nil {
+	if _, baseSize, err := buildCorpusAnalysisPromptPayload(focus, nil); err != nil {
 		return CorpusAnalysisPrompt{}, err
 	} else if baseSize > contextBudget {
 		return CorpusAnalysisPrompt{}, fmt.Errorf("corpus analysis context budget %d is too small for instructions and focus (%d)", contextBudget, baseSize)
@@ -157,7 +121,7 @@ func (s *Store) BuildCorpusAnalysisPrompt(focus string, contextBudget int) (Corp
 	selected := make([]CorpusAnalysisClaim, 0, len(ordered))
 	for _, item := range ordered {
 		trial := append(append([]CorpusAnalysisClaim(nil), selected...), item.claim)
-		_, size, err := build(trial)
+		_, size, err := buildCorpusAnalysisPromptPayload(focus, trial)
 		if err != nil {
 			return CorpusAnalysisPrompt{}, err
 		}
@@ -165,7 +129,7 @@ func (s *Store) BuildCorpusAnalysisPrompt(focus string, contextBudget int) (Corp
 			selected = trial
 		}
 	}
-	prompt, size, err := build(selected)
+	prompt, size, err := buildCorpusAnalysisPromptPayload(focus, selected)
 	if err != nil {
 		return CorpusAnalysisPrompt{}, err
 	}
@@ -181,6 +145,7 @@ func (s *Store) BuildCorpusAnalysisPrompt(focus string, contextBudget int) (Corp
 		}
 	}
 	prompt.DocumentCount = len(documents)
+	prompt.BatchID = stableCorpusAnalysisBatchID(focus, prompt.Claims)
 	return prompt, nil
 }
 

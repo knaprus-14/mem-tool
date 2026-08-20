@@ -101,6 +101,40 @@ ID (полный SHA-256 идентификатора документа) и о�
 provenance-aware chunks label включает source, физическую page, block и chunk;
 legacy rows не получают выдуманную страницу и помечаются `(no provenance)`.
 
+### Grounded answers: `mem ask`
+
+`mem search` остаётся строгим сырым поиском и не вызывает генеративную модель.
+Для ответа только по найденным фрагментам используется отдельная команда:
+
+```powershell
+mem ask "На какой странице описан запуск сервера?" -limit 5
+mem ask "что сказано о резервном копировании" -tags "инфраструктура" -context-chars 8000
+```
+
+Команда показывает стадии retrieval/evidence/generation в `stderr`, а ответ и
+список использованных citation ID — в `stdout`. В prompt попадают только
+отобранные фрагменты с source/page/chunk и стабильным ID. Текст документа
+помечен как недоверенное evidence: инструкции внутри него не меняют системные
+правила.
+
+Внутренний контракт с моделью fail-closed: она обязана вернуть ровно один JSON
+object либо с `claims`, где у каждого утверждения есть непустой список точных
+`citations`, либо с `insufficient_evidence`. Свободный текст, лишние поля,
+неизвестные, обрезанные или IDs с приставками/суффиксами отклоняются до
+попадания в `stdout`; одно корректное citation не подтверждает другие claims.
+Проверка гарантирует связь каждого выведенного claim с разрешённым evidence ID,
+но не заменяет человеческую оценку того, действительно ли модель правильно
+истолковала фрагмент. Неизвестная страница никогда не додумывается. При
+недостатке evidence команда возвращает честное сообщение вместо ответа из
+общих знаний.
+
+Для `ask` требуется отдельная локальная chat/instruct-модель Ollama. Модель
+эмбеддингов `bge-m3` используется только для retrieval и намеренно не считается
+моделью ответа. Ограничение контекста детерминировано по фактическому сериализованному system+question+evidence payload, Unicode не режется
+посередине символа, а низкая уверенность OCR выводится как warning. Это
+grounded answer mode, а не замена NotebookLM: корректность ответа зависит от
+качества retrieval и поведения локальной модели.
+
 ### Версия 1.8 — Re-ranking (повторное ранжирование)
 После гибридного поиска оценки докручиваются:
 
@@ -971,6 +1005,14 @@ mem init
     "base_url": "http://localhost:11434",
     "model": "bge-m3"
   },
+  "answer": {
+    "base_url": "http://localhost:11434",
+    "model": "",
+    "timeout_seconds": 60,
+    "max_tokens": 512,
+    "context_chars": 12000,
+    "temperature": 0.1
+  },
   "polza": {
     "base_url": "https://polza.ai/api/v1",
     "api_key": "",
@@ -999,6 +1041,12 @@ mem init
 | `backend` | `ollama` | Бэкенд эмбеддингов: `ollama` или `polza` |
 | `ollama.base_url` | `http://localhost:11434` | URL Ollama API |
 | `ollama.model` | `bge-m3` | Модель эмбеддингов Ollama |
+| `answer.base_url` | `http://localhost:11434` | Только loopback URL локального Ollama chat API (`localhost`, `127.0.0.1`, `::1`) |
+| `answer.model` | (пусто) | Отдельная chat/instruct-модель для `mem ask`; bge-m3 запрещена |
+| `answer.timeout_seconds` | `60` | Deadline retrieval + generation; provider применяет его и вне CLI |
+| `answer.max_tokens` | `512` | Верхняя граница генерируемого ответа |
+| `answer.context_chars` | `12000` | Детерминированный общий бюджет system + question + serialized evidence |
+| `answer.temperature` | `0.1` | Параметр Ollama generation |
 | `polza.api_key` | (пусто) | API-ключ Polza AI (per-project!) |
 | `polza.model` | `openai/text-embedding-3-small` | Модель Polza AI |
 | `chunking.chunk_max_size` | 1000 | Макс. размер чанка в символах (100–10000) |
@@ -1011,7 +1059,7 @@ mem init
 
 ## Запуск Ollama
 
-Для локальной работы нужен запущенный Ollama с моделью bge-m3:
+Для поиска нужен запущенный Ollama с моделью bge-m3:
 
 ```powershell
 # В отдельном терминале:
@@ -1022,6 +1070,21 @@ ollama pull bge-m3
 ```
 
 Ollama должна быть доступна на `http://localhost:11434`.
+
+Чтобы включить `mem ask`, установите отдельную chat/instruct-модель (имя и
+выбор модели остаются на стороне пользователя) и задайте её в проекте:
+
+```powershell
+mem config set-answer-model "<локальная-chat-модель>"
+mem config set-answer-timeout 60
+mem config set-answer-context-chars 12000
+# remote URL отклоняется: разрешены только localhost/127.0.0.1/::1
+```
+
+Без `answer.model` `mem ask` завершится actionable ошибкой. Команда не
+переключается молча на embedding-модель. Answer endpoint строго loopback-only:
+конфиг с удалённым URL отклоняется до отправки evidence. Ctrl+C отменяет текущую
+операцию и завершает команду без частичного ответа (с ненулевым кодом).
 
 ---
 

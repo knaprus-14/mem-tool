@@ -12,6 +12,17 @@ type OllamaConfig struct {
 	Model   string `json:"model"`
 }
 
+// AnswerConfig is deliberately separate from OllamaConfig: embedding models
+// such as bge-m3 are not chat models and must never be selected implicitly.
+type AnswerConfig struct {
+	BaseURL        string  `json:"base_url"`
+	Model          string  `json:"model"`
+	TimeoutSeconds int     `json:"timeout_seconds,omitempty"`
+	MaxTokens      int     `json:"max_tokens,omitempty"`
+	ContextChars   int     `json:"context_chars,omitempty"`
+	Temperature    float64 `json:"temperature,omitempty"`
+}
+
 type PolzaConfig struct {
 	BaseURL string `json:"base_url"`
 	APIKey  string `json:"api_key"`
@@ -44,6 +55,7 @@ type IngestConfig struct {
 type Config struct {
 	Backend  string       `json:"backend"` // "ollama" or "polza"
 	Ollama   OllamaConfig `json:"ollama"`
+	Answer   AnswerConfig `json:"answer,omitempty"`
 	Polza    PolzaConfig  `json:"polza"`
 	Chunking ChunkConfig  `json:"chunking"`
 	Ingest   IngestConfig `json:"ingest,omitempty"`

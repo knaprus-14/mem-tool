@@ -127,11 +127,15 @@ func newEngine(options Options) *engine {
 }
 
 func (e *engine) progress(stage string, page, total int, message string) {
+	current := 0
+	if page > 0 {
+		current = page - e.options.Pages.First + 1
+	}
+	e.progressAt(stage, page, current, total, message)
+}
+
+func (e *engine) progressAt(stage string, page, current, total int, message string) {
 	if e.options.Progress != nil {
-		current := 0
-		if page > 0 {
-			current = page - e.options.Pages.First + 1
-		}
 		e.options.Progress(ProgressEvent{Stage: stage, Page: page, Current: current, Total: total, Message: message})
 	}
 }

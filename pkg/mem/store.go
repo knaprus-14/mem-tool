@@ -30,6 +30,7 @@ type Entry struct {
 	VectorScore      float64   `json:"vector_score,omitempty"`
 	LexicalScore     float64   `json:"lexical_score,omitempty"`
 	FusionScore      float64   `json:"fusion_score,omitempty"`
+	LexicalHit       bool      `json:"-"`
 	CitationID       string    `json:"citation_id,omitempty"`
 	CitationLabel    string    `json:"citation_label,omitempty"`
 	SourceFile       string    `json:"source_file,omitempty"`

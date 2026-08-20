@@ -69,6 +69,87 @@ func TestSearchWithOptionsLexicalExactTermCanBeatVectorOnlyCandidate(t *testing.
 	}
 }
 
+func TestSearchWithOptionsKeepsWeakFTSOnlyHitWithoutCompatibleVector(t *testing.T) {
+	store := newSearchTestStore(t)
+	defer store.Close()
+	strong, err := store.Add("needle needle needle", "", nil, "test", []float32{1, 0}, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	weak, err := store.Add("needle", "", nil, "test", []float32{1, 0, 0}, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	options := SearchOptions{Query: "needle", QueryVector: []float32{1, 0}, Backend: "test"}
+	results, err := store.SearchWithOptions(options)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var strongResult, weakResult *Entry
+	for i := range results {
+		switch results[i].ID {
+		case strong.ID:
+			strongResult = &results[i]
+		case weak.ID:
+			weakResult = &results[i]
+		}
+	}
+	if strongResult == nil || weakResult == nil || !weakResult.LexicalHit {
+		t.Fatalf("weak FTS-only lexical hit was lost: %#v", results)
+	}
+	if strongResult.LexicalScore == weakResult.LexicalScore {
+		t.Fatalf("expected distinct BM25-normalized scores: %#v", results)
+	}
+	if weakResult.LexicalScore != 0 {
+		t.Fatalf("expected weakest normalized score to remain transparent at zero: %#v", weakResult)
+	}
+
+	again, err := store.SearchWithOptions(options)
+	if err != nil || len(again) != len(results) {
+		t.Fatalf("repeat FTS search changed result set: len=%d/%d err=%v", len(again), len(results), err)
+	}
+	for i := range results {
+		if results[i].ID != again[i].ID || results[i].Score != again[i].Score || results[i].LexicalHit != again[i].LexicalHit {
+			t.Fatalf("non-deterministic FTS ordering at %d: %#v vs %#v", i, results, again)
+		}
+	}
+}
+
+func TestSearchWithOptionsKeepsWeakFallbackHitWithoutCompatibleVector(t *testing.T) {
+	store := newSearchTestStore(t)
+	defer store.Close()
+	store.lexicalMode = lexicalFallback
+	strong, err := store.Add("fallbackterm fallbackterm", "", nil, "test", []float32{1, 0}, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	weak, err := store.Add("fallbackterm", "", nil, "test", []float32{1, 0, 0}, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	results, err := store.SearchWithOptions(SearchOptions{Query: "fallbackterm", QueryVector: []float32{1, 0}, Backend: "test"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var strongResult, weakResult *Entry
+	for i := range results {
+		switch results[i].ID {
+		case strong.ID:
+			strongResult = &results[i]
+		case weak.ID:
+			weakResult = &results[i]
+		}
+	}
+	if strongResult == nil || weakResult == nil || !weakResult.LexicalHit {
+		t.Fatalf("weak fallback-only lexical hit was lost: %#v", results)
+	}
+	if strongResult.LexicalScore == weakResult.LexicalScore || weakResult.LexicalScore != 0 {
+		t.Fatalf("fallback score normalization or membership is wrong: %#v", results)
+	}
+}
+
 func TestSearchWithOptionsOrderingIsDeterministic(t *testing.T) {
 	store := newSearchTestStore(t)
 	defer store.Close()
@@ -140,6 +221,67 @@ func TestSearchCitationsPreservePageAndLegacyHonesty(t *testing.T) {
 	basic, err := store.Search([]float32{1, 0}, "test", 1)
 	if err != nil || len(basic) != 1 {
 		t.Fatalf("basic Search compatibility broke: len=%d err=%v", len(basic), err)
+	}
+}
+
+func TestCitationIDsAreStableAndDistinctForDocumentIdentities(t *testing.T) {
+	first := Entry{DocumentID: "doc-first", SourcePath: "C:/docs/first.pdf", Page: 4, BlockIndex: 2, ChunkIndex: 1}
+	second := Entry{DocumentID: "doc-second", SourcePath: "C:/docs/second.pdf", Page: 4, BlockIndex: 2, ChunkIndex: 1}
+	firstID, firstLabel := CitationForEntry(first)
+	secondID, secondLabel := CitationForEntry(second)
+	if firstID == secondID {
+		t.Fatalf("distinct document identities collided: %q", firstID)
+	}
+	if firstID != mustCitationID(first) || secondID != mustCitationID(second) {
+		t.Fatal("citation ID changed between equivalent calculations")
+	}
+	if !strings.Contains(firstLabel, "page 4") || !strings.Contains(secondLabel, "page 4") {
+		t.Fatalf("citation labels lost physical page: %q / %q", firstLabel, secondLabel)
+	}
+}
+
+func mustCitationID(entry Entry) string {
+	id, _ := CitationForEntry(entry)
+	return id
+}
+
+func TestFTSRebuildAfterMutationAndReopen(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "db")
+	store, err := NewStore(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	entry, err := store.Add("before-token", "", nil, "test", []float32{1, 0}, false)
+	if err != nil {
+		store.Close()
+		t.Fatal(err)
+	}
+	before, err := store.SearchWithOptions(SearchOptions{Query: "before-token", Backend: "test"})
+	if err != nil || len(before) != 1 || before[0].ID != entry.ID {
+		store.Close()
+		t.Fatalf("initial lexical search failed: %#v err=%v", before, err)
+	}
+	if err := store.UpdateById(entry.ID, "after-token", "", nil, []float32{1, 0}); err != nil {
+		store.Close()
+		t.Fatal(err)
+	}
+	old, err := store.SearchWithOptions(SearchOptions{Query: "before-token", Backend: "test"})
+	if err != nil || len(old) != 0 {
+		store.Close()
+		t.Fatalf("stale lexical row survived mutation: %#v err=%v", old, err)
+	}
+	if err := store.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	reopened, err := NewStore(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer reopened.Close()
+	after, err := reopened.SearchWithOptions(SearchOptions{Query: "after-token", Backend: "test"})
+	if err != nil || len(after) != 1 || after[0].ID != entry.ID || !after[0].LexicalHit {
+		t.Fatalf("lexical index was not rebuilt after reopen: %#v err=%v", after, err)
 	}
 }
 

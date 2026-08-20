@@ -429,7 +429,7 @@ func handleSearch(cfg *Config, store *Store, args []string) error {
 	if !vectorOnly && len(results) > 0 {
 		lexicalCount := 0
 		for _, result := range results {
-			if result.LexicalScore > 0 {
+			if result.LexicalHit {
 				lexicalCount++
 			}
 		}

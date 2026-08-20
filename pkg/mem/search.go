@@ -74,6 +74,7 @@ func (s *Store) SearchWithOptions(options SearchOptions) ([]Entry, error) {
 		entry        Entry
 		vectorScore  float64
 		lexicalScore float64
+		lexicalHit   bool
 	}
 	candidates := make([]candidate, 0, len(s.entries))
 	for i := range s.entries {
@@ -87,12 +88,13 @@ func (s *Store) SearchWithOptions(options SearchOptions) ([]Entry, error) {
 		if vectorAvailable {
 			vectorScore = normalizeCosine(CosineSimilarity(options.QueryVector, s.vectors[i]))
 		}
-		lexicalScore := lexicalScores[entry.ID]
-		if !vectorAvailable && lexicalScore == 0 {
+		lexicalScore, lexicalHit := lexicalScores[entry.ID]
+		if !vectorAvailable && !lexicalHit {
 			continue
 		}
 		candidates = append(candidates, candidate{
 			entry: entry, vectorScore: vectorScore, lexicalScore: lexicalScore,
+			lexicalHit: lexicalHit,
 		})
 	}
 
@@ -107,6 +109,7 @@ func (s *Store) SearchWithOptions(options SearchOptions) ([]Entry, error) {
 		}
 		candidates[i].entry.VectorScore = candidates[i].vectorScore
 		candidates[i].entry.LexicalScore = candidates[i].lexicalScore
+		candidates[i].entry.LexicalHit = candidates[i].lexicalHit
 		candidates[i].entry.FusionScore = fusion
 		candidates[i].entry.Score = fusion
 		annotateCitation(&candidates[i].entry)
@@ -378,7 +381,7 @@ func CitationForEntry(entry Entry) (string, string) {
 		key = source
 	}
 	digest := sha256.Sum256([]byte(key))
-	id := fmt.Sprintf("cite-%s-%d-%d", hex.EncodeToString(digest[:4]), entry.BlockIndex+1, entry.ChunkIndex+1)
+	id := fmt.Sprintf("cite-%s-%d-%d", hex.EncodeToString(digest[:]), entry.BlockIndex+1, entry.ChunkIndex+1)
 	parts := []string{source}
 	if entry.Page > 0 {
 		parts = append(parts, fmt.Sprintf("page %d", entry.Page))

@@ -96,10 +96,10 @@ FTS5 доступен). Если конкретная сборка SQLite не �
 сохраняется vector score. После fusion остаётся совместимый re-ranking по
 свежести/тегам/важности, затем `-min-score` и только потом `-limit`.
 
-Каждый результат содержит строку `[CITE]` с компактным стабильным citation ID
-и label. Для provenance-aware chunks label включает source, физическую page,
-block и chunk; legacy rows не получают выдуманную страницу и помечаются
-`(no provenance)`.
+Каждый результат содержит строку `[CITE]` со стабильным content-derived citation
+ID (полный SHA-256 идентификатора документа) и отдельным читаемым label. Для
+provenance-aware chunks label включает source, физическую page, block и chunk;
+legacy rows не получают выдуманную страницу и помечаются `(no provenance)`.
 
 ### Версия 1.8 — Re-ranking (повторное ранжирование)
 После гибридного поиска оценки докручиваются:

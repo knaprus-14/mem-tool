@@ -395,50 +395,24 @@ func handleSearch(cfg *Config, store *Store, args []string) error {
 	}
 	fmt.Printf("вектор %d измерений\n", len(queryVec))
 
-	results, err := store.Search(queryVec, cfg.Backend, limit)
+	results, err := store.SearchWithOptions(mem.SearchOptions{
+		Query: query, QueryVector: queryVec, Backend: cfg.Backend,
+		Tags: tags, TagFilter: tagFilter, From: from, To: to,
+		VectorOnly: vectorOnly,
+	})
 	if err != nil {
 		return fmt.Errorf("ошибка поиска: %w", err)
 	}
 
-	// Фильтрация по тегам
 	if len(tags) > 0 {
-		var filtered []Entry
-		for _, r := range results {
-			if hasAnyTag(r, tags) {
-				filtered = append(filtered, r)
-			}
-		}
-		results = filtered
 		fmt.Printf("[TAG] Фильтр по тегам: %s\n", strings.Join(tags, ", "))
 	}
 
-	// Фильтрация по категории (точное совпадение с одним тегом записи).
-	// В отличие от -tags "a,b" (любой из), -tag "X" — это семантический
-	// фильтр: запись должна содержать тег X. Используется для типовых
-	// категорий: rule / decision / bug / best-practice.
 	if tagFilter != "" {
-		var filtered []Entry
-		for _, r := range results {
-			for _, t := range r.Tags {
-				if t == tagFilter {
-					filtered = append(filtered, r)
-					break
-				}
-			}
-		}
-		results = filtered
 		fmt.Printf("[TAG-FILTER] Категория: %s\n", tagFilter)
 	}
 
-	// Фильтрация по дате
 	if from != "" || to != "" {
-		var filtered []Entry
-		for _, r := range results {
-			if matchesDateRange(r, from, to) {
-				filtered = append(filtered, r)
-			}
-		}
-		results = filtered
 		dateRange := ""
 		if from != "" {
 			dateRange = "от " + from
@@ -452,21 +426,15 @@ func handleSearch(cfg *Config, store *Store, args []string) error {
 		fmt.Printf("[DATE] Фильтр по дате: %s\n", dateRange)
 	}
 
-	// Гибридный буст: полнотекстовые бонусы к векторным оценкам
 	if !vectorOnly && len(results) > 0 {
-		hybridCount := 0
-		for i := range results {
-			boosted := hybridBoost(results[i], query, results[i].Score)
-			if boosted > results[i].Score {
-				results[i].Score = boosted
-				hybridCount++
+		lexicalCount := 0
+		for _, result := range results {
+			if result.LexicalScore > 0 {
+				lexicalCount++
 			}
 		}
-		sort.Slice(results, func(i, j int) bool {
-			return results[i].Score > results[j].Score
-		})
-		fmt.Printf("[HYBRID] Гибридный поиск: векторный + полнотекстовый (буст у %d/%d)\n",
-			hybridCount, len(results))
+		fmt.Printf("[HYBRID] Vector %.0f%% + lexical %.0f%% (%s; lexical candidates %d/%d)\n",
+			mem.VectorFusionWeight*100, mem.LexicalFusionWeight*100, store.LexicalMode(), lexicalCount, len(results))
 	} else if vectorOnly && len(results) > 0 {
 		fmt.Printf("[VECTOR] Только векторный поиск\n")
 	}
@@ -482,6 +450,7 @@ func handleSearch(cfg *Config, store *Store, args []string) error {
 				rerankCount, len(results))
 		}
 	}
+	sortSearchResults(results)
 
 	// Фильтрация по порогу релевантности (после всех бустов)
 	if minScore > 0 {
@@ -494,6 +463,10 @@ func handleSearch(cfg *Config, store *Store, args []string) error {
 		results = filtered
 		fmt.Printf("[SCORE] Порог релевантности: >= %.0f%%\n", minScore*100)
 	}
+	if limit > len(results) {
+		limit = len(results)
+	}
+	results = results[:limit]
 
 	if len(results) == 0 {
 		fmt.Println(ui.Warn("Ничего не найдено"))
@@ -538,11 +511,14 @@ func handleSearch(cfg *Config, store *Store, args []string) error {
 		)
 		fmt.Println(header)
 		fmt.Printf("   %s\n", r.Text)
+		fmt.Printf("   %s vector=%.3f lexical=%.3f fusion=%.3f final=%.3f\n",
+			ui.Key("[SCORE]"), r.VectorScore, r.LexicalScore, r.FusionScore, r.Score)
 
-		// Показываем источник, если это чанк документа
-		if r.SourceFile != "" {
-			fmt.Printf("   %s %s\n", ui.Key("[FILE]"), ui.Tag(sourceReference(r)))
+		citationID, citationLabel := r.CitationID, r.CitationLabel
+		if citationID == "" || citationLabel == "" {
+			citationID, citationLabel = mem.CitationForEntry(r)
 		}
+		fmt.Printf("   %s %s %s\n", ui.Key("[CITE]"), ui.ID(citationID), ui.Tag(citationLabel))
 
 		if len(r.Tags) > 0 {
 			fmt.Printf("   %s %s\n", ui.Key("[TAG]"), ui.Tag(strings.Join(r.Tags, ", ")))
@@ -554,104 +530,24 @@ func handleSearch(cfg *Config, store *Store, args []string) error {
 	return nil
 }
 
-// hasAnyTag проверяет, содержит ли запись хотя бы один из указанных тегов
-func hasAnyTag(e Entry, filterTags []string) bool {
-	for _, ft := range filterTags {
-		ft = strings.ToLower(strings.TrimSpace(ft))
-		for _, et := range e.Tags {
-			if strings.ToLower(strings.TrimSpace(et)) == ft {
-				return true
-			}
-		}
-	}
-	return false
-}
-
 func sourceReference(entry Entry) string {
-	ref := entry.SourceFile
-	if entry.SourcePath != "" {
-		ref = entry.SourcePath
-	}
-	if entry.Page > 0 {
-		ref += fmt.Sprintf(" | page %d", entry.Page)
-	}
-	if entry.DocumentID != "" {
-		ref += fmt.Sprintf(" | block %d", entry.BlockIndex+1)
-	}
-	if entry.ChunkLabel != "" {
-		ref += " | " + entry.ChunkLabel
-	}
-	if entry.TotalChunks > 0 {
-		ref += fmt.Sprintf(" | chunk %d/%d", entry.ChunkIndex+1, entry.TotalChunks)
-	}
+	_, ref := mem.CitationForEntry(entry)
 	return ref
 }
 
-// matchesDateRange проверяет, попадает ли дата создания записи в диапазон
-func matchesDateRange(e Entry, from, to string) bool {
-	t, err := time.Parse(time.RFC3339, e.Created)
-	if err != nil {
-		return true // не можем распарсить — пропускаем
-	}
-
-	if from != "" {
-		fromTime, err := time.Parse("2006-01-02", from)
-		if err == nil && t.Before(fromTime) {
-			return false
+func sortSearchResults(results []Entry) {
+	sort.SliceStable(results, func(i, j int) bool {
+		if results[i].Score != results[j].Score {
+			return results[i].Score > results[j].Score
 		}
-	}
-
-	if to != "" {
-		// Конец дня to, чтобы записи за эту дату тоже входили
-		toTime, err := time.Parse("2006-01-02", to)
-		if err == nil {
-			toEnd := toTime.Add(24*time.Hour - time.Second)
-			if t.After(toEnd) {
-				return false
-			}
+		if results[i].LexicalScore != results[j].LexicalScore {
+			return results[i].LexicalScore > results[j].LexicalScore
 		}
-	}
-
-	return true
-}
-
-// hybridBoost добавляет полнотекстовые бонусы к векторной оценке:
-// +0.15 если запрос найден в тексте записи
-// +0.30 если запрос найден в заголовке
-// +0.20 если запрос найден в тегах
-// Итоговая оценка не превышает 1.0
-func hybridBoost(e Entry, query string, baseScore float64) float64 {
-	q := strings.ToLower(strings.TrimSpace(query))
-	if q == "" {
-		return baseScore
-	}
-
-	boost := 0.0
-
-	if strings.Contains(strings.ToLower(e.Text), q) {
-		boost += 0.15
-	}
-
-	if strings.Contains(strings.ToLower(e.Title), q) {
-		boost += 0.30
-	}
-
-	for _, tag := range e.Tags {
-		if strings.Contains(strings.ToLower(tag), q) {
-			boost += 0.20
-			break
+		if results[i].VectorScore != results[j].VectorScore {
+			return results[i].VectorScore > results[j].VectorScore
 		}
-	}
-
-	if boost == 0 {
-		return baseScore
-	}
-
-	result := baseScore + boost
-	if result > 1.0 {
-		result = 1.0
-	}
-	return result
+		return results[i].ID < results[j].ID
+	})
 }
 
 // reRankResults применяет повышающие коэффициенты:

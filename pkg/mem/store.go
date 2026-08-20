@@ -26,7 +26,12 @@ type Entry struct {
 	Backend          string    `json:"backend"`
 	Dims             int       `json:"dims"`
 	Embedding        []float32 `json:"-"`
-	Score            float64   `json:"-"` // для результатов поиска
+	Score            float64   `json:"-"` // итоговый score результата поиска
+	VectorScore      float64   `json:"vector_score,omitempty"`
+	LexicalScore     float64   `json:"lexical_score,omitempty"`
+	FusionScore      float64   `json:"fusion_score,omitempty"`
+	CitationID       string    `json:"citation_id,omitempty"`
+	CitationLabel    string    `json:"citation_label,omitempty"`
 	SourceFile       string    `json:"source_file,omitempty"`
 	ChunkLabel       string    `json:"chunk_label,omitempty"`
 	ChunkIndex       int       `json:"chunk_index,omitempty"`
@@ -75,10 +80,11 @@ type DocumentChunk struct {
 
 // Store — потокобезопасное хранилище векторов на базе SQLite
 type Store struct {
-	mu      sync.RWMutex
-	db      *sql.DB
-	entries []Entry
-	vectors [][]float32
+	mu          sync.RWMutex
+	db          *sql.DB
+	entries     []Entry
+	vectors     [][]float32
+	lexicalMode string
 }
 
 // Схема БД (создаётся при инициализации)
@@ -165,7 +171,7 @@ func NewStore(dir string) (*Store, error) {
 		return nil, fmt.Errorf("создание схемы: %w", err)
 	}
 
-	s := &Store{db: db}
+	s := &Store{db: db, lexicalMode: initLexicalIndex(db)}
 	if err := s.loadAll(); err != nil {
 		db.Close()
 		return nil, err
@@ -860,6 +866,9 @@ func (s *Store) Search(queryVector []float32, backend string, limit int) ([]Entr
 	for i := 0; i < limit; i++ {
 		out[i] = cloneEntry(results[i].entry)
 		out[i].Score = results[i].score
+		out[i].VectorScore = normalizeCosine(results[i].score)
+		out[i].FusionScore = out[i].VectorScore
+		annotateCitation(&out[i])
 	}
 	return out, nil
 }

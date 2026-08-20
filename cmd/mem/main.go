@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"os/signal"
@@ -27,28 +28,33 @@ type (
 	Entry        = mem.Entry
 	IndexResult  = mem.IndexResult
 	OllamaConfig = mem.OllamaConfig
+	AnswerConfig = mem.AnswerConfig
 	PolzaConfig  = mem.PolzaConfig
 	ChunkConfig  = mem.ChunkConfig
 )
 
 // Алиасы функций
 var (
-	loadConfig         = mem.LoadConfig
-	saveConfig         = mem.SaveConfig
-	newStore           = mem.NewStore
-	ChunkDocument      = mem.ChunkDocument
-	IndexDirectory     = mem.IndexDirectory
-	IndexFile          = mem.IndexFile
-	IndexSummary       = mem.IndexSummary
-	getEmbedding       = mem.GetEmbedding
-	cosineSimilarity   = mem.CosineSimilarity
-	configPath         = mem.ConfigPath
-	memExists          = mem.MemExists
-	memDir             = mem.MemDir
-	initMem            = mem.InitMem
-	ensureMem          = mem.EnsureMem
-	defaultLocalConfig = mem.DefaultLocalConfig
-	defaultConfig      = mem.DefaultConfig
+	loadConfig          = mem.LoadConfig
+	saveConfig          = mem.SaveConfig
+	newStore            = mem.NewStore
+	ChunkDocument       = mem.ChunkDocument
+	IndexDirectory      = mem.IndexDirectory
+	IndexFile           = mem.IndexFile
+	IndexSummary        = mem.IndexSummary
+	getEmbedding        = mem.GetEmbedding
+	getEmbeddingContext = mem.GetEmbeddingContext
+	cosineSimilarity    = mem.CosineSimilarity
+	configPath          = mem.ConfigPath
+	memExists           = mem.MemExists
+	memDir              = mem.MemDir
+	initMem             = mem.InitMem
+	ensureMem           = mem.EnsureMem
+	defaultLocalConfig  = mem.DefaultLocalConfig
+	defaultConfig       = mem.DefaultConfig
+	newAnswerProvider   = func(cfg mem.AnswerConfig) (mem.AnswerProvider, error) {
+		return mem.NewOllamaAnswerProvider(cfg)
+	}
 )
 
 const memDirName = mem.MemDirName
@@ -73,6 +79,7 @@ var cmdRequiresDB = map[string]bool{
 	"add": true, "add-file": true, "import": true, "index": true,
 	"config": true,
 	"search": true, "recent": true, "stats": true,
+	"ask":    true,
 	"source": true, "sources": true,
 	"show": true, "get": true, "view": true,
 	"delete": true, "rm": true,
@@ -193,6 +200,11 @@ func run() int {
 		}
 	case "search":
 		if err := handleSearch(cfg, store, args); err != nil {
+			fmt.Fprintf(os.Stderr, "Ошибка: %v\n", err)
+			return 1
+		}
+	case "ask":
+		if err := handleAsk(cfg, store, args); err != nil {
 			fmt.Fprintf(os.Stderr, "Ошибка: %v\n", err)
 			return 1
 		}
@@ -528,6 +540,123 @@ func handleSearch(cfg *Config, store *Store, args []string) error {
 		}
 	}
 	return nil
+}
+
+func handleAsk(cfg *Config, store *Store, args []string) error {
+	searchArgs, contextOverride, err := parseAskArgs(args)
+	if err != nil {
+		return err
+	}
+	positional, _, tags, limit, from, to, minScore, vectorOnly, _, tagFilter := parseFlags(searchArgs)
+	if len(positional) == 0 {
+		return fmt.Errorf("укажи вопрос\nПример: mem ask \"где описан порядок запуска?\" -limit 5")
+	}
+	question := strings.Join(positional, " ")
+	answerCfg := cfg.Answer.WithDefaults()
+	provider, err := newAnswerProvider(answerCfg)
+	if err != nil {
+		return err
+	}
+
+	fmt.Fprintln(os.Stderr, "[ASK] retrieval: строю embedding и ищу evidence...")
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
+	defer stop()
+	ctx, cancel := mem.AnswerContext(ctx, answerCfg)
+	defer cancel()
+	queryVector, err := getEmbeddingContext(ctx, cfg, question)
+	if err != nil {
+		return fmt.Errorf("ask retrieval: %w", err)
+	}
+	results, err := store.SearchWithOptions(mem.SearchOptions{
+		Query: question, QueryVector: queryVector, Backend: cfg.Backend,
+		Tags: tags, TagFilter: tagFilter, From: from, To: to, VectorOnly: vectorOnly,
+	})
+	if err != nil {
+		return fmt.Errorf("ask retrieval: %w", err)
+	}
+	if len(results) > 0 {
+		reRankResults(results, question)
+		sortSearchResults(results)
+	}
+	if minScore > 0 {
+		filtered := results[:0]
+		for _, result := range results {
+			if result.Score >= minScore {
+				filtered = append(filtered, result)
+			}
+		}
+		results = filtered
+	}
+	if limit > len(results) {
+		limit = len(results)
+	}
+	results = results[:limit]
+	if len(results) == 0 {
+		fmt.Fprintln(os.Stdout, "Недостаточно подтверждённых данных: поиск не вернул подходящих фрагментов.")
+		return nil
+	}
+
+	contextBudget := answerCfg.ContextChars
+	if contextOverride > 0 {
+		contextBudget = contextOverride
+	}
+	prompt, err := mem.BuildGroundedPromptWithOptions(question, results, contextBudget, cfg.Ingest.LowConfidence)
+	if err != nil {
+		return err
+	}
+	if len(prompt.Evidence) == 0 {
+		fmt.Fprintln(os.Stdout, "Недостаточно подтверждённых данных: evidence не помещается в заданный context budget.")
+		return nil
+	}
+	for _, evidence := range prompt.Evidence {
+		for _, warning := range evidence.Warnings {
+			fmt.Fprintf(os.Stderr, "[ASK] warning %s: %s\n", evidence.CitationID, warning)
+		}
+	}
+	fmt.Fprintf(os.Stderr, "[ASK] evidence: %d фрагм.; generation через %s...\n", len(prompt.Evidence), answerCfg.Model)
+	rawAnswer, err := provider.Generate(ctx, mem.AnswerRequest{
+		Model: answerCfg.Model, System: prompt.System, Prompt: prompt.User,
+		MaxTokens: answerCfg.MaxTokens, Temperature: answerCfg.Temperature,
+	})
+	if err != nil {
+		return fmt.Errorf("ask generation: %w", err)
+	}
+	validated := mem.ValidateGroundedAnswer(rawAnswer, prompt.Evidence)
+	if validated.Rejected {
+		if len(validated.UnknownIDs) > 0 {
+			return fmt.Errorf("grounded answer rejected: %s (%s)", validated.Reason, strings.Join(validated.UnknownIDs, ", "))
+		}
+		return fmt.Errorf("grounded answer rejected: %s", validated.Reason)
+	}
+	fmt.Fprintln(os.Stdout, validated.Answer)
+	if len(validated.Used) > 0 {
+		fmt.Fprintln(os.Stdout, "\nИсточники:")
+		for _, evidence := range validated.Used {
+			fmt.Fprintf(os.Stdout, "- %s — %s\n", evidence.CitationID, evidence.CitationLabel)
+		}
+	}
+	return nil
+}
+
+func parseAskArgs(args []string) ([]string, int, error) {
+	contextBudget := 0
+	out := make([]string, 0, len(args))
+	for i := 0; i < len(args); i++ {
+		if args[i] != "-context-chars" {
+			out = append(out, args[i])
+			continue
+		}
+		if i+1 >= len(args) {
+			return nil, 0, errors.New("использование: -context-chars <положительное число>")
+		}
+		i++
+		n, parseErr := strconv.Atoi(args[i])
+		if parseErr != nil || n <= 0 || n > 1000000 {
+			return nil, 0, errors.New("-context-chars должен быть от 1 до 1000000")
+		}
+		contextBudget = n
+	}
+	return out, contextBudget, nil
 }
 
 func sourceReference(entry Entry) string {
@@ -1180,13 +1309,17 @@ func printUsage() {
       Сохранить новую запись в базу. -important — пометить как важную.
       Если .mem/ нет — создаст автоматически.
 
-  mem search <запрос> [-limit N] [-tags "тег1,тег2"] [-tag "категория"] [-from 2026-01-01] [-to 2026-07-01] [-min-score 0.5] [-vector-only]
-      Найти записи, похожие по смыслу.
-      По умолчанию гибридный поиск + реранжирование (свежесть, теги, важность).
-      -vector-only — отключить полнотекстовый буст, только векторы.
+	mem search <запрос> [-limit N] [-tags "тег1,тег2"] [-tag "категория"] [-from 2026-01-01] [-to 2026-07-01] [-min-score 0.5] [-vector-only]
+	    Найти записи, похожие по смыслу.
+	    По умолчанию гибридный поиск + реранжирование (свежесть, теги, важность).
+	    -vector-only — отключить полнотекстовый буст, только векторы.
       -tag "X" — фильтр по КАТЕГОРИИ записи (точное совпадение с одним тегом:
-      rule / decision / bug / best-practice). Отличается от -tags (любой из списка).
-      Текст каждой записи выводится полностью (без обрезки).
+	    rule / decision / bug / best-practice). Отличается от -tags (любой из списка).
+	    Текст каждой записи выводится полностью (без обрезки).
+
+	mem ask <вопрос> [-limit N] [-tags "тег1,тег2"] [-tag "категория"] [-from 2026-01-01] [-to 2026-07-01] [-min-score 0.5] [-context-chars N]
+	    Grounded answer по найденным фрагментам с обязательными citations.
+	    Статусы идут в stderr, ответ и источники — в stdout. mem search не меняется.
 
   mem recent [-limit N]
       Показать последние записи
@@ -1243,8 +1376,23 @@ func printUsage() {
   mem config set-polza-model <model>
       Установить модель Polza AI
 
-  mem config set-ollama-model <model>
-      Установить модель Ollama (по умолч. bge-m3)
+	mem config set-ollama-model <model>
+	    Установить модель Ollama (по умолч. bge-m3)
+
+	mem config set-answer-model <model>
+	    Установить отдельную локальную chat/instruct модель для mem ask
+
+	mem config set-answer-base-url <url>
+	    Установить URL Ollama для mem ask
+
+	mem config set-answer-timeout <секунды>
+	    Таймаут генерации ответа
+
+	mem config set-answer-max-tokens <число>
+	    Максимум токенов ответа
+
+	mem config set-answer-context-chars <число>
+	    Бюджет символов evidence
 
   mem stats
       Статистика базы
@@ -1349,6 +1497,53 @@ func handleConfig(args []string) error {
 			return fmt.Errorf("использование: mem config set-ollama-model <model_name>")
 		}
 		cfg.Ollama.Model = args[1]
+		return saveConfig(cfg)
+
+	case "set-answer-model":
+		if len(args) < 2 {
+			return fmt.Errorf("использование: mem config set-answer-model <model_name>")
+		}
+		cfg.Answer.Model = args[1]
+		return saveConfig(cfg)
+
+	case "set-answer-base-url":
+		if len(args) < 2 {
+			return fmt.Errorf("использование: mem config set-answer-base-url <url>")
+		}
+		cfg.Answer.BaseURL = args[1]
+		return saveConfig(cfg)
+
+	case "set-answer-timeout":
+		if len(args) < 2 {
+			return fmt.Errorf("использование: mem config set-answer-timeout <секунды>")
+		}
+		n, err := strconv.Atoi(args[1])
+		if err != nil || n <= 0 || n > 3600 {
+			return fmt.Errorf("таймаут ответа должен быть от 1 до 3600 секунд")
+		}
+		cfg.Answer.TimeoutSeconds = n
+		return saveConfig(cfg)
+
+	case "set-answer-max-tokens":
+		if len(args) < 2 {
+			return fmt.Errorf("использование: mem config set-answer-max-tokens <число>")
+		}
+		n, err := strconv.Atoi(args[1])
+		if err != nil || n <= 0 || n > 100000 {
+			return fmt.Errorf("максимум токенов ответа должен быть от 1 до 100000")
+		}
+		cfg.Answer.MaxTokens = n
+		return saveConfig(cfg)
+
+	case "set-answer-context-chars":
+		if len(args) < 2 {
+			return fmt.Errorf("использование: mem config set-answer-context-chars <число>")
+		}
+		n, err := strconv.Atoi(args[1])
+		if err != nil || n <= 0 || n > 1000000 {
+			return fmt.Errorf("бюджет evidence должен быть от 1 до 1000000 символов")
+		}
+		cfg.Answer.ContextChars = n
 		return saveConfig(cfg)
 
 	case "set-chunk-size":

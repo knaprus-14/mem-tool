@@ -17,6 +17,17 @@ func (e *engine) ocrPDF(ctx context.Context, path string, discoveredCount int) (
 	if err != nil {
 		return nil, err
 	}
+	pages := make([]int, 0, total)
+	for page := first; page <= last; page++ {
+		pages = append(pages, page)
+	}
+	return e.ocrPDFPages(ctx, path, pages)
+}
+
+func (e *engine) ocrPDFPages(ctx context.Context, path string, pages []int) ([]extractedPage, error) {
+	if len(pages) == 0 {
+		return nil, nil
+	}
 	var render pageRenderer
 	if tool, found, resolveErr := e.optionalTool("pdftoppm", e.options.Tools.PDFToPPM); resolveErr != nil {
 		return nil, resolveErr
@@ -42,7 +53,7 @@ func (e *engine) ocrPDF(ctx context.Context, path string, discoveredCount int) (
 	} else {
 		return nil, fmt.Errorf("no PDF OCR renderer found: configure pdftoppm/mutool via project config or MEM_PDFTOPPM/MEM_MUTOOL")
 	}
-	return e.ocrRenderedPages(ctx, first, last, total, ".png", render)
+	return e.ocrRenderedPageNumbers(ctx, pages, ".png", render)
 }
 
 func (e *engine) selectedPages(discoveredCount int) (first, last, total int, err error) {
@@ -66,6 +77,17 @@ func (e *engine) selectedPages(discoveredCount int) (first, last, total int, err
 }
 
 func (e *engine) ocrRenderedPages(ctx context.Context, first, last, total int, extension string, render pageRenderer) ([]extractedPage, error) {
+	pageNumbers := make([]int, 0, total)
+	for page := first; page <= last; page++ {
+		pageNumbers = append(pageNumbers, page)
+	}
+	return e.ocrRenderedPageNumbers(ctx, pageNumbers, extension, render)
+}
+
+func (e *engine) ocrRenderedPageNumbers(ctx context.Context, pageNumbers []int, extension string, render pageRenderer) ([]extractedPage, error) {
+	if len(pageNumbers) == 0 {
+		return nil, nil
+	}
 	tesseract, err := e.resolve("tesseract", e.options.Tools.Tesseract)
 	if err != nil {
 		return nil, fmt.Errorf("OCR requires Tesseract: %w", err)
@@ -80,17 +102,17 @@ func (e *engine) ocrRenderedPages(ctx context.Context, first, last, total int, e
 	}
 	defer e.removeAll(tempDir)
 
-	pages := make([]extractedPage, 0, total)
-	for page := first; page <= last; page++ {
+	pages := make([]extractedPage, 0, len(pageNumbers))
+	for current, page := range pageNumbers {
 		if err := ctx.Err(); err != nil {
 			return nil, fmt.Errorf("OCR cancelled before page %d: %w", page, err)
 		}
 		image := filepath.Join(tempDir, fmt.Sprintf("page-%06d%s", page, extension))
-		e.progress(StageRender, page, total, fmt.Sprintf("rendering page %d", page))
+		e.progressAt(StageRender, page, current+1, len(pageNumbers), fmt.Sprintf("rendering page %d", page))
 		if err := render(ctx, page, image); err != nil {
 			return nil, fmt.Errorf("render page %d: %w", page, err)
 		}
-		e.progress(StageOCR, page, total, fmt.Sprintf("OCR page %d", page))
+		e.progressAt(StageOCR, page, current+1, len(pageNumbers), fmt.Sprintf("OCR page %d", page))
 		result, err := e.runTesseract(ctx, tesseract, tessdata, image)
 		_ = e.remove(image)
 		if err != nil {
@@ -102,12 +124,8 @@ func (e *engine) ocrRenderedPages(ctx context.Context, first, last, total int, e
 		}
 		if strings.TrimSpace(result.text) == "" {
 			result.warnings = append(result.warnings, fmt.Sprintf("page %d: OCR produced no text", page))
-			continue
 		}
 		pages = append(pages, result)
-	}
-	if len(pages) == 0 {
-		return nil, fmt.Errorf("OCR produced no non-empty text on pages %d-%d", first, last)
 	}
 	return pages, nil
 }

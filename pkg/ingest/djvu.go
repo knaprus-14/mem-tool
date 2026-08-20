@@ -30,6 +30,8 @@ func (e *engine) extractDjVu(ctx context.Context, path string) (Document, error)
 		return Document{}, resolveErr
 	}
 	pageCount := 0
+	var textPages []extractedPage
+	var textAttempt string
 	if found {
 		args := []string{}
 		if last > 0 {
@@ -43,30 +45,48 @@ func (e *engine) extractDjVu(ctx context.Context, path string) (Document, error)
 		out, runErr := e.runTool(ctx, textTool, args...)
 		if runErr == nil {
 			pages, count := pagesFromFormFeed(string(out.stdout), first, "text", -1)
+			textPages = pages
 			pageCount = count
-			if richEnough(pages, e.options.OCR.MinTextRunes) {
-				doc, buildErr := documentFromPages(canonical, FormatDjVu, "image/vnd.djvu", pages)
-				if buildErr == nil {
-					e.progress(StageDone, 0, len(pages), "DjVu embedded text extracted")
-				}
-				return doc, buildErr
-			}
+		} else {
+			textAttempt = commandFailure("djvutxt", out, runErr).Error()
 		}
 	}
 	if last > 0 {
 		pageCount = last
 	} else {
-		pageCount, err = e.djvuPageCount(ctx, canonical)
-		if err != nil {
-			return Document{}, fmt.Errorf("DjVu has no usable embedded text and page count is required for OCR: %w", err)
+		discovered, countErr := e.djvuPageCount(ctx, canonical)
+		if countErr == nil {
+			pageCount = discovered
+		} else if pageCount == 0 {
+			return Document{}, fmt.Errorf("DjVu has no usable embedded text and page count is required for OCR: %w", countErr)
 		}
 	}
-	e.progress(StageOCR, 0, pageCount, "DjVu has no embedded text; OCR required")
-	pages, err := e.ocrDjVu(ctx, canonical, pageCount)
+	ocrPageNumbers := pagesNeedingOCR(textPages, first, pageCount, e.options.OCR.MinTextRunes)
+	if len(ocrPageNumbers) == 0 && len(textPages) > 0 {
+		doc, buildErr := documentFromPages(canonical, FormatDjVu, "image/vnd.djvu", textPages)
+		if buildErr == nil {
+			e.progress(StageDone, 0, len(textPages), "DjVu embedded text extracted")
+		}
+		return doc, buildErr
+	}
+	if len(ocrPageNumbers) == 0 {
+		first, selectedLast, _, rangeErr := e.selectedPages(pageCount)
+		if rangeErr != nil {
+			return Document{}, rangeErr
+		}
+		for page := first; page <= selectedLast; page++ {
+			ocrPageNumbers = append(ocrPageNumbers, page)
+		}
+	}
+	e.progress(StageOCR, 0, len(ocrPageNumbers), fmt.Sprintf("DjVu pages require OCR: %s", formatPageNumbers(ocrPageNumbers)))
+	pages, err := e.ocrDjVuPages(ctx, canonical, ocrPageNumbers)
 	if err != nil {
+		if textAttempt != "" {
+			return Document{}, fmt.Errorf("DjVu requires OCR after %s, but fallback is unavailable or failed: %w", textAttempt, err)
+		}
 		return Document{}, fmt.Errorf("DjVu requires OCR, but fallback is unavailable or failed: %w", err)
 	}
-	doc, err := documentFromPages(canonical, FormatDjVu, "image/vnd.djvu", pages)
+	doc, err := documentFromPages(canonical, FormatDjVu, "image/vnd.djvu", mergeExtractedPages(textPages, pages))
 	if err == nil {
 		e.progress(StageDone, 0, len(pages), "DjVu OCR complete")
 	}
@@ -94,6 +114,17 @@ func (e *engine) ocrDjVu(ctx context.Context, path string, discoveredCount int) 
 	if err != nil {
 		return nil, err
 	}
+	pageNumbers := make([]int, 0, total)
+	for page := first; page <= last; page++ {
+		pageNumbers = append(pageNumbers, page)
+	}
+	return e.ocrDjVuPages(ctx, path, pageNumbers)
+}
+
+func (e *engine) ocrDjVuPages(ctx context.Context, path string, pageNumbers []int) ([]extractedPage, error) {
+	if len(pageNumbers) == 0 {
+		return nil, nil
+	}
 	renderTool, err := e.resolve("ddjvu", e.options.Tools.DjVuRender)
 	if err != nil {
 		return nil, fmt.Errorf("DjVu OCR requires DjVuLibre ddjvu: %w", err)
@@ -105,5 +136,5 @@ func (e *engine) ocrDjVu(ctx context.Context, path string, discoveredCount int) 
 		}
 		return nil
 	}
-	return e.ocrRenderedPages(ctx, first, last, total, ".tif", render)
+	return e.ocrRenderedPageNumbers(ctx, pageNumbers, ".tif", render)
 }

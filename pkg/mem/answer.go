@@ -47,6 +47,7 @@ type OllamaAnswerProvider struct {
 	Model            string
 	HTTPClient       *http.Client
 	MaxResponseBytes int
+	Timeout          time.Duration
 }
 
 type ollamaChatMessage struct {

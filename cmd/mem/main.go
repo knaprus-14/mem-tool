@@ -1383,7 +1383,7 @@ func printUsage() {
 	    Установить отдельную локальную chat/instruct модель для mem ask
 
 	mem config set-answer-base-url <url>
-	    Установить URL Ollama для mem ask
+	    Установить loopback URL Ollama для mem ask (localhost/127.0.0.1/::1)
 
 	mem config set-answer-timeout <секунды>
 	    Таймаут генерации ответа
@@ -1508,9 +1508,13 @@ func handleConfig(args []string) error {
 
 	case "set-answer-base-url":
 		if len(args) < 2 {
-			return fmt.Errorf("использование: mem config set-answer-base-url <url>")
+			return fmt.Errorf("использование: mem config set-answer-base-url <local-url>")
 		}
-		cfg.Answer.BaseURL = args[1]
+		baseURL, err := mem.NormalizeLocalAnswerBaseURL(args[1])
+		if err != nil {
+			return err
+		}
+		cfg.Answer.BaseURL = baseURL
 		return saveConfig(cfg)
 
 	case "set-answer-timeout":

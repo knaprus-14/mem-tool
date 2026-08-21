@@ -96,6 +96,10 @@ func importExtractedDocumentWithContextEmbedder(ctx context.Context, cfg *Config
 	if embed == nil {
 		return result, fmt.Errorf("import embedder is nil")
 	}
+	embeddingIdentity, err := EmbeddingIdentityForConfig(cfg)
+	if err != nil {
+		return result, err
+	}
 	if err := ingest.ValidateDocument(doc); err != nil {
 		return result, fmt.Errorf("invalid extracted document: %w", err)
 	}
@@ -142,7 +146,8 @@ func importExtractedDocumentWithContextEmbedder(ctx context.Context, cfg *Config
 	storedChunks := make([]DocumentChunk, len(pieces))
 	for i, piece := range pieces {
 		storedChunks[i] = DocumentChunk{
-			Text: piece.text, Title: title, Tags: options.Tags, Backend: cfg.Backend,
+			Text: piece.text, Title: title, Tags: options.Tags, Backend: embeddingIdentity.Backend,
+			EmbeddingModel: embeddingIdentity.Model, EmbeddingSpace: embeddingIdentity.SpaceID,
 			Embedding: embeddings[i], ChunkLabel: piece.label,
 			ChunkIndex: i, TotalChunks: len(pieces), Important: options.Important,
 			Provenance: Provenance{

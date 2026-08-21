@@ -9,7 +9,9 @@ import (
 )
 
 func testConfig(maxSize int, strategy string) *Config {
-	return &Config{Backend: "test", Chunking: ChunkConfig{MaxSize: maxSize, Strategy: strategy}}
+	cfg := DefaultLocalConfig()
+	cfg.Chunking = ChunkConfig{MaxSize: maxSize, Strategy: strategy}
+	return cfg
 }
 
 func fakeEmbedding(_ *Config, text string) ([]float32, error) {

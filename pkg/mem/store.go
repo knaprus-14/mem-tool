@@ -7,6 +7,7 @@ import (
 	"encoding/binary"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"math"
 	"os"
@@ -27,6 +28,8 @@ type Entry struct {
 	Tags             []string  `json:"tags,omitempty"`
 	Created          string    `json:"created"`
 	Backend          string    `json:"backend"`
+	EmbeddingModel   string    `json:"embedding_model,omitempty"`
+	EmbeddingSpace   string    `json:"embedding_space,omitempty"`
 	Dims             int       `json:"dims"`
 	Embedding        []float32 `json:"-"`
 	Score            float64   `json:"-"` // итоговый score результата поиска
@@ -78,16 +81,18 @@ type Provenance struct {
 // replacement. All chunks passed to ReplaceDocumentChunks are committed or
 // rolled back together.
 type DocumentChunk struct {
-	Text        string
-	Title       string
-	Tags        []string
-	Backend     string
-	Embedding   []float32
-	ChunkLabel  string
-	ChunkIndex  int
-	TotalChunks int
-	Important   bool
-	Provenance  Provenance
+	Text           string
+	Title          string
+	Tags           []string
+	Backend        string
+	EmbeddingModel string
+	EmbeddingSpace string
+	Embedding      []float32
+	ChunkLabel     string
+	ChunkIndex     int
+	TotalChunks    int
+	Important      bool
+	Provenance     Provenance
 }
 
 // Store — потокобезопасное хранилище векторов на базе SQLite
@@ -109,6 +114,8 @@ CREATE TABLE IF NOT EXISTS entries (
     tags TEXT NOT NULL DEFAULT '[]',
     created TEXT NOT NULL,
     backend TEXT NOT NULL,
+	 embedding_model TEXT NOT NULL DEFAULT '',
+	 embedding_space TEXT NOT NULL DEFAULT '',
     dims INTEGER NOT NULL,
     embedding BLOB NOT NULL,
     source_file TEXT NOT NULL DEFAULT '',
@@ -141,19 +148,21 @@ CREATE INDEX IF NOT EXISTS idx_backend ON entries(backend);
 `
 
 const upsertChunkSQL = `INSERT INTO entries
-		(title, text, tags, created, backend, dims, embedding,
+		(title, text, tags, created, backend, embedding_model, embedding_space, dims, embedding,
 		 source_file, chunk_label, chunk_index, total_chunks,
 		 document_id, document_revision, chunk_hash,
 		 source_path, media_type, page, block_index, block_marker,
 		 block_chunk_index, block_total_chunks,
 		 extraction_method, ocr_confidence, warnings, important)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT(source_file, chunk_index) WHERE source_file != ''
 		DO UPDATE SET
 			text = excluded.text,
 			title = excluded.title,
 			tags = excluded.tags,
 			embedding = excluded.embedding,
+			embedding_model = excluded.embedding_model,
+			embedding_space = excluded.embedding_space,
 			dims = excluded.dims,
 			chunk_label = excluded.chunk_label,
 			total_chunks = excluded.total_chunks,
@@ -221,7 +230,7 @@ func initSchema(db *sql.DB) error {
 		_ = tx.Rollback()
 		return err
 	}
-	if err := migrateEntryProvenance(tx); err != nil {
+	if err := migrateEntrySchema(tx); err != nil {
 		_ = tx.Rollback()
 		return err
 	}
@@ -242,7 +251,7 @@ func initSchema(db *sql.DB) error {
 		if _, err := db.Exec(corpusAnalysisRunSchema); err != nil {
 			return err
 		}
-		if err := migrateEntryProvenanceDB(db); err != nil {
+		if err := migrateEntrySchemaDB(db); err != nil {
 			return err
 		}
 	}
@@ -254,13 +263,13 @@ type schemaQuerier interface {
 	Exec(string, ...any) (sql.Result, error)
 }
 
-func migrateEntryProvenance(tx *sql.Tx) error   { return ensureEntryProvenanceColumns(tx) }
-func migrateEntryProvenanceDB(db *sql.DB) error { return ensureEntryProvenanceColumns(db) }
+func migrateEntrySchema(tx *sql.Tx) error   { return ensureEntryColumns(tx) }
+func migrateEntrySchemaDB(db *sql.DB) error { return ensureEntryColumns(db) }
 
-// ensureEntryProvenanceColumns makes existing Stage 1 databases readable by
-// adding nullable-by-default metadata columns in place. Existing rows retain
-// their original source_file/chunk metadata unchanged.
-func ensureEntryProvenanceColumns(q schemaQuerier) error {
+// ensureEntryColumns makes existing databases readable by adding provenance
+// and embedding-space metadata in place. Existing rows retain their original
+// values; unknown metadata is never invented during migration.
+func ensureEntryColumns(q schemaQuerier) error {
 	rows, err := q.Query(`PRAGMA table_info(entries)`)
 	if err != nil {
 		return fmt.Errorf("inspect entries schema: %w", err)
@@ -281,6 +290,8 @@ func ensureEntryProvenanceColumns(q schemaQuerier) error {
 	}
 
 	columns := []struct{ name, definition string }{
+		{"embedding_model", "TEXT NOT NULL DEFAULT ''"},
+		{"embedding_space", "TEXT NOT NULL DEFAULT ''"},
 		{"document_id", "TEXT NOT NULL DEFAULT ''"},
 		{"document_revision", "TEXT NOT NULL DEFAULT ''"},
 		{"chunk_hash", "TEXT NOT NULL DEFAULT ''"},
@@ -320,7 +331,7 @@ func (s *Store) Close() error {
 // При повреждении embedding/tags в БД — пропускаем запись (с пометкой в stderr
 // через возвращаемый wrapped error), чтобы битый row не сломал загрузку всей базы.
 func (s *Store) loadAll() error {
-	rows, err := s.db.Query(`SELECT id, title, text, tags, created, backend, dims, embedding,
+	rows, err := s.db.Query(`SELECT id, title, text, tags, created, backend, embedding_model, embedding_space, dims, embedding,
 		source_file, chunk_label, chunk_index, total_chunks,
 		document_id, document_revision, chunk_hash,
 		source_path, media_type, page, block_index, block_marker,
@@ -340,6 +351,7 @@ func (s *Store) loadAll() error {
 		var important int
 
 		if err := rows.Scan(&e.ID, &e.Title, &e.Text, &tagsJSON, &e.Created, &e.Backend,
+			&e.EmbeddingModel, &e.EmbeddingSpace,
 			&e.Dims, &embBytes, &e.SourceFile, &e.ChunkLabel, &e.ChunkIndex,
 			&e.TotalChunks, &e.DocumentID, &e.DocumentRevision, &e.ChunkHash,
 			&e.SourcePath, &e.MediaType, &e.Page,
@@ -447,6 +459,20 @@ func cloneEntry(entry Entry) Entry {
 
 // Add добавляет ручную запись (без source_file, без дедупликации)
 func (s *Store) Add(text string, title string, tags []string, backend string, embedding []float32, important bool) (*Entry, error) {
+	return s.add(text, title, tags, backend, "", "", embedding, important)
+}
+
+// AddWithEmbeddingIdentity stores a manual entry together with the exact
+// configured vector-space provenance. Add remains available for legacy callers
+// and intentionally creates an unknown-space entry.
+func (s *Store) AddWithEmbeddingIdentity(text string, title string, tags []string, identity EmbeddingIdentity, embedding []float32, important bool) (*Entry, error) {
+	if err := validateEmbeddingIdentity(identity, identity.Backend); err != nil {
+		return nil, err
+	}
+	return s.add(text, title, tags, identity.Backend, identity.Model, identity.SpaceID, embedding, important)
+}
+
+func (s *Store) add(text string, title string, tags []string, backend, embeddingModel, embeddingSpace string, embedding []float32, important bool) (*Entry, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -466,9 +492,9 @@ func (s *Store) Add(text string, title string, tags []string, backend string, em
 	}
 
 	res, err := s.db.Exec(`INSERT INTO entries
-		(title, text, tags, created, backend, dims, embedding, important)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-		title, text, tagsStr, now, backend, len(embCopy),
+		(title, text, tags, created, backend, embedding_model, embedding_space, dims, embedding, important)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		title, text, tagsStr, now, backend, embeddingModel, embeddingSpace, len(embCopy),
 		embBytes, boolToInt(important))
 	if err != nil {
 		return nil, err
@@ -480,7 +506,8 @@ func (s *Store) Add(text string, title string, tags []string, backend string, em
 
 	entry := Entry{
 		ID: id, Title: title, Text: text, Tags: tagsCopy,
-		Created: now, Backend: backend, Dims: len(embCopy),
+		Created: now, Backend: backend, EmbeddingModel: embeddingModel,
+		EmbeddingSpace: embeddingSpace, Dims: len(embCopy),
 		Embedding: embCopy, Important: important,
 	}
 	s.entries = append(s.entries, entry)
@@ -496,7 +523,7 @@ func (s *Store) Add(text string, title string, tags []string, backend string, em
 //   - если такого чанка нет → вставляет
 func (s *Store) AddChunk(text string, title string, tags []string, backend string, embedding []float32,
 	sourceFile, chunkLabel string, chunkIndex, totalChunks int, important bool) (*Entry, error) {
-	return s.addChunk(text, title, tags, backend, embedding, sourceFile, chunkLabel,
+	return s.addChunk(text, title, tags, backend, "", "", embedding, sourceFile, chunkLabel,
 		chunkIndex, totalChunks, important, Provenance{SourcePath: sourceFile, OCRConfidence: -1})
 }
 
@@ -515,11 +542,31 @@ func (s *Store) AddDocumentChunk(text string, title string, tags []string, backe
 	if err := validateDocumentChunk(chunk, provenance.SourcePath, chunkIndex, totalChunks); err != nil {
 		return nil, err
 	}
-	return s.addChunk(text, title, tags, backend, embedding, provenance.SourcePath,
+	return s.addChunk(text, title, tags, backend, "", "", embedding, provenance.SourcePath,
 		chunkLabel, chunkIndex, totalChunks, important, provenance)
 }
 
-func (s *Store) addChunk(text string, title string, tags []string, backend string, embedding []float32,
+// AddDocumentChunkWithEmbeddingIdentity is the provenance-aware counterpart to
+// AddDocumentChunk. The legacy method remains available for migrations and
+// tests that intentionally model an unknown historical vector space.
+func (s *Store) AddDocumentChunkWithEmbeddingIdentity(text string, title string, tags []string, identity EmbeddingIdentity, embedding []float32,
+	chunkLabel string, chunkIndex, totalChunks int, important bool, provenance Provenance) (*Entry, error) {
+	if provenance.SourcePath == "" {
+		return nil, fmt.Errorf("document chunk provenance has an empty source path")
+	}
+	chunk := DocumentChunk{
+		Text: text, Backend: identity.Backend, EmbeddingModel: identity.Model,
+		EmbeddingSpace: identity.SpaceID, Embedding: embedding,
+		ChunkIndex: chunkIndex, TotalChunks: totalChunks, Provenance: provenance,
+	}
+	if err := validateDocumentChunk(chunk, provenance.SourcePath, chunkIndex, totalChunks); err != nil {
+		return nil, err
+	}
+	return s.addChunk(text, title, tags, identity.Backend, identity.Model, identity.SpaceID, embedding,
+		provenance.SourcePath, chunkLabel, chunkIndex, totalChunks, important, provenance)
+}
+
+func (s *Store) addChunk(text string, title string, tags []string, backend, embeddingModel, embeddingSpace string, embedding []float32,
 	sourceFile, chunkLabel string, chunkIndex, totalChunks int, important bool, provenance Provenance) (*Entry, error) {
 
 	s.mu.Lock()
@@ -547,7 +594,7 @@ func (s *Store) addChunk(text string, title string, tags []string, backend strin
 
 	// Пытаемся вставить; если конфликт по (source_file, chunk_index) — обновляем
 	_, err = s.db.Exec(upsertChunkSQL,
-		title, text, tagsStr, now, backend, len(embCopy), embBytes,
+		title, text, tagsStr, now, backend, embeddingModel, embeddingSpace, len(embCopy), embBytes,
 		sourceFile, chunkLabel, chunkIndex, totalChunks,
 		provenance.DocumentID, provenance.DocumentRevision, provenance.ChunkHash,
 		provenance.SourcePath, provenance.MediaType,
@@ -571,7 +618,8 @@ func (s *Store) addChunk(text string, title string, tags []string, backend strin
 	// Обновляем кэш в памяти
 	entry := Entry{
 		ID: id, Title: title, Text: text, Tags: tagsCopy,
-		Created: now, Backend: backend, Dims: len(embCopy),
+		Created: now, Backend: backend, EmbeddingModel: embeddingModel,
+		EmbeddingSpace: embeddingSpace, Dims: len(embCopy),
 		Embedding: embCopy, SourceFile: sourceFile, ChunkLabel: chunkLabel,
 		ChunkIndex: chunkIndex, TotalChunks: totalChunks,
 		DocumentID: provenance.DocumentID, DocumentRevision: provenance.DocumentRevision,
@@ -642,6 +690,16 @@ func validateDocumentChunk(chunk DocumentChunk, sourcePath string, position, tot
 	}
 	if strings.TrimSpace(chunk.Backend) == "" {
 		return fmt.Errorf("document chunk %d has an empty embedding backend", position)
+	}
+	if (chunk.EmbeddingModel == "") != (chunk.EmbeddingSpace == "") {
+		return fmt.Errorf("document chunk %d has partial embedding identity", position)
+	}
+	if chunk.EmbeddingSpace != "" {
+		if err := validateEmbeddingIdentity(EmbeddingIdentity{
+			Backend: chunk.Backend, Model: chunk.EmbeddingModel, SpaceID: chunk.EmbeddingSpace,
+		}, chunk.Backend); err != nil {
+			return fmt.Errorf("document chunk %d: %w", position, err)
+		}
 	}
 	if len(chunk.Embedding) == 0 {
 		return fmt.Errorf("document chunk %d has an empty embedding", position)
@@ -774,7 +832,8 @@ func (s *Store) ReplaceDocumentChunks(sourcePath string, chunks []DocumentChunk)
 		prepared[i] = preparedDocumentChunk{
 			entry: Entry{
 				Title: chunk.Title, Text: chunk.Text, Tags: tagsCopy, Created: now,
-				Backend: chunk.Backend, Dims: len(embeddingCopy), Embedding: embeddingCopy,
+				Backend: chunk.Backend, EmbeddingModel: chunk.EmbeddingModel,
+				EmbeddingSpace: chunk.EmbeddingSpace, Dims: len(embeddingCopy), Embedding: embeddingCopy,
 				SourceFile: sourcePath, ChunkLabel: chunk.ChunkLabel,
 				ChunkIndex: chunk.ChunkIndex, TotalChunks: chunk.TotalChunks,
 				DocumentID:       chunk.Provenance.DocumentID,
@@ -812,7 +871,7 @@ func (s *Store) ReplaceDocumentChunks(sourcePath string, chunks []DocumentChunk)
 		p := &prepared[i]
 		e := &p.entry
 		_, err = tx.Exec(upsertChunkSQL,
-			e.Title, e.Text, p.tagsJSON, e.Created, e.Backend, e.Dims, p.embeddingBLOB,
+			e.Title, e.Text, p.tagsJSON, e.Created, e.Backend, e.EmbeddingModel, e.EmbeddingSpace, e.Dims, p.embeddingBLOB,
 			e.SourceFile, e.ChunkLabel, e.ChunkIndex, e.TotalChunks,
 			e.DocumentID, e.DocumentRevision, e.ChunkHash,
 			e.SourcePath, e.MediaType, e.Page, e.BlockIndex, e.BlockMarker,
@@ -926,6 +985,24 @@ func (s *Store) DeleteById(id int64) error {
 // Если записи с таким id нет — возвращает ошибку (ранее молча возвращался nil,
 // и пользователь не понимал, почему "правка" не сработала).
 func (s *Store) UpdateById(id int64, text string, title string, tags []string, embedding []float32) error {
+	return s.updateByID(id, text, title, tags, embedding, nil)
+}
+
+// UpdateByIdWithEmbeddingIdentity replaces an embedding and its vector-space
+// provenance atomically. It must be used whenever a new vector is generated
+// from the active config. The legacy UpdateById clears stale model provenance
+// when it receives a replacement vector.
+func (s *Store) UpdateByIdWithEmbeddingIdentity(id int64, text string, title string, tags []string, embedding []float32, identity EmbeddingIdentity) error {
+	if embedding == nil {
+		return errors.New("embedding identity update requires a replacement embedding")
+	}
+	if err := validateEmbeddingIdentity(identity, identity.Backend); err != nil {
+		return err
+	}
+	return s.updateByID(id, text, title, tags, embedding, &identity)
+}
+
+func (s *Store) updateByID(id int64, text string, title string, tags []string, embedding []float32, identity *EmbeddingIdentity) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	entryIndex := -1
@@ -956,8 +1033,15 @@ func (s *Store) UpdateById(id int64, text string, title string, tags []string, e
 		if err != nil {
 			return fmt.Errorf("сериализация embedding: %w", err)
 		}
-		res, err := s.db.Exec(`UPDATE entries SET text=?, title=?, tags=?, embedding=?, dims=?, created=? WHERE id=?`,
-			text, title, tagsStr, embBytes, len(embCopy), now, id)
+		backend := s.entries[entryIndex].Backend
+		embeddingModel, embeddingSpace := "", ""
+		if identity != nil {
+			backend = identity.Backend
+			embeddingModel = identity.Model
+			embeddingSpace = identity.SpaceID
+		}
+		res, err := s.db.Exec(`UPDATE entries SET text=?, title=?, tags=?, backend=?, embedding_model=?, embedding_space=?, embedding=?, dims=?, created=? WHERE id=?`,
+			text, title, tagsStr, backend, embeddingModel, embeddingSpace, embBytes, len(embCopy), now, id)
 		if err != nil {
 			return err
 		}
@@ -973,6 +1057,9 @@ func (s *Store) UpdateById(id int64, text string, title string, tags []string, e
 				s.entries[i].Title = title
 				s.entries[i].Tags = tagsCopy
 				s.entries[i].Created = now
+				s.entries[i].Backend = backend
+				s.entries[i].EmbeddingModel = embeddingModel
+				s.entries[i].EmbeddingSpace = embeddingSpace
 				s.entries[i].Embedding = embCopy
 				s.entries[i].Dims = len(embCopy)
 				s.vectors[i] = embCopy
@@ -1038,6 +1125,19 @@ func (s *Store) ToggleImportant(id int64) (*Entry, error) {
 
 // Search ищет ближайшие по смыслу записи (cosine similarity в Go)
 func (s *Store) Search(queryVector []float32, backend string, limit int) ([]Entry, error) {
+	return s.search(queryVector, backend, "", limit)
+}
+
+// SearchInEmbeddingSpace compares vectors only inside one exact configured
+// embedding space. Legacy rows with unknown model provenance are excluded.
+func (s *Store) SearchInEmbeddingSpace(queryVector []float32, backend, embeddingSpace string, limit int) ([]Entry, error) {
+	if strings.TrimSpace(embeddingSpace) == "" {
+		return nil, errors.New("search embedding space is empty")
+	}
+	return s.search(queryVector, backend, embeddingSpace, limit)
+}
+
+func (s *Store) search(queryVector []float32, backend, embeddingSpace string, limit int) ([]Entry, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
@@ -1054,6 +1154,9 @@ func (s *Store) Search(queryVector []float32, backend string, limit int) ([]Entr
 	for i := range s.entries {
 		entry := s.entries[i]
 		if entry.Backend != backend {
+			continue
+		}
+		if !embeddingSpaceCompatible(entry.EmbeddingSpace, embeddingSpace) {
 			continue
 		}
 		if entry.Embedding == nil || len(entry.Embedding) != len(queryVector) {

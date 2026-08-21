@@ -25,14 +25,15 @@ const (
 // no limit: filters and vector/lexical fusion run over the complete candidate
 // set, and callers apply the final display limit only after scoring.
 type SearchOptions struct {
-	Query       string
-	QueryVector []float32
-	Backend     string
-	Tags        []string
-	TagFilter   string
-	From        string
-	To          string
-	VectorOnly  bool
+	Query          string
+	QueryVector    []float32
+	Backend        string
+	EmbeddingSpace string
+	Tags           []string
+	TagFilter      string
+	From           string
+	To             string
+	VectorOnly     bool
 }
 
 // initLexicalIndex probes the current SQLite build once. FTS5 is preferred,
@@ -84,7 +85,8 @@ func (s *Store) SearchWithOptions(options SearchOptions) ([]Entry, error) {
 		}
 
 		vectorScore := 0.0
-		vectorAvailable := len(options.QueryVector) > 0 && len(entry.Embedding) == len(options.QueryVector)
+		vectorAvailable := len(options.QueryVector) > 0 && len(entry.Embedding) == len(options.QueryVector) &&
+			embeddingSpaceCompatible(entry.EmbeddingSpace, options.EmbeddingSpace)
 		if vectorAvailable {
 			vectorScore = normalizeCosine(CosineSimilarity(options.QueryVector, s.vectors[i]))
 		}
@@ -133,6 +135,16 @@ func (s *Store) SearchWithOptions(options SearchOptions) ([]Entry, error) {
 		results[i] = cloneEntry(candidates[i].entry)
 	}
 	return results, nil
+}
+
+// embeddingSpaceCompatible preserves the legacy API when the caller has no
+// identity, while identity-aware production paths require an exact match. An
+// unknown legacy row is therefore never compared to a known query space.
+func embeddingSpaceCompatible(entrySpace, querySpace string) bool {
+	if querySpace == "" {
+		return true
+	}
+	return entrySpace != "" && entrySpace == querySpace
 }
 
 func matchesSearchFilters(entry Entry, options SearchOptions) bool {

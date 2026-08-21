@@ -27,7 +27,8 @@ func TestMarkdownImportStoresSearchablePageProvenance(t *testing.T) {
 		}
 		return []float32{0, 1}, nil
 	}
-	result, err := importExtractedDocumentWithEmbedder(testConfig(1000, "paragraph"), store, doc,
+	cfg := testConfig(1000, "paragraph")
+	result, err := importExtractedDocumentWithEmbedder(cfg, store, doc,
 		ImportOptions{Tags: []string{"book"}}, embed)
 	if err != nil {
 		t.Fatal(err)
@@ -36,7 +37,11 @@ func TestMarkdownImportStoresSearchablePageProvenance(t *testing.T) {
 		t.Fatalf("unexpected import result: %#v", result)
 	}
 
-	search, err := store.Search([]float32{1, 0}, "test", 1)
+	embeddingIdentity, err := EmbeddingIdentityForConfig(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	search, err := store.SearchInEmbeddingSpace([]float32{1, 0}, cfg.Backend, embeddingIdentity.SpaceID, 1)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -58,6 +63,9 @@ func TestMarkdownImportStoresSearchablePageProvenance(t *testing.T) {
 	}
 	if got.ExtractionMethod != "text" || got.OCRConfidence != -1 {
 		t.Fatalf("Markdown extraction provenance changed: %#v", got)
+	}
+	if got.EmbeddingModel != embeddingIdentity.Model || got.EmbeddingSpace != embeddingIdentity.SpaceID {
+		t.Fatalf("import lost embedding provenance: %#v", got)
 	}
 }
 

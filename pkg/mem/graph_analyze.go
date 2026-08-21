@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"sort"
 	"strings"
 	"unicode/utf8"
@@ -60,6 +61,9 @@ type CorpusAnalysisPlan struct {
 	SkippedNonCurrent int
 	EligibleDocuments int
 	CoveredDocuments  int
+	SemanticClaims    int
+	SemanticBatches   int
+	FallbackBatches   int
 }
 
 type CorpusAnalysisResult struct {
@@ -83,9 +87,11 @@ type corpusAnalysisEnvelope struct {
 }
 
 type corpusAnalysisCandidate struct {
-	claim CorpusAnalysisClaim
-	score int
-	docs  map[string]bool
+	claim          CorpusAnalysisClaim
+	score          int
+	docs           map[string]bool
+	semanticSpace  string
+	semanticVector []float32
 }
 
 // BuildCorpusAnalysisPrompt selects only active claims whose complete evidence
@@ -179,28 +185,41 @@ func orderCorpusCandidatesForDocumentDiversity(candidates []corpusAnalysisCandid
 		return append([]corpusAnalysisCandidate(nil), candidates...)
 	}
 	second := -1
+	fallback := -1
+	bestSemantic := math.Inf(-1)
 	firstDocs := candidates[0].docs
 	for i := 1; i < len(candidates); i++ {
+		differentDocument := false
 		for documentID := range candidates[i].docs {
 			if !firstDocs[documentID] {
-				second = i
+				differentDocument = true
 				break
 			}
 		}
-		if second >= 0 {
-			break
+		if !differentDocument {
+			continue
 		}
+		if fallback < 0 {
+			fallback = i
+		}
+		if affinity, ok := corpusCandidateSemanticAffinity(candidates[0], candidates[i]); ok && affinity > bestSemantic {
+			second = i
+			bestSemantic = affinity
+		}
+	}
+	if second < 0 {
+		second = fallback
 	}
 	if second < 0 {
 		second = 1
 	}
-	ordered := make([]corpusAnalysisCandidate, 0, len(candidates))
-	ordered = append(ordered, candidates[0], candidates[second])
-	for i := 1; i < len(candidates); i++ {
-		if i != second {
-			ordered = append(ordered, candidates[i])
-		}
+	selected := []corpusAnalysisCandidate{candidates[0], candidates[second]}
+	remaining := make(map[string]bool, len(candidates))
+	for _, candidate := range candidates {
+		remaining[candidate.claim.nodeID] = true
 	}
+	ordered := append([]corpusAnalysisCandidate(nil), selected...)
+	ordered = append(ordered, orderCorpusCandidatesByClusterAffinity(candidates, selected, remaining)...)
 	return ordered
 }
 

@@ -45,6 +45,7 @@ VALUES ('Legacy', 'legacy text', '[]', '2026-01-01T00:00:00Z', 'test', 1, x'0000
 	}
 	defer rows.Close()
 	want := map[string]bool{
+		"embedding_model": false, "embedding_space": false,
 		"document_id": false, "document_revision": false, "chunk_hash": false,
 		"source_path": false, "media_type": false,
 		"page": false, "block_index": false, "block_marker": false,
@@ -73,6 +74,9 @@ VALUES ('Legacy', 'legacy text', '[]', '2026-01-01T00:00:00Z', 'test', 1, x'0000
 	}
 	if legacy[0].DocumentRevision != "" || legacy[0].ChunkHash != "" {
 		t.Fatalf("legacy row received invented content hashes: %#v", legacy[0])
+	}
+	if legacy[0].EmbeddingModel != "" || legacy[0].EmbeddingSpace != "" {
+		t.Fatalf("legacy row received invented embedding provenance: %#v", legacy[0])
 	}
 	wantTables := map[string]bool{
 		"knowledge_nodes": false, "knowledge_edges": false,

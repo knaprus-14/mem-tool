@@ -362,6 +362,10 @@ func handleAdd(cfg *Config, store *Store, args []string) error {
 	}
 
 	text := strings.Join(positional, " ")
+	embeddingIdentity, err := mem.EmbeddingIdentityForConfig(cfg)
+	if err != nil {
+		return err
+	}
 	fmt.Printf(">> Эмбеддинг через %s... ", cfg.Backend)
 
 	embedding, err := getEmbedding(cfg, text)
@@ -370,7 +374,7 @@ func handleAdd(cfg *Config, store *Store, args []string) error {
 	}
 	fmt.Printf("получен вектор %d измерений\n", len(embedding))
 
-	entry, err := store.Add(text, title, tags, cfg.Backend, embedding, important)
+	entry, err := store.AddWithEmbeddingIdentity(text, title, tags, embeddingIdentity, embedding, important)
 	if err != nil {
 		return fmt.Errorf("ошибка сохранения: %w", err)
 	}
@@ -390,6 +394,10 @@ func handleSearch(cfg *Config, store *Store, args []string) error {
 	}
 
 	query := strings.Join(positional, " ")
+	embeddingIdentity, err := mem.EmbeddingIdentityForConfig(cfg)
+	if err != nil {
+		return err
+	}
 	fmt.Printf(">> Поиск через %s... ", cfg.Backend)
 
 	queryVec, err := getEmbedding(cfg, query)
@@ -399,7 +407,7 @@ func handleSearch(cfg *Config, store *Store, args []string) error {
 	fmt.Printf("вектор %d измерений\n", len(queryVec))
 
 	results, err := store.SearchWithOptions(mem.SearchOptions{
-		Query: query, QueryVector: queryVec, Backend: cfg.Backend,
+		Query: query, QueryVector: queryVec, Backend: embeddingIdentity.Backend, EmbeddingSpace: embeddingIdentity.SpaceID,
 		Tags: tags, TagFilter: tagFilter, From: from, To: to,
 		VectorOnly: vectorOnly,
 	})
@@ -543,6 +551,10 @@ func handleAsk(cfg *Config, store *Store, args []string) error {
 		return fmt.Errorf("укажи вопрос\nПример: mem ask \"где описан порядок запуска?\" -limit 5")
 	}
 	question := strings.Join(positional, " ")
+	embeddingIdentity, err := mem.EmbeddingIdentityForConfig(cfg)
+	if err != nil {
+		return err
+	}
 	answerCfg := cfg.Answer.WithDefaults()
 	provider, err := newAnswerProvider(answerCfg)
 	if err != nil {
@@ -559,7 +571,7 @@ func handleAsk(cfg *Config, store *Store, args []string) error {
 		return fmt.Errorf("ask retrieval: %w", err)
 	}
 	results, err := store.SearchWithOptions(mem.SearchOptions{
-		Query: question, QueryVector: queryVector, Backend: cfg.Backend,
+		Query: question, QueryVector: queryVector, Backend: embeddingIdentity.Backend, EmbeddingSpace: embeddingIdentity.SpaceID,
 		Tags: tags, TagFilter: tagFilter, From: from, To: to, VectorOnly: vectorOnly,
 	})
 	if err != nil {
@@ -931,6 +943,8 @@ func handleMapAnalyze(cfg *Config, store *Store, args []string) error {
 		fmt.Fprintf(os.Stderr, "[MAP ANALYZE] покрытие ограничено: covered=%d eligible=%d uncovered=%d; увеличь -batches или -context-chars\n",
 			plan.CoveredClaims, plan.EligibleClaims, plan.UncoveredClaims)
 	}
+	fmt.Fprintf(os.Stderr, "[MAP ANALYZE] semantic vectors=%d/%d guided_batches=%d fallback_batches=%d\n",
+		plan.SemanticClaims, plan.EligibleClaims, plan.SemanticBatches, plan.FallbackBatches)
 	answerCfg := cfg.Answer.WithDefaults()
 	run, err := store.PrepareCorpusAnalysisRun(focus, contextBudget, maxBatches, plan, answerCfg, resumeID)
 	if err != nil {
@@ -1003,8 +1017,8 @@ func handleMapAnalyze(cfg *Config, store *Store, args []string) error {
 		if err := store.CompleteCorpusAnalysisRun(run.ID); err != nil {
 			return fmt.Errorf("map analyze complete run %s: %w", run.ID, err)
 		}
-		fmt.Fprintf(os.Stdout, "Недостаточно подтверждённых данных: все пакеты завершились без findings (run=%s batches=%d covered=%d/%d).\n",
-			run.ID, insufficientBatches, plan.CoveredClaims, plan.EligibleClaims)
+		fmt.Fprintf(os.Stdout, "Недостаточно подтверждённых данных: все пакеты завершились без findings (run=%s batches=%d covered=%d/%d semantic=%d fallback=%d).\n",
+			run.ID, insufficientBatches, plan.CoveredClaims, plan.EligibleClaims, plan.SemanticBatches, plan.FallbackBatches)
 		return nil
 	}
 	if err := store.UpsertCorpusAnalysisGraph(merged); err != nil {
@@ -1013,9 +1027,10 @@ func handleMapAnalyze(cfg *Config, store *Store, args []string) error {
 	if err := store.CompleteCorpusAnalysisRun(run.ID); err != nil {
 		return fmt.Errorf("map analyze complete run %s: %w", run.ID, err)
 	}
-	fmt.Fprintf(os.Stdout, "Междокументный анализ сохранён как draft: run=%s findings=%d relations=%d batches=%d insufficient=%d covered=%d/%d documents=%d/%d\n",
+	fmt.Fprintf(os.Stdout, "Междокументный анализ сохранён как draft: run=%s findings=%d relations=%d batches=%d insufficient=%d covered=%d/%d documents=%d/%d semantic=%d fallback=%d\n",
 		run.ID, len(merged.Nodes), len(merged.Edges), len(plan.Batches), insufficientBatches,
-		plan.CoveredClaims, plan.EligibleClaims, plan.CoveredDocuments, plan.EligibleDocuments)
+		plan.CoveredClaims, plan.EligibleClaims, plan.CoveredDocuments, plan.EligibleDocuments,
+		plan.SemanticBatches, plan.FallbackBatches)
 	return nil
 }
 
@@ -1029,6 +1044,10 @@ func handleMapBuild(cfg *Config, store *Store, args []string) error {
 		return errors.New("укажи фокус карты\nПример: mem map build \"архитектура импорта\" -limit 10")
 	}
 	focus := strings.Join(positional, " ")
+	embeddingIdentity, err := mem.EmbeddingIdentityForConfig(cfg)
+	if err != nil {
+		return err
+	}
 	answerCfg := cfg.Answer.WithDefaults()
 
 	fmt.Fprintln(os.Stderr, "[MAP] retrieval: строю embedding и ищу versioned evidence...")
@@ -1041,7 +1060,7 @@ func handleMapBuild(cfg *Config, store *Store, args []string) error {
 		return fmt.Errorf("map retrieval: %w", err)
 	}
 	results, err := store.SearchWithOptions(mem.SearchOptions{
-		Query: focus, QueryVector: queryVector, Backend: cfg.Backend,
+		Query: focus, QueryVector: queryVector, Backend: embeddingIdentity.Backend, EmbeddingSpace: embeddingIdentity.SpaceID,
 		Tags: tags, TagFilter: tagFilter, From: from, To: to, VectorOnly: vectorOnly,
 	})
 	if err != nil {
@@ -1266,6 +1285,10 @@ func handleAddFile(cfg *Config, store *Store, args []string) error {
 		fmt.Printf("[CUT] Разбито на %d чанков (max %d символов, стратегия: %s)\n",
 			len(chunks), cfg.Chunking.MaxSize, cfg.Chunking.Strategy)
 	}
+	embeddingIdentity, err := mem.EmbeddingIdentityForConfig(cfg)
+	if err != nil {
+		return err
+	}
 
 	embeddings := make([][]float32, len(chunks))
 	failed := 0
@@ -1294,7 +1317,8 @@ func handleAddFile(cfg *Config, store *Store, args []string) error {
 			chunkTitle = fileName + ": " + chunk.Label
 		}
 		storedChunks[i] = mem.DocumentChunk{
-			Text: chunk.Text, Title: chunkTitle, Tags: tags, Backend: cfg.Backend,
+			Text: chunk.Text, Title: chunkTitle, Tags: tags, Backend: embeddingIdentity.Backend,
+			EmbeddingModel: embeddingIdentity.Model, EmbeddingSpace: embeddingIdentity.SpaceID,
 			Embedding: embeddings[i], ChunkLabel: chunk.Label,
 			ChunkIndex: chunk.Index, TotalChunks: len(chunks), Important: important,
 			Provenance: mem.Provenance{SourcePath: sourcePath, OCRConfidence: -1},
@@ -1454,6 +1478,11 @@ func handleSource(store *Store, args []string) {
 	}
 	fmt.Printf("[DATE] Дата: %s\n", entry.Created)
 	fmt.Printf("[CFG]  Бэкенд: %s (%d измерений)\n", entry.Backend, entry.Dims)
+	if entry.EmbeddingModel != "" {
+		fmt.Printf("[EMBED] Модель: %s; space: %s\n", entry.EmbeddingModel, entry.EmbeddingSpace)
+	} else {
+		fmt.Println("[EMBED] Модель: неизвестна (legacy; требуется переиндексация)")
+	}
 }
 
 // handleShow выводит одну запись полностью или все чанки одного файла.
@@ -1548,6 +1577,11 @@ func showOneEntry(entry *Entry) {
 	}
 	fmt.Printf("   %s %s\n", ui.Key("[DATE]"), ui.Date(dateStr))
 	fmt.Printf("   %s %s (%d изм.)\n", ui.Key("[CFG]"), ui.Tag(entry.Backend), entry.Dims)
+	if entry.EmbeddingModel != "" {
+		fmt.Printf("   %s %s\n", ui.Key("[EMBED]"), ui.Tag(entry.EmbeddingModel))
+	} else {
+		fmt.Printf("   %s %s\n", ui.Key("[EMBED]"), ui.Tag("unknown legacy space"))
+	}
 }
 
 // showAllChunksFromFile печатает все чанки одного документа (по SourceFile).
@@ -1669,6 +1703,10 @@ func handleEdit(cfg *Config, store *Store, args []string) error {
 
 	// Если текст изменился — пересчитываем эмбеддинг
 	if editText != entry.Text {
+		embeddingIdentity, identityErr := mem.EmbeddingIdentityForConfig(cfg)
+		if identityErr != nil {
+			return identityErr
+		}
 		fmt.Printf(">> Новый эмбеддинг через %s... ", cfg.Backend)
 		embedding, err := getEmbedding(cfg, editText)
 		if err != nil {
@@ -1676,7 +1714,7 @@ func handleEdit(cfg *Config, store *Store, args []string) error {
 		}
 		fmt.Printf("вектор %d измерений\n", len(embedding))
 
-		if err := store.UpdateById(id, editText, editTitle, entry.Tags, embedding); err != nil {
+		if err := store.UpdateByIdWithEmbeddingIdentity(id, editText, editTitle, entry.Tags, embedding, embeddingIdentity); err != nil {
 			return fmt.Errorf("%w", err)
 		}
 	} else {

@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math"
 	"sort"
 	"strings"
 	"unicode/utf8"
@@ -38,6 +39,11 @@ func (s *Store) BuildCorpusAnalysisPlan(focus string, contextBudget, maxBatches 
 		EligibleClaims: len(candidates), SkippedNonCurrent: skippedNonCurrent,
 		EligibleDocuments: eligibleDocuments,
 	}
+	for _, candidate := range candidates {
+		if len(candidate.semanticVector) > 0 {
+			plan.SemanticClaims++
+		}
+	}
 	if _, baseSize, err := buildCorpusAnalysisPromptPayload(focus, nil); err != nil {
 		return CorpusAnalysisPlan{}, err
 	} else if baseSize > contextBudget {
@@ -66,7 +72,10 @@ func (s *Store) BuildCorpusAnalysisPlan(focus string, contextBudget, maxBatches 
 
 		selected := []corpusAnalysisCandidate{seed}
 		partnerIndex := -1
+		semanticGuided := false
 		for pass := 0; pass < 2 && partnerIndex < 0; pass++ {
+			fallbackIndex := -1
+			bestSemantic := math.Inf(-1)
 			for i, candidate := range candidates {
 				isRemaining := remaining[candidate.claim.nodeID]
 				if candidate.claim.nodeID == seed.claim.nodeID || (pass == 0 && !isRemaining) || (pass == 1 && isRemaining) {
@@ -81,9 +90,18 @@ func (s *Store) BuildCorpusAnalysisPlan(focus string, contextBudget, maxBatches 
 					return CorpusAnalysisPlan{}, err
 				}
 				if size <= contextBudget {
-					partnerIndex = i
-					break
+					if fallbackIndex < 0 {
+						fallbackIndex = i
+					}
+					if affinity, ok := corpusCandidateSemanticAffinity(seed, candidate); ok && affinity > bestSemantic {
+						partnerIndex = i
+						bestSemantic = affinity
+						semanticGuided = true
+					}
 				}
+			}
+			if partnerIndex < 0 {
+				partnerIndex = fallbackIndex
 			}
 		}
 		if partnerIndex < 0 {
@@ -92,7 +110,8 @@ func (s *Store) BuildCorpusAnalysisPlan(focus string, contextBudget, maxBatches 
 		}
 		selected = append(selected, candidates[partnerIndex])
 
-		for _, candidate := range candidates {
+		fillCandidates := orderCorpusCandidatesByClusterAffinity(candidates, selected, remaining)
+		for _, candidate := range fillCandidates {
 			if len(selected) >= MaxCorpusAnalysisClaims || !remaining[candidate.claim.nodeID] || corpusCandidateSelected(selected, candidate.claim.nodeID) {
 				continue
 			}
@@ -103,6 +122,9 @@ func (s *Store) BuildCorpusAnalysisPlan(focus string, contextBudget, maxBatches 
 			}
 			if size <= contextBudget {
 				selected = append(selected, candidate)
+				if _, ok := corpusCandidateClusterAffinity(candidate, selected[:len(selected)-1]); ok {
+					semanticGuided = true
+				}
 			}
 		}
 
@@ -121,6 +143,11 @@ func (s *Store) BuildCorpusAnalysisPlan(focus string, contextBudget, maxBatches 
 			return CorpusAnalysisPlan{}, errors.New("corpus analysis planner produced a single-document batch")
 		}
 		plan.Batches = append(plan.Batches, prompt)
+		if semanticGuided {
+			plan.SemanticBatches++
+		} else {
+			plan.FallbackBatches++
+		}
 
 		for _, candidate := range selected {
 			if remaining[candidate.claim.nodeID] {
@@ -147,13 +174,15 @@ func (s *Store) loadCorpusAnalysisCandidates(focus string) ([]corpusAnalysisCand
 	candidates := make([]corpusAnalysisCandidate, 0)
 	skippedNonCurrent := 0
 	documents := make(map[string]bool)
+	s.mu.RLock()
+	defer s.mu.RUnlock()
 	for _, node := range graph.Nodes {
 		if node.Status != KnowledgeStatusActive || node.Kind != KnowledgeNodeClaim {
 			continue
 		}
 		current := true
 		for _, anchor := range node.Evidence {
-			if s.ResolveEvidenceAnchor(anchor).State != EvidenceCurrent {
+			if resolveEvidenceAnchorFromEntries(anchor, s.entries).State != EvidenceCurrent {
 				current = false
 				break
 			}
@@ -172,8 +201,10 @@ func (s *Store) loadCorpusAnalysisCandidates(focus string) ([]corpusAnalysisCand
 			documents[anchor.DocumentID] = true
 			claim.Evidence = append(claim.Evidence, groundedEvidenceForAnchor(anchor))
 		}
+		semanticSpace, semanticVector := corpusClaimSemanticVector(claim.anchors, s.entries)
 		candidates = append(candidates, corpusAnalysisCandidate{
 			claim: claim, score: corpusFocusScore(focus, node.Label+" "+node.Body), docs: docs,
+			semanticSpace: semanticSpace, semanticVector: semanticVector,
 		})
 	}
 	sort.SliceStable(candidates, func(i, j int) bool {
@@ -183,6 +214,102 @@ func (s *Store) loadCorpusAnalysisCandidates(focus string) ([]corpusAnalysisCand
 		return candidates[i].claim.nodeID < candidates[j].claim.nodeID
 	})
 	return candidates, skippedNonCurrent, len(documents), nil
+}
+
+func corpusClaimSemanticVector(anchors []EvidenceAnchor, entries []Entry) (string, []float32) {
+	if len(anchors) == 0 {
+		return "", nil
+	}
+	space := ""
+	dimensions := 0
+	sums := []float64(nil)
+	for _, anchor := range anchors {
+		entry, ok := currentEntryForCorpusAnchor(anchor, entries)
+		if !ok || strings.TrimSpace(entry.EmbeddingSpace) == "" || len(entry.Embedding) == 0 || entry.Dims != len(entry.Embedding) {
+			return "", nil
+		}
+		if space == "" {
+			space = entry.EmbeddingSpace
+			dimensions = len(entry.Embedding)
+			sums = make([]float64, dimensions)
+		} else if entry.EmbeddingSpace != space || len(entry.Embedding) != dimensions {
+			return "", nil
+		}
+		for i, value := range entry.Embedding {
+			if math.IsNaN(float64(value)) || math.IsInf(float64(value), 0) {
+				return "", nil
+			}
+			sums[i] += float64(value)
+		}
+	}
+	vector := make([]float32, dimensions)
+	norm := 0.0
+	for i, sum := range sums {
+		value := sum / float64(len(anchors))
+		vector[i] = float32(value)
+		norm += value * value
+	}
+	if norm == 0 || math.IsNaN(norm) || math.IsInf(norm, 0) {
+		return "", nil
+	}
+	return space, vector
+}
+
+func currentEntryForCorpusAnchor(anchor EvidenceAnchor, entries []Entry) (Entry, bool) {
+	for _, entry := range entries {
+		citationID, _ := CitationForEntry(entry)
+		if citationID == anchor.CitationID && entry.DocumentID == anchor.DocumentID &&
+			entry.DocumentRevision == anchor.DocumentRevision && entry.ChunkHash == anchor.ChunkHash &&
+			strings.Contains(entry.Text, anchor.Excerpt) {
+			return entry, true
+		}
+	}
+	return Entry{}, false
+}
+
+func corpusCandidateSemanticAffinity(left, right corpusAnalysisCandidate) (float64, bool) {
+	if left.semanticSpace == "" || left.semanticSpace != right.semanticSpace ||
+		len(left.semanticVector) == 0 || len(left.semanticVector) != len(right.semanticVector) {
+		return 0, false
+	}
+	affinity := CosineSimilarity(left.semanticVector, right.semanticVector)
+	if math.IsNaN(affinity) || math.IsInf(affinity, 0) {
+		return 0, false
+	}
+	return affinity, true
+}
+
+func corpusCandidateClusterAffinity(candidate corpusAnalysisCandidate, selected []corpusAnalysisCandidate) (float64, bool) {
+	best := math.Inf(-1)
+	found := false
+	for _, member := range selected {
+		if affinity, ok := corpusCandidateSemanticAffinity(candidate, member); ok && (!found || affinity > best) {
+			best = affinity
+			found = true
+		}
+	}
+	return best, found
+}
+
+func orderCorpusCandidatesByClusterAffinity(candidates, selected []corpusAnalysisCandidate, remaining map[string]bool) []corpusAnalysisCandidate {
+	ordered := make([]corpusAnalysisCandidate, 0, len(candidates))
+	for _, candidate := range candidates {
+		if remaining[candidate.claim.nodeID] && !corpusCandidateSelected(selected, candidate.claim.nodeID) {
+			ordered = append(ordered, candidate)
+		}
+	}
+	sort.SliceStable(ordered, func(i, j int) bool {
+		left, leftOK := corpusCandidateClusterAffinity(ordered[i], selected)
+		right, rightOK := corpusCandidateClusterAffinity(ordered[j], selected)
+		if leftOK != rightOK {
+			return leftOK
+		}
+		if leftOK && left != right {
+			return left > right
+		}
+		return false
+	})
+	return ordered
 }
 
 func buildCorpusAnalysisPromptPayload(focus string, claims []CorpusAnalysisClaim) (CorpusAnalysisPrompt, int, error) {

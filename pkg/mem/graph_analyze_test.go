@@ -74,6 +74,64 @@ func TestBuildCorpusAnalysisPlanIsDeterministicAndReportsCoverage(t *testing.T) 
 	}
 }
 
+func TestBuildCorpusAnalysisPlanGroupsClaimsBySemanticAffinity(t *testing.T) {
+	store := corpusAnalysisStoreWithSemanticSpecs(t,
+		[][]float32{{1, 0}, {0, 1}, {0.99, 0.01}, {0.01, 0.99}},
+		[]string{"test", "test", "test", "test"})
+	defer store.Close()
+	candidates, _, _, err := store.loadCorpusAnalysisCandidates("pressure")
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, budget, err := buildCorpusAnalysisPromptPayload("pressure", []CorpusAnalysisClaim{candidates[0].claim, candidates[1].claim})
+	if err != nil {
+		t.Fatal(err)
+	}
+	plan, err := store.BuildCorpusAnalysisPlan("pressure", budget, 2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(plan.Batches) != 2 || plan.SemanticClaims != 4 || plan.SemanticBatches != 2 || plan.FallbackBatches != 0 {
+		t.Fatalf("semantic plan metrics are wrong: %#v", plan)
+	}
+	want := [][]string{{"plan-claim-a", "plan-claim-c"}, {"plan-claim-b", "plan-claim-d"}}
+	for i, batch := range plan.Batches {
+		got := []string{batch.Claims[0].nodeID, batch.Claims[1].nodeID}
+		if !reflect.DeepEqual(got, want[i]) {
+			t.Fatalf("batch %d claims=%v, want %v", i+1, got, want[i])
+		}
+	}
+}
+
+func TestBuildCorpusAnalysisPlanFallsBackAcrossIncompatibleEmbeddings(t *testing.T) {
+	store := corpusAnalysisStoreWithSemanticSpecs(t,
+		[][]float32{{1, 0}, {1, 0}}, []string{"backend-a", "backend-b"})
+	defer store.Close()
+	plan, err := store.BuildCorpusAnalysisPlan("pressure", 100000, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(plan.Batches) != 1 || plan.SemanticClaims != 2 || plan.SemanticBatches != 0 || plan.FallbackBatches != 1 {
+		t.Fatalf("incompatible embeddings did not use deterministic fallback: %#v", plan)
+	}
+	got := []string{plan.Batches[0].Claims[0].nodeID, plan.Batches[0].Claims[1].nodeID}
+	if !reflect.DeepEqual(got, []string{"plan-claim-a", "plan-claim-b"}) {
+		t.Fatalf("fallback order changed: %v", got)
+	}
+}
+
+func TestBuildCorpusAnalysisPlanDoesNotCompareLegacyUnknownSpaces(t *testing.T) {
+	store, _ := corpusAnalysisStore(t)
+	defer store.Close()
+	plan, err := store.BuildCorpusAnalysisPlan("pressure", 100000, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if plan.SemanticClaims != 0 || plan.SemanticBatches != 0 || plan.FallbackBatches != 1 {
+		t.Fatalf("legacy unknown embeddings were treated as compatible: %#v", plan)
+	}
+}
+
 func TestMergeCorpusAnalysisGraphsDeduplicatesOrRejectsConflicts(t *testing.T) {
 	store, _ := corpusAnalysisStore(t)
 	defer store.Close()
@@ -356,15 +414,30 @@ func corpusAnalysisStore(t *testing.T) (*Store, []EvidenceAnchor) {
 
 func corpusAnalysisStoreWithClaims(t *testing.T, count int) *Store {
 	t.Helper()
+	vectors := make([][]float32, count)
+	backends := make([]string, count)
+	for i := range vectors {
+		vectors[i] = []float32{1, 0}
+		backends[i] = "test"
+	}
+	return corpusAnalysisStoreWithSemanticSpecs(t, vectors, backends)
+}
+
+func corpusAnalysisStoreWithSemanticSpecs(t *testing.T, vectors [][]float32, backends []string) *Store {
+	t.Helper()
+	if len(vectors) == 0 || len(vectors) != len(backends) {
+		t.Fatal("invalid semantic fixture")
+	}
 	store, err := NewStore(filepath.Join(t.TempDir(), "db"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	nodes := make([]KnowledgeNode, 0, count)
-	for i := 0; i < count; i++ {
+	nodes := make([]KnowledgeNode, 0, len(vectors))
+	for i := range vectors {
 		text := "Pressure requirement " + string(rune('A'+i)) + "."
 		source := filepath.ToSlash(filepath.Join(t.TempDir(), "plan-doc-"+string(rune('a'+i))+".md"))
-		entry, err := store.AddDocumentChunk(text, "Plan document", nil, "test", []float32{1, 0}, source, 0, 1, false, Provenance{
+		identity := EmbeddingIdentity{Backend: "test", Model: "model-" + backends[i], SpaceID: ChunkContentHash("space-" + backends[i])}
+		entry, err := store.AddDocumentChunkWithEmbeddingIdentity(text, "Plan document", nil, identity, vectors[i], source, 0, 1, false, Provenance{
 			DocumentID: "plan-doc-" + string(rune('a'+i)), DocumentRevision: ChunkContentHash("plan-revision-" + string(rune('a'+i))),
 			ChunkHash: ChunkContentHash(text), SourcePath: source, MediaType: "text/markdown",
 			Page: 1, BlockIndex: 0, BlockChunkIndex: 0, BlockTotalChunks: 1, ExtractionMethod: "text", OCRConfidence: -1,

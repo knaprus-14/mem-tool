@@ -102,7 +102,11 @@ func TestHandleAskKeepsStatusOnStderrAndVersionedAnswerOnStdout(t *testing.T) {
 	defer store.Close()
 	text := "Русский факт о запуске"
 	revision := mem.ChunkContentHash("document revision fixture")
-	entry, err := store.AddDocumentChunk(text, "Book", nil, "test", []float32{1, 0},
+	embeddingIdentity, err := mem.EmbeddingIdentityForConfig(testCLIConfig(1500, "paragraph"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	entry, err := store.AddDocumentChunkWithEmbeddingIdentity(text, "Book", nil, embeddingIdentity, []float32{1, 0},
 		"section", 0, 1, false, mem.Provenance{
 			DocumentID: "doc-ask", DocumentRevision: revision, ChunkHash: mem.ChunkContentHash(text),
 			SourcePath: "C:/docs/book.pdf", MediaType: "application/pdf", Page: 3, BlockIndex: 0,
@@ -188,7 +192,11 @@ func TestHandleMapBuildPersistsStrictAnchoredGraphAndExportsJSON(t *testing.T) {
 	}
 	defer store.Close()
 	text := "Импорт сохраняет provenance каждого блока документа."
-	entry, err := store.AddDocumentChunk(text, "Architecture", nil, "test", []float32{1, 0},
+	embeddingIdentity, err := mem.EmbeddingIdentityForConfig(testCLIConfig(1500, "paragraph"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	entry, err := store.AddDocumentChunkWithEmbeddingIdentity(text, "Architecture", nil, embeddingIdentity, []float32{1, 0},
 		"import", 0, 1, false, mem.Provenance{
 			DocumentID: "doc-map", DocumentRevision: mem.ChunkContentHash("map revision"),
 			ChunkHash: mem.ChunkContentHash(text), SourcePath: "C:/docs/architecture.md",
@@ -247,7 +255,11 @@ func TestHandleMapRejectsUnknownCitationWithoutPartialWrite(t *testing.T) {
 	}
 	defer store.Close()
 	text := "Versioned evidence"
-	if _, err := store.AddDocumentChunk(text, "Doc", nil, "test", []float32{1, 0}, "section", 0, 1, false, mem.Provenance{
+	embeddingIdentity, err := mem.EmbeddingIdentityForConfig(testCLIConfig(1500, "paragraph"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.AddDocumentChunkWithEmbeddingIdentity(text, "Doc", nil, embeddingIdentity, []float32{1, 0}, "section", 0, 1, false, mem.Provenance{
 		DocumentID: "doc-reject", DocumentRevision: mem.ChunkContentHash("reject revision"), ChunkHash: mem.ChunkContentHash(text),
 		SourcePath: "C:/docs/reject.md", MediaType: "text/markdown", Page: 1, BlockIndex: 0,
 		BlockChunkIndex: 0, BlockTotalChunks: 1, ExtractionMethod: "text", OCRConfidence: -1,
@@ -279,7 +291,11 @@ func TestHandleMapSkipsGenerationForUnversionedSearchResults(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer store.Close()
-	if _, err := store.Add("manual note", "", nil, "test", []float32{1, 0}, false); err != nil {
+	embeddingIdentity, err := mem.EmbeddingIdentityForConfig(testCLIConfig(1500, "paragraph"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.AddWithEmbeddingIdentity("manual note", "", nil, embeddingIdentity, []float32{1, 0}, false); err != nil {
 		t.Fatal(err)
 	}
 	fake := &fakeAnswerProvider{answer: "should not be called"}
@@ -427,9 +443,10 @@ func TestHandleMapAnalyzePersistsDraftCrossDocumentFinding(t *testing.T) {
 	defer store.Close()
 	texts := []string{"Limit is 1.0 MPa.", "Limit is 1.2 MPa."}
 	anchors := make([]mem.EvidenceAnchor, 0, 2)
+	embeddingIdentity := mem.EmbeddingIdentity{Backend: "test", Model: "test-model", SpaceID: mem.ChunkContentHash("test-space")}
 	for i, text := range texts {
 		source := fmt.Sprintf("C:/docs/analyze-%d.md", i)
-		entry, err := store.AddDocumentChunk(text, "Analyze", nil, "test", []float32{1, 0}, source, 0, 1, false, mem.Provenance{
+		entry, err := store.AddDocumentChunkWithEmbeddingIdentity(text, "Analyze", nil, embeddingIdentity, []float32{1, 0}, source, 0, 1, false, mem.Provenance{
 			DocumentID: fmt.Sprintf("analyze-doc-%d", i), DocumentRevision: mem.ChunkContentHash(fmt.Sprintf("revision-%d", i)),
 			ChunkHash: mem.ChunkContentHash(text), SourcePath: source, MediaType: "text/markdown", Page: 1,
 			BlockIndex: 0, BlockChunkIndex: 0, BlockTotalChunks: 1, ExtractionMethod: "text", OCRConfidence: -1,
@@ -513,7 +530,8 @@ func TestHandleMapAnalyzeProcessesBatchesAndPersistsOnce(t *testing.T) {
 		return handleMap(cfg, store, []string{"analyze", "pressure", "-context-chars", strconv.Itoa(budget), "-batches", "3"})
 	})
 	if err != nil || provider.calls != 3 || !strings.Contains(stdout, "batches=3") || !strings.Contains(stdout, "covered=5/5") ||
-		!strings.Contains(stderr, "batch=3/3") {
+		!strings.Contains(stdout, "semantic=3 fallback=0") || !strings.Contains(stderr, "batch=3/3") ||
+		!strings.Contains(stderr, "semantic vectors=5/5 guided_batches=3 fallback_batches=0") {
 		t.Fatalf("batched analysis failed: stdout=%q stderr=%q calls=%d err=%v", stdout, stderr, provider.calls, err)
 	}
 	graph, err := store.LoadKnowledgeGraph()
@@ -590,10 +608,11 @@ func cliCorpusStoreWithClaims(t *testing.T, count int) *mem.Store {
 		t.Fatal(err)
 	}
 	nodes := make([]mem.KnowledgeNode, 0, count)
+	embeddingIdentity := mem.EmbeddingIdentity{Backend: "test", Model: "test-model", SpaceID: mem.ChunkContentHash("test-space")}
 	for i := 0; i < count; i++ {
 		text := fmt.Sprintf("Pressure requirement %d.", i+1)
 		source := fmt.Sprintf("C:/docs/batch-plan-%d.md", i+1)
-		entry, err := store.AddDocumentChunk(text, "Batch plan", nil, "test", []float32{1, 0}, source, 0, 1, false, mem.Provenance{
+		entry, err := store.AddDocumentChunkWithEmbeddingIdentity(text, "Batch plan", nil, embeddingIdentity, []float32{1, 0}, source, 0, 1, false, mem.Provenance{
 			DocumentID: fmt.Sprintf("batch-plan-doc-%d", i+1), DocumentRevision: mem.ChunkContentHash(fmt.Sprintf("batch-plan-revision-%d", i+1)),
 			ChunkHash: mem.ChunkContentHash(text), SourcePath: source, MediaType: "text/markdown", Page: 1,
 			BlockIndex: 0, BlockChunkIndex: 0, BlockTotalChunks: 1, ExtractionMethod: "text", OCRConfidence: -1,
@@ -687,7 +706,9 @@ func TestHandleAddFileDoesNotReportPartialEmbeddingAsSuccess(t *testing.T) {
 }
 
 func testCLIConfig(maxSize int, strategy string) *Config {
-	return &Config{Backend: "test", Chunking: ChunkConfig{MaxSize: maxSize, Strategy: strategy}}
+	cfg := mem.DefaultLocalConfig()
+	cfg.Chunking = ChunkConfig{MaxSize: maxSize, Strategy: strategy}
+	return cfg
 }
 
 func TestHandleConfigRejectsChunkSizeAboveEmbeddingLimit(t *testing.T) {

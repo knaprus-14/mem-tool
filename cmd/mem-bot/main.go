@@ -218,14 +218,18 @@ func cmdAdd(ctx context.Context, b *bot.Bot, update *models.Update) {
 		return
 	}
 
+	embeddingIdentity, err := mem.EmbeddingIdentityForConfig(us.cfg)
+	if err != nil {
+		sendMessage(ctx, b, update.Message.Chat.ID, "❌ Ошибка конфигурации embedding: "+err.Error())
+		return
+	}
 	// Эмбеддинг
 	emb, err := mem.GetEmbeddingContext(ctx, us.cfg, text)
 	if err != nil {
 		sendMessage(ctx, b, update.Message.Chat.ID, "❌ Ошибка эмбеддинга: "+err.Error()+"\n\nПроверьте, запущен ли Ollama с моделью bge-m3.")
 		return
 	}
-
-	entry, err := us.store.Add(text, "", nil, us.cfg.Backend, emb, false)
+	entry, err := us.store.AddWithEmbeddingIdentity(text, "", nil, embeddingIdentity, emb, false)
 	if err != nil {
 		sendMessage(ctx, b, update.Message.Chat.ID, "❌ Ошибка сохранения: "+err.Error())
 		return
@@ -250,14 +254,18 @@ func cmdSearch(ctx context.Context, b *bot.Bot, update *models.Update) {
 		return
 	}
 
+	embeddingIdentity, err := mem.EmbeddingIdentityForConfig(us.cfg)
+	if err != nil {
+		sendMessage(ctx, b, update.Message.Chat.ID, "❌ Ошибка конфигурации embedding: "+err.Error())
+		return
+	}
 	// Embedding запроса
 	emb, err := mem.GetEmbeddingContext(ctx, us.cfg, query)
 	if err != nil {
 		sendMessage(ctx, b, update.Message.Chat.ID, "❌ Ошибка эмбеддинга: "+err.Error())
 		return
 	}
-
-	results, err := us.store.Search(emb, us.cfg.Backend, 5)
+	results, err := us.store.SearchInEmbeddingSpace(emb, embeddingIdentity.Backend, embeddingIdentity.SpaceID, 5)
 	if err != nil {
 		sendMessage(ctx, b, update.Message.Chat.ID, "❌ Ошибка поиска: "+err.Error())
 		return
@@ -348,13 +356,17 @@ func defaultHandler(ctx context.Context, b *bot.Bot, update *models.Update) {
 		return
 	}
 
+	embeddingIdentity, err := mem.EmbeddingIdentityForConfig(us.cfg)
+	if err != nil {
+		sendMessage(ctx, b, update.Message.Chat.ID, "❌ Ошибка конфигурации embedding: "+err.Error())
+		return
+	}
 	emb, err := mem.GetEmbeddingContext(ctx, us.cfg, text)
 	if err != nil {
 		sendMessage(ctx, b, update.Message.Chat.ID, "❌ Ошибка эмбеддинга: "+err.Error())
 		return
 	}
-
-	entry, err := us.store.Add(text, "", nil, us.cfg.Backend, emb, false)
+	entry, err := us.store.AddWithEmbeddingIdentity(text, "", nil, embeddingIdentity, emb, false)
 	if err != nil {
 		sendMessage(ctx, b, update.Message.Chat.ID, "❌ Ошибка: "+err.Error())
 		return

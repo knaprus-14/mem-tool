@@ -124,6 +124,11 @@ type embeddingFunc func(*Config, string) ([]float32, error)
 
 func indexFileWithEmbedder(cfg *Config, store *Store, filePath string, embed embeddingFunc) (IndexResult, error) {
 	result := IndexResult{FilePath: filePath}
+	embeddingIdentity, err := EmbeddingIdentityForConfig(cfg)
+	if err != nil {
+		result.Err = err
+		return result, err
+	}
 
 	absPath, err := CanonicalSourcePath(filePath)
 	if err != nil {
@@ -184,7 +189,8 @@ func indexFileWithEmbedder(cfg *Config, store *Store, filePath string, embed emb
 	storedChunks := make([]DocumentChunk, len(chunks))
 	for i, chunk := range chunks {
 		storedChunks[i] = DocumentChunk{
-			Text: chunk.Text, Title: fileName, Tags: tags, Backend: cfg.Backend,
+			Text: chunk.Text, Title: fileName, Tags: tags, Backend: embeddingIdentity.Backend,
+			EmbeddingModel: embeddingIdentity.Model, EmbeddingSpace: embeddingIdentity.SpaceID,
 			Embedding: embeddings[i], ChunkLabel: chunk.Label,
 			ChunkIndex: chunk.Index, TotalChunks: len(chunks),
 			Provenance: Provenance{SourcePath: absPath, OCRConfidence: -1},

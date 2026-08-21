@@ -47,6 +47,77 @@ func TestHandleAddFileStoresExactlyEmbeddedText(t *testing.T) {
 	}
 }
 
+func TestHandleAddFileRoutesPDFToProvenanceImport(t *testing.T) {
+	root := t.TempDir()
+	store, err := mem.NewStore(filepath.Join(root, "db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+
+	originalImportDocument := importDocument
+	defer func() { importDocument = originalImportDocument }()
+	called := false
+	importDocument = func(_ context.Context, _ *mem.Config, gotStore *mem.Store, path string, options mem.ImportOptions) (mem.ImportResult, error) {
+		called = true
+		if gotStore != store || path != "manual.PDF" || len(options.Tags) != 1 || options.Tags[0] != "radio" {
+			t.Fatalf("unexpected routed import: store=%p path=%q options=%#v", gotStore, path, options)
+		}
+		return mem.ImportResult{SourcePath: path, DocumentID: "doc", DocumentRevision: "sha256:test", Chunks: 2}, nil
+	}
+	stdout, _, err := captureCLIStreams(func() error {
+		return handleAddFile(testCLIConfig(1000, "paragraph"), store, []string{"manual.PDF", "-tags", "radio"})
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !called || !strings.Contains(stdout, "переключаю на mem import") {
+		t.Fatalf("PDF was not visibly routed to provenance import: called=%v output=%q", called, stdout)
+	}
+}
+
+func TestHandleAddFileRejectsBinaryInsteadOfEmbeddingBytes(t *testing.T) {
+	root := t.TempDir()
+	store, err := mem.NewStore(filepath.Join(root, "db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	path := filepath.Join(root, "payload.bin")
+	if err := os.WriteFile(path, []byte{0, 1, 2, 0xff}, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	originalGetEmbedding := getEmbedding
+	defer func() { getEmbedding = originalGetEmbedding }()
+	calls := 0
+	getEmbedding = func(*Config, string) ([]float32, error) {
+		calls++
+		return []float32{1}, nil
+	}
+	err = handleAddFile(testCLIConfig(1000, "paragraph"), store, []string{path})
+	if err == nil || !strings.Contains(err.Error(), "не является UTF-8 текстом") {
+		t.Fatalf("binary file error = %v", err)
+	}
+	if calls != 0 || store.Stats()["total_entries"] != 0 {
+		t.Fatalf("binary content reached embedding/storage: calls=%d stats=%#v", calls, store.Stats())
+	}
+}
+
+func TestShouldReportImportProgressBoundsLargeOutput(t *testing.T) {
+	reports := 0
+	for i := 1; i <= 12327; i++ {
+		if shouldReportImportProgress(i, 12327) {
+			reports++
+		}
+	}
+	if reports < 90 || reports > 120 {
+		t.Fatalf("large import reported %d progress lines, want roughly 100", reports)
+	}
+	if !shouldReportImportProgress(1, 12327) || !shouldReportImportProgress(12327, 12327) {
+		t.Fatal("large import omitted first or final progress")
+	}
+}
+
 type fakeAnswerProvider struct {
 	answer  string
 	calls   int
@@ -54,12 +125,14 @@ type fakeAnswerProvider struct {
 }
 
 type corpusBatchAnswerProvider struct {
-	calls  int
-	failAt int
+	calls     int
+	failAt    int
+	maxTokens []int
 }
 
 func (p *corpusBatchAnswerProvider) Generate(_ context.Context, request mem.AnswerRequest) (string, error) {
 	p.calls++
+	p.maxTokens = append(p.maxTokens, request.MaxTokens)
 	if p.failAt > 0 && p.calls == p.failAt {
 		return "", errors.New("planned batch failure")
 	}
@@ -95,7 +168,7 @@ func (p *fakeAnswerProvider) Generate(_ context.Context, request mem.AnswerReque
 	return p.answer, nil
 }
 
-func TestHandleAskKeepsStatusOnStderrAndVersionedAnswerOnStdout(t *testing.T) {
+func TestHandleAskPrintsHumanReadableSourcesAndKeepsStatusOnStderr(t *testing.T) {
 	root := t.TempDir()
 	store, err := mem.NewStore(filepath.Join(root, "db"))
 	if err != nil {
@@ -111,7 +184,7 @@ func TestHandleAskKeepsStatusOnStderrAndVersionedAnswerOnStdout(t *testing.T) {
 	entry, err := store.AddDocumentChunkWithEmbeddingIdentity(text, "Book", nil, embeddingIdentity, []float32{1, 0},
 		"section", 0, 1, false, mem.Provenance{
 			DocumentID: "doc-ask", DocumentRevision: revision, ChunkHash: mem.ChunkContentHash(text),
-			SourcePath: "C:/docs/book.pdf", MediaType: "application/pdf", Page: 3, BlockIndex: 0,
+			SourcePath: "C:/docs/book.pdf", MediaType: "application/pdf", Page: 3, BlockIndex: 0, BlockMarker: "<!-- page: 3 -->",
 			BlockChunkIndex: 0, BlockTotalChunks: 1, ExtractionMethod: "text", OCRConfidence: -1,
 		})
 	if err != nil {
@@ -133,10 +206,10 @@ func TestHandleAskKeepsStatusOnStderrAndVersionedAnswerOnStdout(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(stdout, "Ответ подтверждён") || !strings.Contains(stdout, citationID) || !strings.Contains(stdout, revision) || strings.Contains(stdout, "[ASK]") {
-		t.Fatalf("stdout is not a versioned, scriptable answer stream: %q", stdout)
+	if !strings.Contains(stdout, "Ответ подтверждён [1, стр. 3]") || !strings.Contains(stdout, "[1] book.pdf") || !strings.Contains(stdout, "Файл: C:/docs/book.pdf") || !strings.Contains(stdout, "Место: страница 3 · блок 1 · фрагмент 1/1") || strings.Contains(stdout, "<!-- page:") || strings.Contains(stdout, citationID) || strings.Contains(stdout, revision) || strings.Contains(stdout, "[ASK]") {
+		t.Fatalf("stdout does not contain human-readable citations: %q", stdout)
 	}
-	if !strings.Contains(stdout, "evidence=sha256:") || !strings.Contains(stderr, "[ASK] retrieval") || !strings.Contains(stderr, "[ASK] evidence") || fake.calls != 1 {
+	if strings.Contains(stdout, "evidence=sha256:") || !strings.Contains(stderr, "[ASK] retrieval") || !strings.Contains(stderr, "[ASK] evidence") || fake.calls != 1 {
 		t.Fatalf("status/provider/version contract failed: stdout=%q stderr=%q calls=%d", stdout, stderr, fake.calls)
 	}
 }
@@ -224,10 +297,12 @@ func TestHandleMapBuildPersistsStrictAnchoredGraphAndExportsJSON(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(stdout, "nodes=1 edges=0 evidence=1") || !strings.Contains(stderr, "[MAP] retrieval") || !strings.Contains(stderr, "[MAP] evidence") {
+	if !strings.Contains(stdout, "nodes=1 edges=0 evidence=1") || !strings.Contains(stderr, "[MAP] retrieval") ||
+		!strings.Contains(stderr, "[MAP] output budget: 4096 tokens") || !strings.Contains(stderr, "[MAP] evidence") {
 		t.Fatalf("map streams are not scriptable: stdout=%q stderr=%q", stdout, stderr)
 	}
-	if fake.calls != 1 || !strings.Contains(fake.request.System, "typed knowledge graph") || !strings.Contains(fake.request.Prompt, citation) {
+	if fake.calls != 1 || fake.request.MaxTokens != mem.DefaultMapGenerationTokens ||
+		!strings.Contains(fake.request.System, "typed knowledge graph") || !strings.Contains(fake.request.Prompt, citation) {
 		t.Fatalf("map provider contract failed: calls=%d request=%#v", fake.calls, fake.request)
 	}
 	graph, err := store.LoadKnowledgeGraph()
@@ -737,8 +812,14 @@ func TestHandleMapAnalyzeProcessesBatchesAndPersistsOnce(t *testing.T) {
 	})
 	if err != nil || provider.calls != 3 || !strings.Contains(stdout, "batches=3") || !strings.Contains(stdout, "covered=5/5") ||
 		!strings.Contains(stdout, "semantic=3 fallback=0") || !strings.Contains(stderr, "batch=3/3") ||
-		!strings.Contains(stderr, "semantic vectors=5/5 guided_batches=3 fallback_batches=0") {
+		!strings.Contains(stderr, "semantic vectors=5/5 guided_batches=3 fallback_batches=0") ||
+		!strings.Contains(stderr, "[MAP ANALYZE] output budget: 4096 tokens") {
 		t.Fatalf("batched analysis failed: stdout=%q stderr=%q calls=%d err=%v", stdout, stderr, provider.calls, err)
+	}
+	for i, maxTokens := range provider.maxTokens {
+		if maxTokens != mem.DefaultMapGenerationTokens {
+			t.Fatalf("batch %d max tokens = %d, want %d", i+1, maxTokens, mem.DefaultMapGenerationTokens)
+		}
 	}
 	graph, err := store.LoadKnowledgeGraph()
 	if err != nil || len(graph.Nodes) != 8 || len(graph.Edges) != 6 {

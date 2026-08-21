@@ -99,6 +99,7 @@ type DocumentChunk struct {
 type Store struct {
 	mu           sync.RWMutex
 	db           *sql.DB
+	path         string
 	entries      []Entry
 	vectors      [][]float32
 	lexicalMode  string
@@ -189,7 +190,10 @@ func NewStore(dir string) (*Store, error) {
 		return nil, err
 	}
 
-	dbPath := filepath.Join(dir, "store.db")
+	dbPath, err := filepath.Abs(filepath.Join(dir, "store.db"))
+	if err != nil {
+		return nil, fmt.Errorf("абсолютный путь БД: %w", err)
+	}
 	db, err := sql.Open("sqlite", dbPath)
 	if err != nil {
 		return nil, fmt.Errorf("открытие БД: %w", err)
@@ -203,12 +207,20 @@ func NewStore(dir string) (*Store, error) {
 		return nil, fmt.Errorf("создание схемы: %w", err)
 	}
 
-	s := &Store{db: db, lexicalMode: initLexicalIndex(db), lexicalDirty: true}
+	s := &Store{db: db, path: dbPath, lexicalMode: initLexicalIndex(db), lexicalDirty: true}
 	if err := s.loadAll(); err != nil {
 		db.Close()
 		return nil, err
 	}
 	return s, nil
+}
+
+// Path returns the absolute path of the SQLite database opened by this store.
+func (s *Store) Path() string {
+	if s == nil {
+		return ""
+	}
+	return s.path
 }
 
 // initSchema выполняет все DDL-выражения из storeSchema внутри одной транзакции.
@@ -1291,7 +1303,7 @@ func (s *Store) Stats() map[string]interface{} {
 		"total_entries":  len(s.entries),
 		"by_backend":     backendCount,
 		"doc_chunks":     sourceCount,
-		"store_location": ".mem/store.db",
+		"store_location": s.path,
 	}
 }
 

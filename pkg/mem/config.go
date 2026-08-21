@@ -42,6 +42,7 @@ type IngestConfig struct {
 	MuTool        string  `json:"mutool,omitempty"`
 	PDFInfo       string  `json:"pdfinfo,omitempty"`
 	PDFToPPM      string  `json:"pdftoppm,omitempty"`
+	Python        string  `json:"python,omitempty"`
 	DjVuText      string  `json:"djvutxt,omitempty"`
 	DjVuUsed      string  `json:"djvused,omitempty"`
 	DjVuRender    string  `json:"ddjvu,omitempty"`

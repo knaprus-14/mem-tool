@@ -24,11 +24,21 @@ func TestKnowledgeMapHTMLContainsOfflineInteractiveProvenancePayload(t *testing.
 	if err := store.UpsertKnowledgeGraph(graph); err != nil {
 		t.Fatal(err)
 	}
+	if _, err := store.SaveKnowledgeMapLayout(DefaultKnowledgeMapView, KnowledgeMapLayout{
+		Version: KnowledgeMapLayoutVersion,
+		Nodes: map[string]KnowledgeMapNodePosition{
+			"view-claim": {X: 120, Y: 80, Pinned: true},
+		},
+		Viewport: KnowledgeMapViewport{Scale: 1.2, X: 4, Y: -3},
+	}); err != nil {
+		t.Fatal(err)
+	}
 	data, err := store.BuildKnowledgeMapViewData()
 	if err != nil {
 		t.Fatal(err)
 	}
-	if data.Version != KnowledgeMapViewVersion || len(data.Graph.Nodes) != 2 || len(data.Review.Items) != 3 || data.Merges == nil {
+	if data.Version != KnowledgeMapViewVersion || len(data.Graph.Nodes) != 2 || len(data.Review.Items) != 3 || data.Merges == nil ||
+		data.Layout == nil || data.Layout.Nodes["view-claim"].X != 120 || data.Workspace != nil {
 		t.Fatalf("view payload is incomplete: %#v", data)
 	}
 	var output bytes.Buffer
@@ -40,10 +50,19 @@ func TestKnowledgeMapHTMLContainsOfflineInteractiveProvenancePayload(t *testing.
 		`data-mem-map="v1"`, `Content-Security-Policy`, `function tick`, `pointerdown`,
 		`statusFilters`, `evidenceFilters`, `relationFilters`, `showEvidence`,
 		`contradiction`, `reveals_gap`, `document_revision`,
+		`n._g.setPointerCapture(ev.pointerId)`, `if(ev.target!==svg)return`,
+		`Технические данные источника`, `Внутренний ID`, `источник актуален`,
+		`страница `, `фрагмент `, `refreshBtn`, `liveMode`,
+		`resetLayoutBtn`, `scheduleLayoutSave`, `X-Mem-Session`, `savedLayout`,
+		`двойной щелчок — освободить`, `connect-src 'self'`,
 	} {
 		if !strings.Contains(html, marker) {
 			t.Errorf("HTML is missing %q", marker)
 		}
+	}
+	if strings.Contains(html, `details.append(title,badges,field('ID',item.id))`) ||
+		strings.Contains(html, `details.append(field('Evidence digest'`) {
+		t.Fatal("technical identifiers are still rendered in the primary details view")
 	}
 	if strings.Contains(html, attack) || strings.Contains(html, `</title><script>alert(1)</script>`) {
 		t.Fatal("untrusted title or graph text escaped its data/title context")
@@ -68,7 +87,8 @@ func TestKnowledgeMapHTMLContainsOfflineInteractiveProvenancePayload(t *testing.
 	if err := json.Unmarshal([]byte(html[start:start+end]), &decoded); err != nil {
 		t.Fatalf("embedded payload is not valid JSON: %v", err)
 	}
-	if len(decoded.Graph.Nodes) != 2 || decoded.Graph.Nodes[0].Label != attack || decoded.Review.Items[0].Evidence[0].Anchor.SourcePath == "" {
+	if len(decoded.Graph.Nodes) != 2 || decoded.Graph.Nodes[0].Label != attack || decoded.Review.Items[0].Evidence[0].Anchor.SourcePath == "" ||
+		decoded.Layout == nil || decoded.Layout.Nodes["view-claim"].Pinned != true || decoded.Workspace != nil {
 		t.Fatalf("embedded payload lost graph provenance: %#v", decoded)
 	}
 }

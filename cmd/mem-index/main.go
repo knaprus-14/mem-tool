@@ -17,7 +17,7 @@
 //
 // Глобальные флаги: --global, --dir <path>, --color/--no-color.
 //
-// Версия: 1.16.0 (новый бинарь, новая функциональность).
+// Версия синхронизируется для всего релиза через internal/buildinfo.
 package main
 
 import (
@@ -28,12 +28,11 @@ import (
 	"strings"
 	"time"
 
+	"github.com/knaprus-14/mem-tool/internal/buildinfo"
 	"github.com/knaprus-14/mem-tool/pkg/fileindex"
 	"github.com/knaprus-14/mem-tool/pkg/mem"
 	"github.com/knaprus-14/mem-tool/pkg/ui"
 )
-
-const version = "1.16.0"
 
 func main() {
 	os.Exit(run())
@@ -79,7 +78,7 @@ func run() int {
 	case "rm":
 		return handleRm(args)
 	case "version":
-		mem.PrintVersion("mem-index", version)
+		mem.PrintVersion("mem-index", buildinfo.Version)
 		return 0
 	case "help":
 		printUsage()
@@ -562,7 +561,7 @@ func timeFmt(unix int64) string {
 // === Справка ===
 
 func printUsage() {
-	mem.PrintVersion("mem-index", version)
+	mem.PrintVersion("mem-index", buildinfo.Version)
 	fmt.Println()
 	fmt.Println(`Семантический каталог файлов. mem-index индексирует имена, пути и
 (опционально) аннотации файлов, чтобы можно было найти книгу по смыслу —

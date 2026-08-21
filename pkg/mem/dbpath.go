@@ -70,6 +70,52 @@ func MemExists() bool {
 	return err == nil && info.IsDir()
 }
 
+// ResolveDatabaseRoot resolves an existing local database from either its
+// project directory or the .mem directory itself. The returned path is the
+// absolute project directory whose direct child is .mem.
+func ResolveDatabaseRoot(path string) (string, error) {
+	path = filepath.Clean(path)
+	if path == "" || path == "." {
+		cwd, err := os.Getwd()
+		if err != nil {
+			return "", fmt.Errorf("не удалось определить текущий каталог: %w", err)
+		}
+		path = cwd
+	}
+	abs, err := filepath.Abs(path)
+	if err != nil {
+		return "", fmt.Errorf("не удалось определить абсолютный путь %s: %w", path, err)
+	}
+
+	root := abs
+	memPath := filepath.Join(root, MemDirName)
+	if filepath.Base(abs) == MemDirName {
+		root = filepath.Dir(abs)
+		memPath = abs
+	}
+	info, err := os.Stat(root)
+	if err != nil {
+		return "", fmt.Errorf("каталог базы %s недоступен: %w", root, err)
+	}
+	if !info.IsDir() {
+		return "", fmt.Errorf("путь базы %s не является каталогом", root)
+	}
+	info, err = os.Stat(memPath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return "", fmt.Errorf("локальная база не найдена: %s", memPath)
+		}
+		return "", fmt.Errorf("локальная база %s недоступна: %w", memPath, err)
+	}
+	if !info.IsDir() {
+		return "", fmt.Errorf("путь базы %s не является каталогом", memPath)
+	}
+	if _, err := LoadConfigIn(memPath); err != nil {
+		return "", fmt.Errorf("локальная база %s не инициализирована или повреждена: %w", memPath, err)
+	}
+	return root, nil
+}
+
 // defaultLocalConfig возвращает дефолтный конфиг для новой локальной базы
 func DefaultLocalConfig() *Config {
 	return &Config{

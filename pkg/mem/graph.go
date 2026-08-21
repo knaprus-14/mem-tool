@@ -211,6 +211,12 @@ CREATE TABLE IF NOT EXISTS knowledge_node_merges (
     created TEXT NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS knowledge_map_views (
+    name TEXT PRIMARY KEY,
+    layout_json TEXT NOT NULL,
+    updated TEXT NOT NULL
+);
+
 CREATE INDEX IF NOT EXISTS idx_knowledge_edges_from ON knowledge_edges(from_node);
 CREATE INDEX IF NOT EXISTS idx_knowledge_edges_to ON knowledge_edges(to_node);
 CREATE INDEX IF NOT EXISTS idx_knowledge_node_evidence_citation ON knowledge_node_evidence(citation_id);

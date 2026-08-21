@@ -1,18 +1,21 @@
 package main
 
 import (
+	"bufio"
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
-	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/bubbles/key"
 	"github.com/charmbracelet/bubbles/spinner"
 	"github.com/charmbracelet/bubbles/textarea"
 	"github.com/charmbracelet/bubbles/viewport"
+	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/charmbracelet/x/ansi"
 )
 
 // tuiStyles — lipgloss-стили для элементов TUI.
@@ -46,31 +49,54 @@ const busyText = "выполняю..."
 // сессиях и от memory pressure, если пользователь не делает /clear.
 const maxOutputLines = 500
 
+// maxPopupRows keeps the command palette usable even though it exposes every
+// CLI command and map/config subcommand.
+const maxPopupRows = 10
+
+// tuiSeparatorBlock is stored semantically in the output history. Its visual
+// width is calculated on every render so separators grow and shrink together
+// with the terminal instead of retaining the width they had when appended.
+const tuiSeparatorBlock = "\x00mem-tui-separator\x00"
+
 // tuiModel — состояние TUI.
 type tuiModel struct {
-	width      int
-	height     int
-	viewport   viewport.Model
-	textarea   textarea.Model
-	spinner    spinner.Model
-	output     []string
-	showPopup  bool
-	popupIdx   int
-	popupItems []commandMenuEntry // полный список команд (для /help)
-	popupFiltered []commandMenuEntry // отфильтрованный по префиксу ввода (для popup)
-	busy       bool
-	cancelled  bool          // пользователь нажал Esc во время busy=true
-	ctrlCPending bool        // первый Ctrl+C уже нажат, ждём второго
-	ctrlCTime    time.Time   // время последнего Ctrl+C (для проверки окна 2 сек)
-	cfg        *Config
-	store      *Store
-	quitting   bool
+	width           int
+	height          int
+	viewport        viewport.Model
+	textarea        textarea.Model
+	spinner         spinner.Model
+	output          []string
+	showPopup       bool
+	popupIdx        int
+	popupItems      []commandMenuEntry // полный список команд (для /help)
+	popupFiltered   []commandMenuEntry // отфильтрованный по префиксу ввода (для popup)
+	busy            bool
+	cancelled       bool      // пользователь нажал Esc во время busy=true
+	ctrlCPending    bool      // первый Ctrl+C уже нажат, ждём второго
+	ctrlCTime       time.Time // время последнего Ctrl+C (для проверки окна 2 сек)
+	exitAfterBusy   bool      // двойной Ctrl+C во время операции: выйти после её завершения
+	commandEvents   <-chan tea.Msg
+	activeCommand   string
+	commandStarted  time.Time
+	progressUpdates int
+	cfg             *Config
+	store           *Store
+	quitting        bool
+	openPath        string // project root requested by /open; consumed after TUI exits
+	replRequested   bool   // /repl requests the classic interactive mode after TUI cleanup
 }
 
 // execResultMsg — результат выполнения команды.
 type execResultMsg struct {
 	output string
 	err    error
+	cfg    *Config
+}
+
+// commandProgressMsg carries one stdout/stderr line from a running command.
+// The event loop appends it immediately instead of waiting for command exit.
+type commandProgressMsg struct {
+	output string
 }
 
 // ctrlCResetMsg — сбрасывает флаг ctrlCPending через 2 секунды после первого нажатия.
@@ -98,14 +124,15 @@ func newTuiModel(cfg *Config, store *Store) tuiModel {
 	sp.Spinner = spinner.Dot
 	sp.Style = lipgloss.NewStyle().Foreground(lipgloss.Color("63"))
 
+	menuItems := tuiCommandMenuItems()
 	m := tuiModel{
-		viewport:       vp,
-		textarea:       ta,
-		spinner:        sp,
-		popupItems:     commandMenu,
-		popupFiltered:  commandMenu,
-		cfg:            cfg,
-		store:          store,
+		viewport:      vp,
+		textarea:      ta,
+		spinner:       sp,
+		popupItems:    menuItems,
+		popupFiltered: menuItems,
+		cfg:           cfg,
+		store:         store,
 	}
 	m.printHeader()
 	return m
@@ -123,15 +150,32 @@ func (m *tuiModel) headerLine() string {
 	if model == "" {
 		model = "(по умолчанию)"
 	}
+	databaseName := filepath.Base(filepath.Dir(filepath.Dir(m.store.Path())))
 	return tuiStyles.Header.Render(fmt.Sprintf(
-		"mem · поисковая база · %d записей · backend: %s · %s", total, backend, model))
+		"mem · база: %s · %d записей · backend: %s · %s", databaseName, total, backend, model))
 }
 
 // printHeader добавляет приветствие в viewport (для /clear и стартового экрана).
 // Динамический заголовок (headerLine) НЕ выводится — он уже отрисован в View() сверху.
 func (m *tuiModel) printHeader() {
-	m.appendBlock(tuiStyles.Status.Render("Введите запрос или /help. Esc — отменить/выйти, Ctrl+C×2 — выход."))
-	m.appendBlock(tuiStyles.Separator.Render(strings.Repeat("─", m.viewportWidth())))
+	m.appendBlock(tuiStyles.Status.Render("Активная база: " + m.store.Path()))
+	m.appendBlock(tuiStyles.Status.Render("Введите запрос или /help. Esc — на главный экран, Ctrl+C×2 — выход."))
+	m.appendSeparator()
+}
+
+// returnHome возвращает TUI в исходное состояние без завершения процесса.
+// Если команда ещё выполняется, её результат будет проигнорирован: обработчик
+// доработает безопасно, а Store не будет закрыт из-под фоновой горутины.
+func (m *tuiModel) returnHome() {
+	m.showPopup = false
+	m.popupIdx = 0
+	m.popupFiltered = m.popupItems
+	m.textarea.Reset()
+	m.textarea.Focus()
+	m.ctrlCPending = false
+	m.output = nil
+	m.viewport.SetContent("")
+	m.printHeader()
 }
 
 // Init — инициализация модели.
@@ -177,16 +221,40 @@ func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 
+	case commandProgressMsg:
+		// Even after Esc, keep draining the worker channel so a verbose command
+		// cannot block while it finishes. Its late output stays hidden because
+		// Esc has already returned the viewport to the home screen.
+		m.progressUpdates++
+		if !m.cancelled {
+			m.appendBlock(msg.output)
+		}
+		return m, waitForCommandEvent(m.commandEvents)
+
 	case execResultMsg:
 		// Результат выполнения команды
+		duration := time.Duration(0)
+		if !m.commandStarted.IsZero() {
+			duration = time.Since(m.commandStarted)
+		}
+		updates := m.progressUpdates
 		m.busy = false
+		m.commandEvents = nil
+		m.activeCommand = ""
+		m.commandStarted = time.Time{}
+		m.progressUpdates = 0
+		if msg.cfg != nil {
+			m.cfg = msg.cfg
+		}
+		if m.exitAfterBusy {
+			m.exitAfterBusy = false
+			m.quitting = true
+			return m, tea.Quit
+		}
 		if m.cancelled {
-			// Пользователь нажал Esc во время выполнения — игнорируем результат.
-			// Горутина всё равно доработала (хендлеры не принимают ctx), но мы
-			// не показываем её вывод.
+			// Esc уже показал главный экран. Горутина безопасно доработала, но
+			// её результат не должен снова увести пользователя с главного экрана.
 			m.cancelled = false
-			m.appendBlock(tuiStyles.Status.Render("Отменено пользователем"))
-			m.appendBlock(tuiStyles.Separator.Render(strings.Repeat("─", m.viewportWidth())))
 			return m, nil
 		}
 		if msg.err != nil {
@@ -195,7 +263,12 @@ func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.output != "" {
 			m.appendBlock(msg.output)
 		}
-		m.appendBlock(tuiStyles.Separator.Render(strings.Repeat("─", m.viewportWidth())))
+		completion := fmt.Sprintf("Готово за %s · обновлений: %d", formatTUIDuration(duration), updates)
+		if msg.err != nil {
+			completion = fmt.Sprintf("Завершено с ошибкой за %s · обновлений: %d", formatTUIDuration(duration), updates)
+		}
+		m.appendBlock(tuiStyles.Status.Render(completion))
+		m.appendSeparator()
 		return m, nil
 
 	case ctrlCResetMsg:
@@ -209,6 +282,13 @@ func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			// Двойной Ctrl+C в течение 2 секунд — выход.
 			// Одинарный — показываем предупреждение и ставим таймер на сброс.
 			if m.ctrlCPending && time.Since(m.ctrlCTime) < 2*time.Second {
+				if m.busy {
+					m.cancelled = true
+					m.exitAfterBusy = true
+					m.returnHome()
+					m.appendBlock(tuiStyles.Status.Render("Завершаю текущую операцию и выхожу..."))
+					return m, nil
+				}
 				m.quitting = true
 				return m, tea.Quit
 			}
@@ -219,36 +299,28 @@ func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, tea.Tick(2*time.Second, func(time.Time) tea.Msg { return ctrlCResetMsg{} })
 
 		case "ctrl+d":
-			m.quitting = true
-			return m, tea.Quit
+			m.appendBlock(tuiStyles.Status.Render("Ctrl+D не закрывает TUI. Для выхода: /exit или Ctrl+C два раза."))
+			return m, nil
 
 		case "esc":
-			if m.showPopup {
-				m.showPopup = false
-				m.textarea.SetValue("")
-				return m, nil
-			}
 			if m.busy {
-				// Отмена текущей операции — НЕ выход из TUI. Горутина в runCommandAsync
-				// не может быть прервана (хендлеры не принимают ctx), но мы игнорируем
-				// её результат и продолжаем крутить спиннер с текстом «Отменяю...».
+				// Esc не закрывает TUI и не закрывает Store из-под обработчика.
+				// Возвращаем главный экран, а поздний результат игнорируем.
 				m.cancelled = true
-				m.appendBlock(tuiStyles.Status.Render("Отменяю... (дождитесь завершения операции)"))
-				return m, nil
 			}
-			m.quitting = true
-			return m, tea.Quit
+			m.returnHome()
+			return m, nil
 
 		case "enter":
+			if m.busy {
+				m.appendBlock(tuiStyles.Status.Render("Дождитесь завершения текущей операции"))
+				return m, nil
+			}
 			// Если popup открыт — выбор команды.
-			// Берём только имя (без плейсхолдера вроде «<id>»/«<текст>»):
-			// иначе пользователь допишет аргумент после плейсхолдера и
-			// парсер передаст «<id>» в хендлер как ID — будет «не число».
+			// Подставляем literal-команду без плейсхолдеров. Для вложенных команд
+			// сохраняем подкоманду: «map build <фокус>» → «/map build ».
 			if m.showPopup {
-				name := m.popupFiltered[m.popupIdx].name
-				if i := strings.IndexByte(name, ' '); i >= 0 {
-					name = name[:i]
-				}
+				name := commandMenuLiteral(m.popupFiltered[m.popupIdx].name)
 				m.textarea.SetValue("/" + name + " ")
 				m.textarea.CursorEnd()
 				m.showPopup = false
@@ -280,7 +352,7 @@ func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 		case "down":
 			if m.showPopup {
-				if m.popupIdx < len(m.popupItems)-1 {
+				if m.popupIdx < len(m.popupFiltered)-1 {
 					m.popupIdx++
 				}
 				return m, nil
@@ -307,8 +379,8 @@ func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 		// Динамический popup: показать/скрыть по содержимому textarea
 		val := m.textarea.Value()
-		if strings.HasPrefix(val, "/") && !strings.Contains(val, " ") {
-			prefix := strings.ToLower(strings.TrimPrefix(val, "/"))
+		if strings.HasPrefix(val, "/") {
+			prefix := strings.ToLower(strings.TrimSpace(strings.TrimPrefix(val, "/")))
 			if m.isExactCommand(val) {
 				// Пользователь ввёл команду целиком (/clear, /help и т.д.) —
 				// popup не нужен, иначе Enter перехватит его и подставит
@@ -332,101 +404,231 @@ func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return m, tea.Batch(tiCmd, vpCmd)
 }
 
-// runCommandAsync запускает команду: sync (/clear, /help, /exit) сразу,
-// остальные — асинхронно в горутине через tea.Cmd.
+// runCommandAsync запускает навигационные команды сразу, а операции с базой —
+// асинхронно в горутине через tea.Cmd.
 // Пока асинхронная команда выполняется, в TUI крутится спиннер.
 func (m *tuiModel) runCommandAsync(line string) tea.Cmd {
-	m.appendBlock(tuiStyles.UserLine.Render("> " + line))
-
-	// Парсим команду
-	var cmd string
-	var args []string
-	if strings.HasPrefix(line, "/") {
-		parts := strings.Fields(line)
-		if len(parts) == 0 {
-			return nil
-		}
-		cmd = strings.ToLower(strings.TrimPrefix(parts[0], "/"))
-		args = parts[1:]
-	} else {
-		cmd = "search"
-		args = []string{line}
+	if m.busy {
+		m.appendBlock(tuiStyles.Status.Render("Ошибка: дождитесь завершения текущей операции"))
+		m.appendSeparator()
+		return nil
 	}
+	cmd, args, err := parseTUICommandLine(line)
+	if err != nil {
+		m.appendBlock(tuiStyles.UserLine.Render("> " + line))
+		m.appendBlock(tuiStyles.Status.Render("Ошибка: " + err.Error()))
+		m.appendSeparator()
+		return nil
+	}
+	if cmd == "" {
+		return nil
+	}
+	m.appendBlock(tuiStyles.UserLine.Render("> " + redactTUICommand(cmd, args, line)))
 
 	// Sync-команды выполняются сразу, без горутины и спиннера
 	switch cmd {
-	case "clear":
-		m.output = nil
-		m.viewport.SetContent("")
-		m.printHeader()
+	case "clear", "home":
+		m.returnHome()
 		return nil
 	case "help", "?":
 		m.printHelp()
 		return nil
-	case "exit", "quit", "q":
+	case "exit":
+		m.quitting = true
+		return tea.Quit
+	case "repl":
+		m.replRequested = true
+		m.quitting = true
+		return tea.Quit
+	case "open", "use":
+		root, err := resolveDatabaseRootArg(args)
+		if err != nil {
+			m.appendBlock(tuiStyles.Status.Render("Ошибка: " + err.Error()))
+			m.appendSeparator()
+			return nil
+		}
+		m.openPath = root
 		m.quitting = true
 		return tea.Quit
 	}
 
-	// Асинхронные команды — спиннер + горутина
+	// Асинхронные команды — спиннер + поток stdout/stderr в event loop.
 	m.busy = true
+	m.activeCommand = cmd
+	m.commandStarted = time.Now()
+	m.progressUpdates = 0
+	m.appendBlock(tuiStyles.Status.Render(fmt.Sprintf("[RUN] /%s запущена", cmd)))
 
 	// Локальные копии указателей (для горутины, чтобы не залипала m целиком)
 	cfg := m.cfg
 	store := m.store
+	events := make(chan tea.Msg, 64)
+	m.commandEvents = events
 
-	return func() (msg tea.Msg) {
-		// recover превращает панику хендлера в обычный err,
-		// иначе TUI залипнет в busy=true навсегда.
-		defer func() {
-			if r := recover(); r != nil {
-				msg = execResultMsg{err: fmt.Errorf("паника в обработчике: %v", r)}
-			}
-		}()
-
-		var result string
-		var err error
-
-		// runWithCapture выполняет хендлер, перехватывая его stdout, и возвращает
-		// и вывод, и ошибку хендлера — чтобы TUI мог показать ошибку в viewport,
-		// не убивая процесс (раньше хендлер делал os.Exit(1) и TUI умирал).
-		runWithCapture := func(fn func() error) {
-			var hErr error
-			result = captureStdout(func() { hErr = fn() })
-			if hErr != nil {
-				err = hErr
-			}
-		}
-
-		switch cmd {
-		case "search":
-			runWithCapture(func() error { return handleSearch(cfg, store, args) })
-		case "add":
-			runWithCapture(func() error { return handleAdd(cfg, store, args) })
-		case "recent":
-			runWithCapture(func() error { return handleRecent(store, args) })
-		case "show", "get", "view", "source":
-			runWithCapture(func() error { return handleShow(store, args) })
-		case "important", "imp":
-			runWithCapture(func() error { return handleImportant(store, args) })
-		case "tags", "retag":
-			runWithCapture(func() error { return handleRetag(store, args) })
-		case "edit":
-			runWithCapture(func() error { return handleEdit(cfg, store, args) })
-		case "delete", "rm":
-			runWithCapture(func() error { return handleDelete(store, args) })
-		case "stats":
-			runWithCapture(func() error { return handleStats(store) })
-		case "sources":
-			runWithCapture(func() error { return handleSources(store) })
-		case "config":
-			runWithCapture(func() error { return handleConfig(args) })
-		default:
-			err = fmt.Errorf("неизвестная команда: /%s", cmd)
-		}
-		msg = execResultMsg{output: result, err: err}
-		return
+	return func() tea.Msg {
+		go runTUICommand(events, cfg, store, cmd, args)
+		return <-events
 	}
+}
+
+func runTUICommand(events chan<- tea.Msg, cfg *Config, store *Store, cmd string, args []string) {
+	var (
+		commandErr   error
+		refreshedCfg *Config
+	)
+	defer func() {
+		if r := recover(); r != nil {
+			commandErr = fmt.Errorf("паника в обработчике: %v", r)
+		}
+		events <- execResultMsg{err: commandErr, cfg: refreshedCfg}
+		close(events)
+	}()
+
+	captureCommandOutputStream(
+		func() { commandErr = executeTUICommand(cfg, store, cmd, args) },
+		func(output string) { events <- commandProgressMsg{output: output} },
+	)
+	if commandErr == nil && cmd == "config" {
+		refreshedCfg, commandErr = loadConfig()
+	}
+}
+
+func waitForCommandEvent(events <-chan tea.Msg) tea.Cmd {
+	if events == nil {
+		return nil
+	}
+	return func() tea.Msg {
+		msg, ok := <-events
+		if !ok {
+			return execResultMsg{err: fmt.Errorf("канал выполнения команды неожиданно закрыт")}
+		}
+		return msg
+	}
+}
+
+// executeTUICommand is the shared TUI dispatcher. Every operational command
+// exposed by `mem <command>` is routed to the same handler as the CLI.
+func executeTUICommand(cfg *Config, store *Store, cmd string, args []string) error {
+	switch cmd {
+	case "add":
+		return handleAdd(cfg, store, args)
+	case "search":
+		return handleSearch(cfg, store, args)
+	case "ask":
+		return handleAsk(cfg, store, args)
+	case "map":
+		if len(args) > 0 && args[0] == "open" {
+			return fmt.Errorf("map open управляет сервером до Ctrl+C; на первом этапе запустите `mem map open` из PowerShell")
+		}
+		return handleMap(cfg, store, args)
+	case "recent":
+		return handleRecent(store, args)
+	case "add-file":
+		return handleAddFile(cfg, store, args)
+	case "import":
+		return handleImport(cfg, store, args)
+	case "config":
+		return handleConfig(args)
+	case "stats":
+		return handleStats(store)
+	case "index":
+		return handleIndex(cfg, store, args)
+	case "source", "show", "get", "view":
+		return handleShow(store, args)
+	case "sources":
+		return handleSources(store)
+	case "delete", "rm":
+		return handleDelete(store, args)
+	case "edit":
+		return handleEdit(cfg, store, args)
+	case "retag", "tags":
+		return handleRetag(store, args)
+	case "important", "imp":
+		return handleImportant(store, args)
+	case "where", "current":
+		handleWhere(store)
+		return nil
+	case "version":
+		printVersion()
+		return nil
+	case "init":
+		fmt.Printf("[OK] Активная база уже инициализирована: %s\n", filepath.Dir(store.Path()))
+		return nil
+	default:
+		return fmt.Errorf("неизвестная команда: /%s (введите /help)", cmd)
+	}
+}
+
+// parseTUICommandLine сохраняет пробелы внутри кавычек и Windows-пути с '\\'.
+// В отличие от strings.Fields это позволяет вводить, например,
+// /import "D:\\Мои книги\\manual.pdf" -tags "Журнал Радио".
+func parseTUICommandLine(line string) (string, []string, error) {
+	line = strings.TrimSpace(line)
+	if line == "" {
+		return "", nil, nil
+	}
+	if !strings.HasPrefix(line, "/") {
+		return "search", []string{line}, nil
+	}
+	parts, err := splitTUIArguments(strings.TrimPrefix(line, "/"))
+	if err != nil {
+		return "", nil, err
+	}
+	if len(parts) == 0 {
+		return "", nil, nil
+	}
+	return strings.ToLower(parts[0]), parts[1:], nil
+}
+
+func splitTUIArguments(line string) ([]string, error) {
+	var (
+		parts        []string
+		current      strings.Builder
+		quote        rune
+		tokenStarted bool
+	)
+	runes := []rune(line)
+	flush := func() {
+		if tokenStarted {
+			parts = append(parts, current.String())
+			current.Reset()
+			tokenStarted = false
+		}
+	}
+	for i := 0; i < len(runes); i++ {
+		r := runes[i]
+		if quote != 0 {
+			if r == quote {
+				quote = 0
+				continue
+			}
+			current.WriteRune(r)
+			tokenStarted = true
+			continue
+		}
+		switch r {
+		case '\'', '"':
+			quote = r
+			tokenStarted = true
+		case ' ', '\t', '\r', '\n':
+			flush()
+		default:
+			current.WriteRune(r)
+			tokenStarted = true
+		}
+	}
+	if quote != 0 {
+		return nil, fmt.Errorf("незакрытая кавычка %q", string(quote))
+	}
+	flush()
+	return parts, nil
+}
+
+func redactTUICommand(cmd string, args []string, original string) string {
+	if cmd == "config" && len(args) > 0 && args[0] == "set-polza-key" {
+		return "/config set-polza-key ***"
+	}
+	return original
 }
 
 // printHelp показывает список команд.
@@ -437,12 +639,69 @@ func (m *tuiModel) printHelp() {
 			tuiStyles.Header.Render("/"+c.name),
 			c.desc))
 	}
-	m.appendBlock(tuiStyles.Status.Render("Tab/↑↓: навигация · Enter: выполнить · Esc/Ctrl-D: выход"))
+	m.appendBlock(tuiStyles.Status.Render("Tab/↑↓: навигация · Enter: выполнить · Esc: главный экран · выход: /exit или Ctrl+C×2"))
 }
 
 // commandMenu возвращает список команд для help и popup.
 func (m *tuiModel) commandMenu() []commandMenuEntry {
-	return commandMenu
+	return m.popupItems
+}
+
+func tuiCommandMenuItems() []commandMenuEntry {
+	return []commandMenuEntry{
+		{"search <запрос> [флаги]", "гибридный поиск (или просто текст без /)"},
+		{"ask <вопрос> [флаги]", "ответ только по подтверждённым evidence"},
+		{"add <текст> [флаги]", "сохранить новую запись"},
+		{"add-file <путь> [флаги]", "добавить UTF-8 файл; PDF/DjVu → import"},
+		{"import <путь> [флаги]", "импортировать Markdown/PDF/DjVu с provenance"},
+		{"index <путь>", "проиндексировать файл или каталог"},
+		{"recent [-limit N]", "последние записи"},
+		{"show <id> [--from-file путь]", "показать запись или chunks документа"},
+		{"source <id>", "показать запись с данными источника"},
+		{"sources", "список проиндексированных документов"},
+		{"delete <id>", "удалить запись"},
+		{"edit <id> <текст> [флаги]", "изменить запись"},
+		{"retag <id> -tags <теги>", "заменить теги записи"},
+		{"important <id>", "переключить важность"},
+		{"stats", "статистика базы"},
+		{"where", "абсолютный путь активной базы"},
+		{"config", "показать конфигурацию"},
+		{"config set-backend <ollama|polza>", "выбрать embedding-бэкенд"},
+		{"config set-polza-key <api_key>", "задать ключ Polza (в TUI скрывается)"},
+		{"config set-polza-model <model>", "задать embedding-модель Polza"},
+		{"config set-ollama-model <model>", "задать embedding-модель Ollama"},
+		{"config set-answer-model <model>", "задать локальную answer-модель"},
+		{"config set-answer-base-url <url>", "задать loopback URL answer API"},
+		{"config set-answer-timeout <сек>", "задать таймаут ответа"},
+		{"config set-answer-max-tokens <N>", "задать предел токенов ответа"},
+		{"config set-answer-context-chars <N>", "задать бюджет evidence"},
+		{"config set-chunk-size <N>", "задать размер chunk"},
+		{"config set-chunk-overlap <N>", "задать перекрытие chunks"},
+		{"config set-chunk-strategy <стратегия>", "задать стратегию chunking"},
+		{"map build <фокус> [флаги]", "построить draft knowledge graph"},
+		{"map analyze <фокус> [флаги]", "найти противоречия и пробелы"},
+		{"map open [флаги]", "открыть живую карту (из PowerShell)"},
+		{"map duplicates [флаги]", "найти семантические дубли узлов"},
+		{"map merge-node <manifest.json>", "подтвердить объединение узла"},
+		{"map merges [флаги]", "показать историю объединений"},
+		{"map runs [флаги]", "показать analysis runs"},
+		{"map run <run-id> [--json]", "показать один analysis run"},
+		{"map prune-runs <флаги>", "очистить старые завершённые runs"},
+		{"map status [--json]", "review-состояние карты"},
+		{"map approve <тип> <id> <флаги>", "подтвердить draft-объект"},
+		{"map approve-batch <manifest.json>", "атомарно подтвердить пакет"},
+		{"map reviews [флаги]", "журнал review-решений"},
+		{"map export", "вывести граф в JSON"},
+		{"map export-html <output.html> [флаги]", "создать автономную HTML-карту"},
+		{"open <путь>", "открыть другую локальную базу"},
+		{"init", "проверить, что активная база инициализирована"},
+		{"version", "показать версию программы"},
+		{"repl", "переключиться в классический REPL"},
+		{"home", "вернуться на главный экран"},
+		{"clear", "очистить вывод и открыть главный экран"},
+		{"help", "полный список TUI-команд"},
+		{"exit", "выйти из TUI"},
+	}
 }
 
 // isExactCommand возвращает true, если val — это "/<cmd>" где <cmd> — точное
@@ -450,20 +709,12 @@ func (m *tuiModel) commandMenu() []commandMenuEntry {
 // В этом случае popup не нужен: пользователь уже ввёл команду целиком,
 // Enter должен её выполнить, а не подменять на первый элемент popup'а.
 func (m *tuiModel) isExactCommand(val string) bool {
-	parts := strings.Fields(val)
-	if len(parts) != 1 {
-		return false
-	}
-	name := strings.ToLower(strings.TrimPrefix(parts[0], "/"))
+	name := strings.ToLower(strings.TrimSpace(strings.TrimPrefix(val, "/")))
 	if name == "" {
 		return false
 	}
 	for _, item := range m.popupItems {
-		cmdName := item.name
-		if i := strings.IndexByte(cmdName, ' '); i >= 0 {
-			cmdName = cmdName[:i]
-		}
-		if cmdName == name {
+		if strings.EqualFold(commandMenuLiteral(item.name), name) {
 			return true
 		}
 	}
@@ -482,15 +733,26 @@ func filterCommands(prefix string, items []commandMenuEntry) []commandMenuEntry 
 	p := strings.ToLower(prefix)
 	var out []commandMenuEntry
 	for _, item := range items {
-		cmdName := item.name
-		if i := strings.IndexByte(cmdName, ' '); i >= 0 {
-			cmdName = cmdName[:i]
-		}
+		cmdName := commandMenuLiteral(item.name)
 		if strings.HasPrefix(strings.ToLower(cmdName), p) {
 			out = append(out, item)
 		}
 	}
 	return out
+}
+
+// commandMenuLiteral removes argument placeholders but retains real
+// subcommands: "map build <фокус> [флаги]" becomes "map build".
+func commandMenuLiteral(name string) string {
+	fields := strings.Fields(name)
+	literal := make([]string, 0, len(fields))
+	for _, field := range fields {
+		if strings.HasPrefix(field, "<") || strings.HasPrefix(field, "[") {
+			break
+		}
+		literal = append(literal, field)
+	}
+	return strings.Join(literal, " ")
 }
 
 // appendBlock добавляет блок текста в вывод.
@@ -502,8 +764,39 @@ func (m *tuiModel) appendBlock(text string) {
 		// Отбрасываем самые старые блоки — оставляем только последние maxOutputLines.
 		m.output = m.output[len(m.output)-maxOutputLines:]
 	}
-	m.viewport.SetContent(strings.Join(m.output, "\n"))
-	m.viewport.GotoBottom()
+	m.refreshViewportContent(true)
+}
+
+func (m *tuiModel) appendSeparator() {
+	m.appendBlock(tuiSeparatorBlock)
+}
+
+// renderOutput reflows the complete logical history for the current viewport.
+// ansi.Wrap preserves colour escape sequences and Unicode cell widths while
+// still breaking an unusually long path/token when it cannot fit on one row.
+// Keeping m.output unwrapped is essential: after a resize we must wrap from the
+// original text, not from line breaks produced for the previous window width.
+func (m tuiModel) renderOutput() string {
+	width := m.viewportWidth()
+	if width < 1 {
+		width = 1
+	}
+	blocks := make([]string, 0, len(m.output))
+	for _, block := range m.output {
+		if block == tuiSeparatorBlock {
+			blocks = append(blocks, tuiStyles.Separator.Render(strings.Repeat("─", width)))
+			continue
+		}
+		blocks = append(blocks, ansi.Wrap(block, width, " \t"))
+	}
+	return strings.Join(blocks, "\n")
+}
+
+func (m *tuiModel) refreshViewportContent(gotoBottom bool) {
+	m.viewport.SetContent(m.renderOutput())
+	if gotoBottom {
+		m.viewport.GotoBottom()
+	}
 }
 
 // View — отрисовка.
@@ -525,10 +818,17 @@ func (m tuiModel) View() string {
 
 	sep := tuiStyles.Separator.Render(strings.Repeat("─", m.viewportWidth()))
 	taView := m.textarea.View()
-	status := tuiStyles.Status.Render("Enter: выполнить · Esc: отменить/выйти · Ctrl+C×2: выход · /<TAB>: команды")
+	status := tuiStyles.Status.Render("Enter: выполнить · Esc: главный экран · выход: /exit или Ctrl+C×2 · /: команды")
 
 	if m.busy {
-		status = m.spinner.View() + " " + busyText
+		elapsed := formatTUIDuration(time.Since(m.commandStarted))
+		if m.exitAfterBusy {
+			status = fmt.Sprintf("%s /%s · %s · обновлений: %d · завершаю перед выходом...",
+				m.spinner.View(), m.activeCommand, elapsed, m.progressUpdates)
+		} else {
+			status = fmt.Sprintf("%s /%s · %s · обновлений: %d · %s",
+				m.spinner.View(), m.activeCommand, elapsed, m.progressUpdates, busyText)
+		}
 	}
 
 	return lipgloss.JoinVertical(lipgloss.Top,
@@ -541,12 +841,24 @@ func (m tuiModel) View() string {
 	)
 }
 
+func formatTUIDuration(duration time.Duration) string {
+	if duration < 0 {
+		duration = 0
+	}
+	if duration < time.Second {
+		return duration.Round(time.Millisecond).String()
+	}
+	return duration.Round(time.Second).String()
+}
+
 // recomputeSizes пересчитывает размеры при изменении окна.
 func (m *tuiModel) recomputeSizes() {
 	if m.width > 4 {
+		wasAtBottom := m.viewport.AtBottom()
 		m.viewport.Width = m.viewportWidth()
 		m.viewport.Height = m.viewportHeight()
 		m.textarea.SetWidth(m.viewportWidth())
+		m.refreshViewportContent(wasAtBottom)
 	}
 }
 
@@ -563,7 +875,11 @@ func (m tuiModel) viewportHeight() int {
 	}
 	reserved := 8
 	if m.showPopup {
-		reserved += len(m.popupFiltered) + 3
+		rows := len(m.popupFiltered)
+		if rows > maxPopupRows {
+			rows = maxPopupRows
+		}
+		reserved += rows + 3
 	}
 	h := m.height - reserved
 	if h < 5 {
@@ -575,7 +891,19 @@ func (m tuiModel) viewportHeight() int {
 // renderPopup отрисовывает popup со списком команд.
 func (m tuiModel) renderPopup() string {
 	var lines []string
-	for i, c := range m.popupFiltered {
+	start := 0
+	if m.popupIdx >= maxPopupRows {
+		start = m.popupIdx - maxPopupRows + 1
+	}
+	end := start + maxPopupRows
+	if end > len(m.popupFiltered) {
+		end = len(m.popupFiltered)
+	}
+	if start > 0 {
+		lines = append(lines, tuiStyles.Status.Render(fmt.Sprintf("  ↑ ещё %d", start)))
+	}
+	for i := start; i < end; i++ {
+		c := m.popupFiltered[i]
 		var row string
 		if i == m.popupIdx {
 			row = tuiStyles.PopupSel.Render(fmt.Sprintf("▸ /%s  %s", c.name, c.desc))
@@ -584,32 +912,93 @@ func (m tuiModel) renderPopup() string {
 		}
 		lines = append(lines, row)
 	}
+	if end < len(m.popupFiltered) {
+		lines = append(lines, tuiStyles.Status.Render(fmt.Sprintf("  ↓ ещё %d", len(m.popupFiltered)-end)))
+	}
 	return tuiStyles.Popup.
 		Width(m.viewportWidth()).
 		Render(strings.Join(lines, "\n"))
 }
 
-// captureStdout выполняет fn, перехватывая её вывод в stdout, и возвращает его строкой.
-// Используется, чтобы вывод хендлеров (handleSearch, handleAdd и т.д.) попадал в viewport TUI,
-// а не в реальный stdout (где он смешался бы с TUI-рендерингом).
+// captureStdout выполняет fn, перехватывая её вывод в stdout, и возвращает его
+// строкой. Она сохранена отдельно для узких вызовов и тестов.
+func captureStdout(fn func()) string {
+	return captureProcessOutput(fn, false)
+}
+
+// captureCommandOutput направляет в viewport и stdout, и stderr. Это важно для
+// ask/map/import: их прогресс по CLI-контракту пишется в stderr и без перехвата
+// повреждал бы alt-screen TUI.
+func captureCommandOutput(fn func()) string {
+	return captureProcessOutput(fn, true)
+}
+
+// captureCommandOutputStream redirects stdout and stderr while fn runs and
+// emits each complete line as soon as it is written. bufio.Reader is used
+// instead of Scanner so large JSON/status lines are not limited to 64 KiB.
+func captureCommandOutputStream(fn func(), emit func(string)) {
+	oldStdout := os.Stdout
+	oldStderr := os.Stderr
+	r, w, err := os.Pipe()
+	if err != nil {
+		fn()
+		return
+	}
+	os.Stdout = w
+	os.Stderr = w
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		defer r.Close()
+		reader := bufio.NewReader(r)
+		for {
+			line, readErr := reader.ReadString('\n')
+			if len(line) > 0 {
+				emit(strings.TrimRight(line, "\r\n"))
+			}
+			if readErr != nil {
+				return
+			}
+		}
+	}()
+
+	// This cleanup also runs during panic, before runTUICommand converts the
+	// panic into execResultMsg. Closing the writer first is required for EOF.
+	defer func() {
+		_ = w.Close()
+		os.Stdout = oldStdout
+		os.Stderr = oldStderr
+		<-done
+	}()
+	fn()
+}
+
+// captureProcessOutput temporarily redirects process streams. TUI serializes
+// command execution with m.busy, so only one command uses this capture at once.
 //
 // ВАЖНО: w.Close() ДОЛЖЕН быть вызван ДО чтения из done, иначе классический deadlock:
 // горутина-ридер ждёт EOF на r → EOF наступит только после w.Close() → а return <-done
 // вычисляется до defer → циклическая блокировка. Дефер оставлен как страховка от паники
 // в fn() (recover в runCommandAsync ловит панику и шлёт execResultMsg{err}).
-func captureStdout(fn func()) string {
+func captureProcessOutput(fn func(), includeStderr bool) string {
 	oldStdout := os.Stdout
+	oldStderr := os.Stderr
 	r, w, err := os.Pipe()
 	if err != nil {
 		fn()
 		return ""
 	}
 	os.Stdout = w
+	if includeStderr {
+		os.Stderr = w
+	}
 
-	// Страховка от паники в fn(): закрыть pipe и восстановить stdout.
+	// Страховка от паники в fn(): закрыть pipe и восстановить streams.
 	defer func() {
 		_ = w.Close()
 		os.Stdout = oldStdout
+		os.Stderr = oldStderr
 	}()
 
 	done := make(chan string, 1)
@@ -626,11 +1015,17 @@ func captureStdout(fn func()) string {
 	// запишет результат в done (буферизованный канал уже будет иметь значение).
 	_ = w.Close()
 	os.Stdout = oldStdout
+	os.Stderr = oldStderr
 	return <-done
 }
 
+type tuiExitResult struct {
+	openPath      string
+	replRequested bool
+}
+
 // runTui запускает TUI-режим mem.
-func runTui(cfg *Config, store *Store) {
+func runTui(cfg *Config, store *Store) (tuiExitResult, error) {
 	m := newTuiModel(cfg, store)
 	p := tea.NewProgram(m, tea.WithAltScreen(), tea.WithMouseCellMotion())
 	// В этой версии bubbletea (v1.x) нет Program.Release() — alt-screen cleanup
@@ -643,8 +1038,17 @@ func runTui(cfg *Config, store *Store) {
 			panic(r) // продолжаем распространение после cleanup
 		}
 	}()
-	if _, err := p.Run(); err != nil {
+	finalModel, err := p.Run()
+	if err != nil {
 		_ = p.ReleaseTerminal()
-		fmt.Printf("Ошибка TUI: %v\n", err)
+		return tuiExitResult{}, err
+	}
+	switch final := finalModel.(type) {
+	case tuiModel:
+		return tuiExitResult{openPath: final.openPath, replRequested: final.replRequested}, nil
+	case *tuiModel:
+		return tuiExitResult{openPath: final.openPath, replRequested: final.replRequested}, nil
+	default:
+		return tuiExitResult{}, nil
 	}
 }

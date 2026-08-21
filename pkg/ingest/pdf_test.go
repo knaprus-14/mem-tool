@@ -93,7 +93,7 @@ func TestPDFHybridTextLayerOCRsOnlyMissingPage(t *testing.T) {
 	}
 }
 
-func TestPDFPoorTextIsClassifiedAsOCRRequired(t *testing.T) {
+func TestPDFEmptyTextIsClassifiedAsOCRRequired(t *testing.T) {
 	path := fixtureFile(t, "scan.pdf")
 	e := newEngine(Options{OCR: OCRConfig{MinTextRunes: 40}, Pages: PageRange{First: 1, Last: 1}})
 	e.resolve = func(name, explicit string) (string, error) {
@@ -103,11 +103,148 @@ func TestPDFPoorTextIsClassifiedAsOCRRequired(t *testing.T) {
 		return "", errors.New("not found")
 	}
 	e.run = func(context.Context, string, ...string) (commandOutput, error) {
-		return commandOutput{stdout: []byte("x\f")}, nil
+		return commandOutput{stdout: []byte("\f")}, nil
 	}
 	_, err := e.extractPDF(context.Background(), path)
 	if err == nil || !strings.Contains(err.Error(), "requires OCR") || !strings.Contains(err.Error(), "renderer") {
 		t.Fatalf("poor text was not reported as actionable OCR-required: %v", err)
+	}
+}
+
+func TestPDFRetainsShortWholeDocumentWhenOCRUnavailable(t *testing.T) {
+	path := fixtureFile(t, "short.pdf")
+	e := newEngine(Options{Pages: PageRange{First: 1, Last: 1}, OCR: OCRConfig{MinTextRunes: 40}})
+	e.resolve = func(name, explicit string) (string, error) {
+		if name == "pdftotext" {
+			return name, nil
+		}
+		return "", errors.New("not found")
+	}
+	e.run = func(context.Context, string, ...string) (commandOutput, error) {
+		return commandOutput{stdout: []byte("short but useful text\f")}, nil
+	}
+	doc, err := e.extractPDF(context.Background(), path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(doc.Blocks) != 1 || doc.Blocks[0].Text != "short but useful text" {
+		t.Fatalf("short document text was discarded: %#v", doc.Blocks)
+	}
+	if len(doc.Blocks[0].Warnings) != 1 || !strings.Contains(doc.Blocks[0].Warnings[0], "OCR unavailable") {
+		t.Fatalf("short document uncertainty was not preserved: %#v", doc.Blocks[0].Warnings)
+	}
+}
+
+func TestPDFDoesNotSwallowOCRCancellation(t *testing.T) {
+	path := fixtureFile(t, "cancelled.pdf")
+	tessdata := t.TempDir()
+	if err := os.WriteFile(filepath.Join(tessdata, "eng.traineddata"), []byte("x"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	e := newEngine(Options{
+		Pages: PageRange{First: 1, Last: 2},
+		OCR:   OCRConfig{Languages: "eng", TessdataDir: tessdata, MinTextRunes: 40},
+	})
+	e.resolve = func(name, explicit string) (string, error) {
+		if name == "pdftotext" || name == "pdftoppm" || name == "tesseract" {
+			return name, nil
+		}
+		return "", errors.New("not found")
+	}
+	e.run = func(_ context.Context, name string, _ ...string) (commandOutput, error) {
+		if name == "pdftotext" {
+			return commandOutput{stdout: []byte(strings.Repeat("rich text ", 8) + "\fshort page\f")}, nil
+		}
+		return commandOutput{}, errors.New("unexpected tool invocation after cancellation")
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	_, err := e.extractPDF(ctx, path)
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("OCR cancellation was swallowed: %v", err)
+	}
+}
+
+func TestPDFUsesPythonPyMuPDFFallback(t *testing.T) {
+	path := fixtureFile(t, "python-text.pdf")
+	e := newEngine(Options{OCR: OCRConfig{MinTextRunes: 5}})
+	e.resolve = func(name, explicit string) (string, error) {
+		if name == "python" {
+			return "python", nil
+		}
+		return "", errors.New("not found")
+	}
+	e.run = func(_ context.Context, name string, args ...string) (commandOutput, error) {
+		if name != "python" || len(args) < 5 || args[0] != "-c" || args[2] != path {
+			return commandOutput{}, errors.New("unexpected Python invocation")
+		}
+		return commandOutput{stdout: []byte("first page text\fsecond page text\f")}, nil
+	}
+	doc, err := e.extractPDF(context.Background(), path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(doc.Blocks) != 2 || doc.Blocks[0].Page != 1 || doc.Blocks[1].Page != 2 {
+		t.Fatalf("PyMuPDF fallback lost physical pages: %#v", doc.Blocks)
+	}
+}
+
+func TestPDFRetainsNonEmptySparseTextWhenOCRUnavailable(t *testing.T) {
+	path := fixtureFile(t, "sparse-text.pdf")
+	e := newEngine(Options{Pages: PageRange{First: 1, Last: 2}, OCR: OCRConfig{MinTextRunes: 40}})
+	e.resolve = func(name, explicit string) (string, error) {
+		if name == "pdftotext" {
+			return name, nil
+		}
+		return "", errors.New("not found")
+	}
+	e.run = func(context.Context, string, ...string) (commandOutput, error) {
+		return commandOutput{stdout: []byte(strings.Repeat("rich text ", 8) + "\fshort page heading\f")}, nil
+	}
+	doc, err := e.extractPDF(context.Background(), path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(doc.Blocks) != 2 || doc.Blocks[1].Page != 2 || doc.Blocks[1].Extraction != "text" {
+		t.Fatalf("sparse text page was discarded: %#v", doc.Blocks)
+	}
+	if len(doc.Blocks[1].Warnings) != 1 || !strings.Contains(doc.Blocks[1].Warnings[0], "OCR unavailable") {
+		t.Fatalf("sparse text uncertainty was not preserved: %#v", doc.Blocks[1].Warnings)
+	}
+}
+
+func TestPDFOCRUsesPythonPyMuPDFRenderer(t *testing.T) {
+	path := fixtureFile(t, "python-render.pdf")
+	tessdata := t.TempDir()
+	if err := os.WriteFile(filepath.Join(tessdata, "eng.traineddata"), []byte("x"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	e := newEngine(Options{OCR: OCRConfig{Languages: "eng", TessdataDir: tessdata, DPI: 150}})
+	e.resolve = func(name, explicit string) (string, error) {
+		if name == "python" || name == "tesseract" {
+			return name, nil
+		}
+		return "", errors.New("not found")
+	}
+	e.run = func(_ context.Context, name string, args ...string) (commandOutput, error) {
+		switch name {
+		case "python":
+			if len(args) < 6 || args[0] != "-c" || args[2] != path || args[3] != "2" || args[4] != "150" {
+				return commandOutput{}, errors.New("unexpected renderer invocation")
+			}
+			return commandOutput{}, os.WriteFile(args[5], []byte("png"), 0o600)
+		case "tesseract":
+			return commandOutput{stdout: []byte(fakeTSV)}, nil
+		default:
+			return commandOutput{}, errors.New("unexpected tool")
+		}
+	}
+	pages, err := e.ocrPDFPages(context.Background(), path, []int{2})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(pages) != 1 || pages[0].page != 2 || pages[0].method != "ocr" {
+		t.Fatalf("unexpected OCR result: %#v", pages)
 	}
 }
 

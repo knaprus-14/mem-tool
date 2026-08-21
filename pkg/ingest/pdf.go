@@ -28,6 +28,10 @@ type extractedPage struct {
 	warnings   []string
 }
 
+const pyMuPDFTextScript = `import sys,fitz;d=fitz.open(sys.argv[1]);a=max(1,int(sys.argv[2]));z=int(sys.argv[3]) or d.page_count;z=min(z,d.page_count);b=[d[i-1].get_text("text") for i in range(a,z+1)];sys.stdout.buffer.write(("\f".join(b)+"\f").encode("utf-8","replace"))`
+
+const pyMuPDFPageCountScript = `import sys,fitz;print("Pages:",fitz.open(sys.argv[1]).page_count)`
+
 func (e *engine) extractPDF(ctx context.Context, path string) (Document, error) {
 	if _, err := e.options.withDefaults(); err != nil {
 		return Document{}, err
@@ -62,6 +66,16 @@ func (e *engine) extractPDF(ctx context.Context, path string) (Document, error) 
 	e.progress(StageOCR, 0, len(ocrPageNumbers), fmt.Sprintf("PDF pages require OCR: %s", formatPageNumbers(ocrPageNumbers)))
 	ocrPages, ocrErr := e.ocrPDFPages(ctx, canonical, ocrPageNumbers)
 	if ocrErr != nil {
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return Document{}, fmt.Errorf("PDF OCR cancelled: %w", ctxErr)
+		}
+		if retained, ok := retainSparseTextPages(pages, ocrPageNumbers, ocrErr); ok {
+			doc, buildErr := documentFromPages(canonical, FormatPDF, "application/pdf", retained)
+			if buildErr == nil {
+				e.progress(StageDone, 0, len(retained), "PDF text layer extracted; sparse pages retained with OCR warnings")
+			}
+			return doc, buildErr
+		}
 		detail := strings.Join(attempts, "; ")
 		if detail == "" {
 			if len(pages) > 0 {
@@ -105,9 +119,14 @@ func (e *engine) extractPDFText(ctx context.Context, path string) ([]extractedPa
 			}
 			return args
 		}},
+		{"python", e.options.Tools.Python, func() []string {
+			return []string{"-c", pyMuPDFTextScript, path, strconv.Itoa(first), strconv.Itoa(last)}
+		}},
 	}
 	var attempts []string
 	maxCount := 0
+	var bestPages []extractedPage
+	bestTextRunes := 0
 	for _, candidate := range candidates {
 		tool, found, resolveErr := e.optionalTool(candidate.name, candidate.explicit)
 		if resolveErr != nil {
@@ -126,6 +145,10 @@ func (e *engine) extractPDFText(ctx context.Context, path string) ([]extractedPa
 		if count > maxCount {
 			maxCount = count
 		}
+		if runes := extractedTextRunes(parsed); runes > bestTextRunes {
+			bestPages = parsed
+			bestTextRunes = runes
+		}
 		if richEnough(parsed, e.options.OCR.MinTextRunes) {
 			return parsed, count, attempts, nil
 		}
@@ -142,7 +165,7 @@ func (e *engine) extractPDFText(ctx context.Context, path string) ([]extractedPa
 			attempts = append(attempts, countErr.Error())
 		}
 	}
-	return nil, maxCount, attempts, nil
+	return bestPages, maxCount, attempts, nil
 }
 
 func (e *engine) pdfPageCount(ctx context.Context, path string) (int, error) {
@@ -166,7 +189,17 @@ func (e *engine) pdfPageCount(ctx context.Context, path string) (int, error) {
 			}
 		}
 	}
-	return 0, fmt.Errorf("cannot determine PDF page count for OCR: configure pdfinfo/mutool or use an explicit extractor page range")
+	if tool, found, err := e.optionalTool("python", e.options.Tools.Python); err != nil {
+		return 0, err
+	} else if found {
+		out, runErr := e.runTool(ctx, tool, "-c", pyMuPDFPageCountScript, path)
+		if runErr == nil {
+			if count := parsePageCount(string(out.stdout)); count > 0 {
+				return count, nil
+			}
+		}
+	}
+	return 0, fmt.Errorf("cannot determine PDF page count: configure pdfinfo/mutool, or Python with PyMuPDF (MEM_PYTHON)")
 }
 
 var pagesPattern = regexp.MustCompile(`(?im)^\s*Pages?\s*:\s*([0-9]+)\s*$`)
@@ -204,6 +237,10 @@ func pagesFromFormFeed(text string, first int, method string, confidence float64
 }
 
 func richEnough(pages []extractedPage, threshold int) bool {
+	return extractedTextRunes(pages) >= threshold
+}
+
+func extractedTextRunes(pages []extractedPage) int {
 	count := 0
 	for _, page := range pages {
 		for _, r := range page.text {
@@ -212,7 +249,7 @@ func richEnough(pages []extractedPage, threshold int) bool {
 			}
 		}
 	}
-	return count >= threshold
+	return count
 }
 
 func pageRichEnough(page extractedPage, threshold int) bool {
@@ -257,6 +294,24 @@ func mergeExtractedPages(textPages, ocrPages []extractedPage) []extractedPage {
 		result = append(result, merged[page])
 	}
 	return result
+}
+
+func retainSparseTextPages(pages []extractedPage, requestedOCR []int, cause error) ([]extractedPage, bool) {
+	byPage := make(map[int]int, len(pages))
+	retained := append([]extractedPage(nil), pages...)
+	for i := range retained {
+		retained[i].warnings = append([]string(nil), retained[i].warnings...)
+		byPage[retained[i].page] = i
+	}
+	for _, page := range requestedOCR {
+		index, ok := byPage[page]
+		if !ok || strings.TrimSpace(retained[index].text) == "" {
+			return nil, false
+		}
+		retained[index].warnings = append(retained[index].warnings,
+			fmt.Sprintf("page %d: extracted text is below the quality threshold; OCR unavailable: %v", page, cause))
+	}
+	return retained, len(requestedOCR) > 0
 }
 
 func formatPageNumbers(pages []int) string {

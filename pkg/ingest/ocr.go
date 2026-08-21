@@ -12,6 +12,8 @@ import (
 
 type pageRenderer func(context.Context, int, string) error
 
+const pyMuPDFRenderScript = `import sys,fitz;d=fitz.open(sys.argv[1]);p=d[int(sys.argv[2])-1];p.get_pixmap(dpi=int(sys.argv[3]),alpha=False).save(sys.argv[4])`
+
 func (e *engine) ocrPDF(ctx context.Context, path string, discoveredCount int) ([]extractedPage, error) {
 	first, last, total, err := e.selectedPages(discoveredCount)
 	if err != nil {
@@ -50,8 +52,18 @@ func (e *engine) ocrPDFPages(ctx context.Context, path string, pages []int) ([]e
 			}
 			return nil
 		}
+	} else if tool, found, resolveErr := e.optionalTool("python", e.options.Tools.Python); resolveErr != nil {
+		return nil, resolveErr
+	} else if found {
+		render = func(ctx context.Context, page int, output string) error {
+			out, runErr := e.runTool(ctx, tool, "-c", pyMuPDFRenderScript, path, strconv.Itoa(page), strconv.Itoa(e.options.OCR.DPI), output)
+			if runErr != nil {
+				return commandFailure("python/PyMuPDF", out, runErr)
+			}
+			return nil
+		}
 	} else {
-		return nil, fmt.Errorf("no PDF OCR renderer found: configure pdftoppm/mutool via project config or MEM_PDFTOPPM/MEM_MUTOOL")
+		return nil, fmt.Errorf("no PDF OCR renderer found: configure pdftoppm/mutool or Python with PyMuPDF via project config/MEM_PYTHON")
 	}
 	return e.ocrRenderedPageNumbers(ctx, pages, ".png", render)
 }

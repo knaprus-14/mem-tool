@@ -6,12 +6,13 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"sort"
 	"strings"
 )
 
 var toolEnv = map[string]string{
 	"pdftotext": "MEM_PDFTOTEXT", "mutool": "MEM_MUTOOL", "pdfinfo": "MEM_PDFINFO",
-	"pdftoppm": "MEM_PDFTOPPM", "djvutxt": "MEM_DJVUTXT", "djvused": "MEM_DJVUSED",
+	"pdftoppm": "MEM_PDFTOPPM", "python": "MEM_PYTHON", "djvutxt": "MEM_DJVUTXT", "djvused": "MEM_DJVUSED",
 	"ddjvu": "MEM_DDJVU", "tesseract": "MEM_TESSERACT",
 }
 
@@ -65,6 +66,20 @@ func windowsToolCandidates(name string) []string {
 		dirs = []string{`C:\Program Files\poppler\Library\bin`, `C:\Program Files\poppler\bin`, `C:\Program Files (x86)\poppler\Library\bin`, `C:\Program Files (x86)\poppler\bin`}
 	case "mutool":
 		dirs = []string{`C:\Program Files\MuPDF`, `C:\Program Files (x86)\MuPDF`}
+	case "python":
+		localAppData := strings.TrimSpace(os.Getenv("LOCALAPPDATA"))
+		if localAppData != "" {
+			root := filepath.Join(localAppData, "Programs", "Python")
+			entries, err := os.ReadDir(root)
+			if err == nil {
+				for _, entry := range entries {
+					if entry.IsDir() && strings.HasPrefix(strings.ToLower(entry.Name()), "python") {
+						dirs = append(dirs, filepath.Join(root, entry.Name()))
+					}
+				}
+				sort.Sort(sort.Reverse(sort.StringSlice(dirs)))
+			}
+		}
 	}
 	result := make([]string, 0, len(dirs))
 	for _, dir := range dirs {

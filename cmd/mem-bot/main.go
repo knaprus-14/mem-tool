@@ -17,14 +17,13 @@ import (
 	"github.com/go-telegram/bot"
 	"github.com/go-telegram/bot/models"
 
+	"github.com/knaprus-14/mem-tool/internal/buildinfo"
 	mem "github.com/knaprus-14/mem-tool/pkg/mem"
 )
 
 const (
 	// dataDir — корневая директория для всех данных бота
 	defaultDataDir = "./data"
-	// botVersion — версия бота (отображается в /start)
-	botVersion = "0.1.0"
 	// botWorkers ограничивает параллелизм и позволяет Start дождаться активных
 	// handler-ов перед закрытием пользовательских SQLite-баз.
 	botWorkers = 4
@@ -47,6 +46,14 @@ type botData struct {
 var data *botData
 
 func main() {
+	if len(os.Args) == 2 {
+		switch os.Args[1] {
+		case "version", "--version", "-v":
+			mem.PrintVersion("mem-bot", buildinfo.Version)
+			return
+		}
+	}
+
 	// === Конфигурация ===
 	token := os.Getenv("TELEGRAM_BOT_TOKEN")
 	if token == "" {
@@ -97,7 +104,7 @@ func main() {
 	b.RegisterHandler(bot.HandlerTypeMessageText, "/stats", bot.MatchTypeExact, cmdStats)
 	b.RegisterHandler(bot.HandlerTypeMessageText, "/import", bot.MatchTypeExact, cmdImport)
 
-	log.Printf("[mem-bot v%s] запущен, data dir: %s", botVersion, dataDir)
+	log.Printf("[mem-bot v%s] запущен, data dir: %s", buildinfo.Version, dataDir)
 
 	// Запускаем polling в отдельной горутине
 	b.Start(ctx)
@@ -194,7 +201,7 @@ func cmdStart(ctx context.Context, b *bot.Bot, update *models.Update) {
 /stats — статистика базы
 /help — эта справка
 
-Версия: mem-bot v%s`, user.FirstName, botVersion)
+Версия: mem-bot v%s`, user.FirstName, buildinfo.Version)
 
 	sendMessage(ctx, b, update.Message.Chat.ID, text)
 }

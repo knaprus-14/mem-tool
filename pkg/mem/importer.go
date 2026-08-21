@@ -43,7 +43,7 @@ func ImportDocument(ctx context.Context, cfg *Config, store *Store, path string,
 	doc, err := ingest.ExtractWithOptions(ctx, path, ingest.Options{
 		Tools: ingest.ToolConfig{
 			PDFToText: cfg.Ingest.PDFToText, MuTool: cfg.Ingest.MuTool,
-			PDFInfo: cfg.Ingest.PDFInfo, PDFToPPM: cfg.Ingest.PDFToPPM,
+			PDFInfo: cfg.Ingest.PDFInfo, PDFToPPM: cfg.Ingest.PDFToPPM, Python: cfg.Ingest.Python,
 			DjVuText: cfg.Ingest.DjVuText, DjVuUsed: cfg.Ingest.DjVuUsed,
 			DjVuRender: cfg.Ingest.DjVuRender, Tesseract: cfg.Ingest.Tesseract,
 		},
@@ -125,6 +125,12 @@ func importExtractedDocumentWithContextEmbedder(ctx context.Context, cfg *Config
 	if len(pieces) == 0 {
 		return result, fmt.Errorf("document produced no chunks after chunking")
 	}
+	if options.Progress != nil {
+		options.Progress(ingest.ProgressEvent{
+			Stage: ingest.StageEmbed, Total: len(pieces),
+			Message: fmt.Sprintf("подготовлено %d чанков; запись в базу начнётся только после всех embeddings", len(pieces)),
+		})
+	}
 
 	embeddings := make([][]float32, len(pieces))
 	for i, piece := range pieces {
@@ -137,6 +143,12 @@ func importExtractedDocumentWithContextEmbedder(ctx context.Context, cfg *Config
 				i+1, len(pieces), piece.page, piece.blockIndex, err)
 		}
 		embeddings[i] = vector
+		if options.Progress != nil {
+			options.Progress(ingest.ProgressEvent{
+				Stage: ingest.StageEmbed, Page: piece.page, Current: i + 1, Total: len(pieces),
+				Message: fmt.Sprintf("embedding готов (вектор %d)", len(vector)),
+			})
+		}
 	}
 
 	title := options.Title

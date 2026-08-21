@@ -1,12 +1,44 @@
 package mem
 
 import (
+	"context"
 	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/knaprus-14/mem-tool/pkg/ingest"
 )
+
+func TestDocumentImportReportsAtomicEmbeddingProgress(t *testing.T) {
+	root := t.TempDir()
+	doc, err := ingest.ParseMarkdown(filepath.Join(root, "book.md"), strings.Repeat("progress text ", 12))
+	if err != nil {
+		t.Fatal(err)
+	}
+	store, err := NewStore(filepath.Join(root, "db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	var events []ingest.ProgressEvent
+	result, err := importExtractedDocumentWithContextEmbedder(context.Background(), testConfig(30, "fixed"), store, doc,
+		ImportOptions{Progress: func(event ingest.ProgressEvent) { events = append(events, event) }},
+		func(context.Context, *Config, string) ([]float32, error) { return []float32{1, 2}, nil })
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Chunks < 2 || len(events) != result.Chunks+1 {
+		t.Fatalf("result=%#v events=%#v", result, events)
+	}
+	if events[0].Stage != ingest.StageEmbed || events[0].Current != 0 || events[0].Total != result.Chunks || !strings.Contains(events[0].Message, "запись в базу") {
+		t.Fatalf("missing atomic preflight progress: %#v", events[0])
+	}
+	for i, event := range events[1:] {
+		if event.Stage != ingest.StageEmbed || event.Current != i+1 || event.Total != result.Chunks {
+			t.Fatalf("embedding progress[%d] = %#v", i, event)
+		}
+	}
+}
 
 func TestMarkdownImportStoresSearchablePageProvenance(t *testing.T) {
 	root := t.TempDir()

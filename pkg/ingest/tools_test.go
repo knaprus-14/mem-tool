@@ -46,3 +46,20 @@ func TestWindowsStandardCandidatesIncludeInstalledToolFamilies(t *testing.T) {
 		}
 	}
 }
+
+func TestWindowsPythonCandidatesDiscoverInstalledVersions(t *testing.T) {
+	localAppData := t.TempDir()
+	root := filepath.Join(localAppData, "Programs", "Python")
+	for _, version := range []string{"Python310", "Python314"} {
+		if err := os.MkdirAll(filepath.Join(root, version), 0o700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	t.Setenv("LOCALAPPDATA", localAppData)
+	joined := strings.Join(windowsToolCandidates("python"), "|")
+	for _, version := range []string{"Python310", "Python314"} {
+		if !strings.Contains(joined, filepath.Join(version, "python.exe")) {
+			t.Fatalf("Python %s standard install was not discovered: %s", version, joined)
+		}
+	}
+}

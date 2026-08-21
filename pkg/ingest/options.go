@@ -15,6 +15,7 @@ const (
 	StageText    = "text"
 	StageRender  = "render"
 	StageOCR     = "ocr"
+	StageEmbed   = "embed"
 	StageDone    = "done"
 )
 
@@ -28,6 +29,7 @@ type ToolConfig struct {
 	MuTool     string
 	PDFInfo    string
 	PDFToPPM   string
+	Python     string
 	DjVuText   string
 	DjVuUsed   string
 	DjVuRender string

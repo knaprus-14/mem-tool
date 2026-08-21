@@ -29,7 +29,9 @@ Allowed edge kinds: contains, about, supports, contradicts, derived_from, asks, 
 prerequisite, related, compares, reveals_gap, resolves.
 Every node and edge must cite at least one exact citation_id from EVIDENCE_JSON.
 Use refs only to connect nodes inside this response. Do not invent persistent IDs, source paths,
-pages, hashes, revisions, citations, or evidence. At most 100 nodes and 300 edges.`
+pages, hashes, revisions, citations, or evidence. Keep the graph concise and focused: prefer no
+more than 3 distinct nodes per evidence item and only directly supported relationships.
+At most 100 nodes and 300 edges.`
 
 type KnowledgeExtractionPrompt struct {
 	System   string

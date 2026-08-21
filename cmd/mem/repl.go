@@ -17,6 +17,7 @@ var replCommands = []string{
 	"search", "add", "recent", "show", "get", "view",
 	"important", "imp", "tags", "retag", "edit",
 	"delete", "rm", "stats", "sources", "config",
+	"where", "current",
 	"clear", "help", "exit", "quit",
 }
 
@@ -73,7 +74,9 @@ func runRepl(cfg *Config, store *Store) {
 			continue
 		}
 
-		dispatchReplLine(cfg, store, line)
+		if dispatchReplLine(cfg, store, line) {
+			return
+		}
 		fmt.Println()
 	}
 }
@@ -85,14 +88,14 @@ func memHistoryPath() string {
 }
 
 // dispatchReplLine выполняет одну строку ввода REPL.
-func dispatchReplLine(cfg *Config, store *Store, line string) {
+func dispatchReplLine(cfg *Config, store *Store, line string) bool {
 	var cmd string
 	var args []string
 
 	if strings.HasPrefix(line, "/") {
 		parts := strings.Fields(line)
 		if len(parts) == 0 {
-			return
+			return false
 		}
 		cmd = strings.ToLower(strings.TrimPrefix(parts[0], "/"))
 		args = parts[1:]
@@ -136,6 +139,8 @@ func dispatchReplLine(cfg *Config, store *Store, line string) {
 		}
 	case "stats":
 		handleStats(store)
+	case "where", "current":
+		handleWhere(store)
 	case "sources":
 		handleSources(store)
 	case "config":
@@ -152,11 +157,12 @@ func dispatchReplLine(cfg *Config, store *Store, line string) {
 		printReplHelp()
 	case "exit", "quit", "q":
 		fmt.Println(ui.Tag("До встречи!"))
-		os.Exit(0)
+		return true
 	default:
 		fmt.Fprintf(os.Stderr, "Неизвестная команда: /%s\n", cmd)
 		fmt.Fprintln(os.Stderr, "Введите /help для списка команд")
 	}
+	return false
 }
 
 // clearReplHistory удаляет файл .mem/history.txt.
@@ -228,6 +234,7 @@ func printReplHelp() {
 	fmt.Printf("  %s           Изменить запись\n", ui.ID("/edit <id> <текст>"))
 	fmt.Printf("  %s           Удалить запись\n", ui.ID("/delete <id>"))
 	fmt.Printf("  %s            Статистика\n", ui.ID("/stats"))
+	fmt.Printf("  %s            Активная локальная база\n", ui.ID("/where"))
 	fmt.Printf("  %s          Список документов\n", ui.ID("/sources"))
 	fmt.Printf("  %s           Конфигурация\n", ui.ID("/config"))
 	fmt.Printf("  %s            Очистить экран\n", ui.ID("/clear"))
@@ -255,6 +262,7 @@ var commandMenu = []commandMenuEntry{
 	{"edit <id> ...", "изменить запись"},
 	{"delete <id>", "удалить запись"},
 	{"stats", "статистика базы"},
+	{"where", "путь активной локальной базы"},
 	{"sources", "список документов"},
 	{"config", "конфигурация"},
 	{"clear", "очистить экран"},

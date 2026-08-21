@@ -14,7 +14,9 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode/utf8"
 
+	"github.com/knaprus-14/mem-tool/internal/buildinfo"
 	"github.com/knaprus-14/mem-tool/pkg/ingest"
 	mem "github.com/knaprus-14/mem-tool/pkg/mem"
 	ui "github.com/knaprus-14/mem-tool/pkg/ui"
@@ -55,11 +57,10 @@ var (
 	newAnswerProvider   = func(cfg mem.AnswerConfig) (mem.AnswerProvider, error) {
 		return mem.NewOllamaAnswerProvider(cfg)
 	}
+	importDocument = mem.ImportDocument
 )
 
 const memDirName = mem.MemDirName
-
-const version = "1.15.13"
 
 // cmdRequiresDB — команды, для работы которых нужна локальная база .mem/
 var cmdRequiresDB = map[string]bool{
@@ -71,7 +72,8 @@ var cmdRequiresDB = map[string]bool{
 	"delete": true, "rm": true,
 	"edit": true, "retag": true,
 	"important": true, "imp": true,
-	"repl": true,
+	"repl":  true,
+	"where": true, "current": true,
 }
 
 // cmdCanAutocreate — команды, которые могут автоматически создать .mem/
@@ -109,19 +111,7 @@ func run() int {
 	if len(os.Args) < 2 || len(args0) == 0 {
 		// mem без аргументов → если .mem/ есть, запускаем TUI; иначе — help
 		if memExists() {
-			cfg, err := loadConfig()
-			if err != nil {
-				fmt.Fprintf(os.Stderr, "Ошибка загрузки конфига: %v\n", err)
-				return 1
-			}
-			store, err := newStore(memDir())
-			if err != nil {
-				fmt.Fprintf(os.Stderr, "Ошибка открытия хранилища: %v\n", err)
-				return 1
-			}
-			defer store.Close()
-			runTui(cfg, store)
-			return 0
+			return runTuiSession()
 		}
 		printUsage()
 		return 0
@@ -141,6 +131,8 @@ func run() int {
 	case "help", "--help", "-h":
 		printUsage()
 		return 0
+	case "open":
+		return handleOpenDatabase(args)
 	}
 
 	// Все остальные команды требуют локальную базу
@@ -257,12 +249,103 @@ func run() int {
 		}
 	case "repl":
 		runRepl(cfg, store)
+	case "where", "current":
+		handleWhere(store)
 	default:
 		fmt.Fprintf(os.Stderr, "Неизвестная команда: %s\n\n", cmd)
 		printUsage()
 		return 1
 	}
 	return 0
+}
+
+func databasePathArg(args []string) (string, error) {
+	if len(args) == 0 {
+		return "", fmt.Errorf("укажи каталог проекта или путь к .mem\nПример: mem open \"D:\\Knowledge\\ProjectA\"")
+	}
+	path := strings.TrimSpace(strings.Join(args, " "))
+	if len(path) >= 2 && path[0] == '"' && path[len(path)-1] == '"' {
+		path = path[1 : len(path)-1]
+	}
+	if path == "" {
+		return "", fmt.Errorf("путь к базе пуст")
+	}
+	return path, nil
+}
+
+func resolveDatabaseRootArg(args []string) (string, error) {
+	path, err := databasePathArg(args)
+	if err != nil {
+		return "", err
+	}
+	root, err := mem.ResolveDatabaseRoot(path)
+	if err != nil {
+		return "", err
+	}
+	probe, err := newStore(filepath.Join(root, memDirName))
+	if err != nil {
+		return "", fmt.Errorf("локальная база %s не открывается: %w", filepath.Join(root, memDirName), err)
+	}
+	if err := probe.Close(); err != nil {
+		return "", fmt.Errorf("проверка закрытия локальной базы %s: %w", probe.Path(), err)
+	}
+	return root, nil
+}
+
+func handleOpenDatabase(args []string) int {
+	root, err := resolveDatabaseRootArg(args)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Ошибка: %v\n", err)
+		return 1
+	}
+	if err := os.Chdir(root); err != nil {
+		fmt.Fprintf(os.Stderr, "Ошибка перехода в %s: %v\n", root, err)
+		return 1
+	}
+	return runTuiSession()
+}
+
+// runTuiSession owns the currently opened Store. A /open command returns a new
+// project root; the old SQLite connection is closed before changing cwd and
+// opening the selected local database.
+func runTuiSession() int {
+	for {
+		cfg, err := loadConfig()
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Ошибка загрузки конфига: %v\n", err)
+			return 1
+		}
+		store, err := newStore(memDir())
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Ошибка открытия хранилища: %v\n", err)
+			return 1
+		}
+		tuiResult, tuiErr := runTui(cfg, store)
+		if tuiErr == nil && tuiResult.replRequested {
+			runRepl(cfg, store)
+		}
+		closeErr := store.Close()
+		if tuiErr != nil {
+			fmt.Fprintf(os.Stderr, "Ошибка TUI: %v\n", tuiErr)
+			return 1
+		}
+		if closeErr != nil {
+			fmt.Fprintf(os.Stderr, "Ошибка закрытия базы %s: %v\n", store.Path(), closeErr)
+			return 1
+		}
+		if tuiResult.replRequested || tuiResult.openPath == "" {
+			return 0
+		}
+		root, err := mem.ResolveDatabaseRoot(tuiResult.openPath)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Ошибка открытия базы: %v\n", err)
+			return 1
+		}
+		if err := os.Chdir(root); err != nil {
+			fmt.Fprintf(os.Stderr, "Ошибка перехода в %s: %v\n", root, err)
+			return 1
+		}
+	}
 }
 
 // handleInit создаёт локальную базу .mem/ в текущей папке
@@ -289,7 +372,7 @@ func handleInit() {
 }
 
 func printVersion() {
-	fmt.Printf("mem-tool v%s\n", version)
+	fmt.Printf("mem-tool v%s\n", buildinfo.Version)
 	fmt.Println("(c) 2026 Кнап Руслан Юрьевич")
 	fmt.Println("Векторная база знаний для работы с Claude")
 }
@@ -633,15 +716,59 @@ func handleAsk(cfg *Config, store *Store, args []string) error {
 	}
 	fmt.Fprintln(os.Stdout, validated.Answer)
 	if len(validated.Used) > 0 {
-		fmt.Fprintln(os.Stdout, "\nИсточники:")
-		for _, evidence := range validated.Used {
-			fmt.Fprintf(os.Stdout, "- %s — %s\n", evidence.CitationID, evidence.CitationLabel)
-			if evidence.DocumentRevision != "" {
-				fmt.Fprintf(os.Stdout, "  revision=%s evidence=%s\n", evidence.DocumentRevision, evidence.EvidenceHash)
-			}
-		}
+		printGroundedSources(os.Stdout, validated.Used)
 	}
 	return nil
+}
+
+func printGroundedSources(w io.Writer, evidence []mem.GroundedEvidence) {
+	fmt.Fprintln(w, "\nИсточники:")
+	for i, item := range evidence {
+		number := i + 1
+		sourcePath := strings.TrimSpace(item.SourcePath)
+		name := filepath.Base(sourcePath)
+		if sourcePath == "" || name == "." {
+			name = strings.TrimSpace(item.CitationLabel)
+		}
+		if strings.HasPrefix(item.CitationID, "entry-") {
+			name = "Запись базы #" + strings.TrimPrefix(item.CitationID, "entry-")
+		}
+		fmt.Fprintf(w, "[%d] %s\n", number, name)
+		if sourcePath != "" {
+			fmt.Fprintf(w, "    Файл: %s\n", sourcePath)
+		}
+
+		location := make([]string, 0, 4)
+		if item.Page > 0 {
+			location = append(location, fmt.Sprintf("страница %d", item.Page))
+		}
+		if item.DocumentID != "" || item.Page > 0 || item.BlockMarker != "" || item.BlockTotalChunks > 0 {
+			location = append(location, fmt.Sprintf("блок %d", item.BlockIndex+1))
+		}
+		if item.BlockChunk != "" {
+			location = append(location, "фрагмент "+item.BlockChunk)
+		} else if item.Chunk != "" {
+			location = append(location, "фрагмент "+item.Chunk)
+		}
+		marker := humanSectionMarker(item.BlockMarker)
+		if marker != "" {
+			location = append(location, "раздел "+marker)
+		}
+		if len(location) > 0 {
+			fmt.Fprintln(w, "    Место: "+strings.Join(location, " · "))
+		} else {
+			fmt.Fprintln(w, "    Место: номер страницы отсутствует")
+		}
+	}
+}
+
+func humanSectionMarker(marker string) string {
+	marker = strings.TrimSpace(marker)
+	normalized := strings.ToLower(marker)
+	if strings.HasPrefix(normalized, "page:") || strings.HasPrefix(normalized, "page ") || strings.HasPrefix(normalized, "<!-- page:") {
+		return ""
+	}
+	return marker
 }
 
 func parseAskArgs(args []string) ([]string, int, error) {
@@ -667,9 +794,11 @@ func parseAskArgs(args []string) ([]string, int, error) {
 
 func handleMap(cfg *Config, store *Store, args []string) error {
 	if len(args) == 0 {
-		return errors.New("использование: mem map <build|analyze|duplicates|merge-node|merges|runs|run|prune-runs|status|approve|approve-batch|reviews|export|export-html>\n  mem map build <фокус> [-limit N] [-context-chars N]\n  mem map analyze <фокус> [-context-chars N] [-batches N] [-resume <run-id>]\n  mem map duplicates [--json] [-threshold 0.92] [-kind claim] [-nodes N] [-limit N]\n  mem map merge-node <manifest.json>\n  mem map merges [--json] [-limit N]\n  mem map runs [--json] [-limit N] [-status running|completed]\n  mem map run <run-id> [--json]\n  mem map prune-runs -older-than <duration> [-keep N] [--dry-run|--yes] [--json]\n  mem map status [--json]\n  mem map approve <node|edge> <id> --reviewer <имя> [--comment <текст>] [--evidence-digest <sha256>]\n  mem map approve-batch <manifest.json>\n  mem map reviews [--json] [-limit N]\n  mem map export\n  mem map export-html <output.html> [--title <текст>] [--force]")
+		return errors.New("использование: mem map <open|build|analyze|duplicates|merge-node|merges|runs|run|prune-runs|status|approve|approve-batch|reviews|export|export-html>\n  mem map open [--port N] [--title <текст>] [--no-browser]\n  mem map build <фокус> [-limit N] [-context-chars N]\n  mem map analyze <фокус> [-context-chars N] [-batches N] [-resume <run-id>]\n  mem map duplicates [--json] [-threshold 0.92] [-kind claim] [-nodes N] [-limit N]\n  mem map merge-node <manifest.json>\n  mem map merges [--json] [-limit N]\n  mem map runs [--json] [-limit N] [-status running|completed]\n  mem map run <run-id> [--json]\n  mem map prune-runs -older-than <duration> [-keep N] [--dry-run|--yes] [--json]\n  mem map status [--json]\n  mem map approve <node|edge> <id> --reviewer <имя> [--comment <текст>] [--evidence-digest <sha256>]\n  mem map approve-batch <manifest.json>\n  mem map reviews [--json] [-limit N]\n  mem map export\n  mem map export-html <output.html> [--title <текст>] [--force]")
 	}
 	switch args[0] {
+	case "open":
+		return handleMapOpen(store, args[1:])
 	case "export":
 		if len(args) != 1 {
 			return errors.New("использование: mem map export")
@@ -711,7 +840,7 @@ func handleMap(cfg *Config, store *Store, args []string) error {
 	case "build":
 		return handleMapBuild(cfg, store, args[1:])
 	default:
-		return fmt.Errorf("неизвестная подкоманда map: %s (доступны build, analyze, duplicates, merge-node, merges, runs, run, prune-runs, status, approve, approve-batch, reviews, export, export-html)", args[0])
+		return fmt.Errorf("неизвестная подкоманда map: %s (доступны open, build, analyze, duplicates, merge-node, merges, runs, run, prune-runs, status, approve, approve-batch, reviews, export, export-html)", args[0])
 	}
 }
 
@@ -1411,7 +1540,12 @@ func handleMapAnalyze(cfg *Config, store *Store, args []string) error {
 	}
 	fmt.Fprintf(os.Stderr, "[MAP ANALYZE] semantic vectors=%d/%d guided_batches=%d fallback_batches=%d\n",
 		plan.SemanticClaims, plan.EligibleClaims, plan.SemanticBatches, plan.FallbackBatches)
-	answerCfg := cfg.Answer.WithDefaults()
+	configuredAnswerCfg := cfg.Answer.WithDefaults()
+	answerCfg := cfg.Answer.WithMapGenerationDefaults()
+	if answerCfg.MaxTokens != configuredAnswerCfg.MaxTokens {
+		fmt.Fprintf(os.Stderr, "[MAP ANALYZE] output budget: %d tokens (answer.max_tokens=%d; повышен для структурированного JSON)\n",
+			answerCfg.MaxTokens, configuredAnswerCfg.MaxTokens)
+	}
 	run, err := store.PrepareCorpusAnalysisRun(focus, contextBudget, maxBatches, plan, answerCfg, resumeID)
 	if err != nil {
 		return fmt.Errorf("map analyze run: %w", err)
@@ -1514,7 +1648,8 @@ func handleMapBuild(cfg *Config, store *Store, args []string) error {
 	if err != nil {
 		return err
 	}
-	answerCfg := cfg.Answer.WithDefaults()
+	configuredAnswerCfg := cfg.Answer.WithDefaults()
+	answerCfg := cfg.Answer.WithMapGenerationDefaults()
 
 	fmt.Fprintln(os.Stderr, "[MAP] retrieval: строю embedding и ищу versioned evidence...")
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
@@ -1574,6 +1709,10 @@ func handleMapBuild(cfg *Config, store *Store, args []string) error {
 	provider, err := newAnswerProvider(answerCfg)
 	if err != nil {
 		return err
+	}
+	if answerCfg.MaxTokens != configuredAnswerCfg.MaxTokens {
+		fmt.Fprintf(os.Stderr, "[MAP] output budget: %d tokens (answer.max_tokens=%d; повышен для структурированного JSON)\n",
+			answerCfg.MaxTokens, configuredAnswerCfg.MaxTokens)
 	}
 	fmt.Fprintf(os.Stderr, "[MAP] evidence: %d фрагм.; extraction через %s...\n", len(prompt.Evidence), answerCfg.Model)
 	raw, err := provider.Generate(ctx, mem.AnswerRequest{
@@ -1727,9 +1866,17 @@ func handleAddFile(cfg *Config, store *Store, args []string) error {
 	}
 
 	path := positional[0]
+	ext := strings.ToLower(filepath.Ext(path))
+	if ext == ".pdf" || ext == ".djvu" || ext == ".djv" {
+		fmt.Printf("[INFO] Формат %s требует извлечения текста и provenance; переключаю на mem import.\n", ext)
+		return handleImport(cfg, store, args)
+	}
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return fmt.Errorf("чтение файла %s: %w", path, err)
+	}
+	if !utf8.Valid(data) || bytes.IndexByte(data, 0) >= 0 {
+		return fmt.Errorf("файл %s не является UTF-8 текстом; для PDF/DjVu используй mem import", path)
 	}
 
 	text := strings.TrimSpace(string(data))
@@ -1822,9 +1969,12 @@ func handleImport(cfg *Config, store *Store, args []string) error {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
 	defer stop()
 	fmt.Printf("[IMPORT] Анализ документа: %s\n", positional[0])
-	result, err := mem.ImportDocument(ctx, cfg, store, positional[0], mem.ImportOptions{
+	result, err := importDocument(ctx, cfg, store, positional[0], mem.ImportOptions{
 		Title: title, Tags: tags, Important: important,
 		Progress: func(event ingest.ProgressEvent) {
+			if event.Stage == ingest.StageEmbed && event.Current > 0 && !shouldReportImportProgress(event.Current, event.Total) {
+				return
+			}
 			if event.Page > 0 {
 				fmt.Printf("[%s] [%d/%d] page %d: %s\n", strings.ToUpper(event.Stage), event.Current, event.Total, event.Page, event.Message)
 			} else {
@@ -1847,6 +1997,17 @@ func handleImport(cfg *Config, store *Store, args []string) error {
 		fmt.Printf("[WARN] %s\n", warning)
 	}
 	return nil
+}
+
+func shouldReportImportProgress(current, total int) bool {
+	if current <= 10 || current == total || total <= 100 {
+		return true
+	}
+	step := total / 100
+	if step < 10 {
+		step = 10
+	}
+	return current%step == 0
 }
 
 func handleIndex(cfg *Config, store *Store, args []string) error {
@@ -2096,6 +2257,19 @@ func handleSources(store *Store) error {
 	return nil
 }
 
+func handleWhere(store *Store) {
+	storePath := store.Path()
+	memPath := filepath.Dir(storePath)
+	projectPath := filepath.Dir(memPath)
+	stats := store.Stats()
+	fmt.Println("[DB] Активная локальная база")
+	fmt.Println(strings.Repeat("--", 25))
+	fmt.Printf("  Проект:       %s\n", projectPath)
+	fmt.Printf("  Каталог базы: %s\n", memPath)
+	fmt.Printf("  SQLite:       %s\n", storePath)
+	fmt.Printf("  Записей:      %d\n", stats["total_entries"])
+}
+
 func handleStats(store *Store) error {
 	stats := store.Stats()
 
@@ -2294,6 +2468,13 @@ func printUsage() {
       Проверенные batch-результаты сохраняются как checkpoints; повтор команды
       продолжает run. Knowledge graph изменяется только после завершения всех пакетов.
 
+  mem map open [--port N] [--title <текст>] [--no-browser]
+      Открыть актуальную карту через локальное HTTP-рабочее пространство только на
+      127.0.0.1. По умолчанию выбирается свободный порт и запускается браузер;
+      обновление страницы перечитывает граф из активной базы. Раскладка закреплённых
+      узлов, масштаб и положение сохраняются в базе автоматически. Ctrl+C
+      останавливает сервер. Для ручного открытия адреса используй --no-browser.
+
   mem map duplicates [--json] [-threshold 0.92] [-kind claim] [-nodes N] [-limit N]
       Найти близкие по смыслу узлы одного kind. Эмбеддится точный label+body,
       stale/missing/resolved узлы исключаются; результат ничего не объединяет.
@@ -2348,12 +2529,15 @@ func printUsage() {
       или все чанки одного документа.
 
   mem add-file <путь_к_файлу> [-tags "тег1,тег2"] [-important]
-      Сохранить содержимое файла в базу (с чанкингом)
+      Сохранить UTF-8 текстовый файл в базу (с чанкингом).
+      PDF/DjVu автоматически перенаправляются в безопасный mem import;
+      бинарные данные никогда не эмбеддятся как текст.
 
 	mem import <document.md|document.pdf|document.djvu> [-title "Название"] [-tags "тег1,тег2"] [-important]
 	  Импортировать Markdown, PDF или DjVu с постраничным provenance документа.
 	  Markdown-маркеры <!-- page: N --> сохраняются как номера страниц.
 	  Для сканов используется локальный Tesseract; инструменты не устанавливаются автоматически.
+	  Все chunks фиксируются атомарно только после успешного завершения embeddings.
 
   mem index <путь_к_папке_или_файлу>
       Проиндексировать все файлы в папке (.txt, .md, .pdf, .csv, .json)
@@ -2415,6 +2599,13 @@ func printUsage() {
   mem stats
       Статистика базы
 
+  mem where | mem current
+      Показать абсолютные пути активного проекта, .mem и SQLite-файла.
+
+  mem open <каталог_проекта|путь_к_.mem>
+      Открыть существующую локальную базу и запустить TUI.
+      Пример: mem open "D:\Knowledge\ProjectA"
+
   mem
       Без аргументов — запуск TUI (полноценный интерфейс на bubbletea).
       Если .mem/ нет — показывается эта справка.
@@ -2434,10 +2625,14 @@ func printUsage() {
   --dir <путь>                Переключиться на базу в указанной директории.
                               Пример: mem --dir "C:/Users/ZMII/global-mem" stats
                               или mem --dir /home/user/projects/foo stats
+                              Путь к установленному mem.exe на выбор базы не влияет.
 
 Примеры:
   cd ~/projects/myapp && mem add "Сервер: 157.22.196.67"
   cd ~/projects/other && mem add "Другой факт"
+  mem where                              # показать точный store.db
+  mem open "D:/Knowledge/ProjectA"       # открыть локальную базу в TUI
+  mem --dir "D:/Knowledge/ProjectA" recent
   mem search "IP сервера" -tags "инфраструктура"
   mem search "tui" -tag rule                 # только правила про TUI
   mem --global search "deadlock"            # поиск в глобальной базе
@@ -2472,15 +2667,13 @@ func printUsage() {
   mem config set-chunk-size 800
   mem config set-chunk-strategy sentence
 
-Интерактивный REPL:
-  Запускается командой mem (без аргументов) или mem repl.
-  Внизу — prompt mem>, сверху — горизонтальная линия (рамка).
-  Текст без / — сокращение для /search.
-  Up/Down — история запросов (хранится в .mem/history.txt).
-  Tab — дополнение /-команд (/se<TAB> → /search, /<TAB> — все команды).
-  / + Enter — псевдо-popup со списком всех команд.
-  Ctrl-D или /exit — выход.
-  Полный список /-команд: введите /help в REPL.
+Интерактивные режимы:
+  mem без аргументов запускает TUI; mem repl запускает readline-REPL.
+  TUI поддерживает все команды выше через /команда, включая ask, import,
+  index, map и config. Введите / для палитры; /help показывает полный список.
+  Esc возвращает на главный экран. Выход из TUI: /exit или Ctrl+C два раза.
+  В REPL текст без / — сокращение для /search, Up/Down — история,
+  Tab — дополнение, Ctrl-D или /exit — выход.
 
 Больше информации: README.md и DOCUMENTATION.md`)
 }

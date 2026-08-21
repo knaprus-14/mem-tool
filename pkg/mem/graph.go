@@ -44,6 +44,7 @@ type KnowledgeStatus string
 const (
 	KnowledgeStatusActive   KnowledgeStatus = "active"
 	KnowledgeStatusDraft    KnowledgeStatus = "draft"
+	KnowledgeStatusRejected KnowledgeStatus = "rejected"
 	KnowledgeStatusResolved KnowledgeStatus = "resolved"
 )
 
@@ -192,6 +193,27 @@ CREATE TABLE IF NOT EXISTS knowledge_reviews (
     reviewer TEXT NOT NULL,
     comment TEXT NOT NULL DEFAULT '',
     evidence_digest TEXT NOT NULL,
+    reverts_review_id INTEGER NOT NULL DEFAULT 0,
+    created TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS knowledge_edits (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    object_type TEXT NOT NULL,
+    object_id TEXT NOT NULL,
+    action TEXT NOT NULL,
+    previous_status TEXT NOT NULL,
+    new_status TEXT NOT NULL,
+    previous_label TEXT NOT NULL,
+    previous_body TEXT NOT NULL DEFAULT '',
+    new_label TEXT NOT NULL,
+    new_body TEXT NOT NULL DEFAULT '',
+    previous_content_digest TEXT NOT NULL,
+    new_content_digest TEXT NOT NULL,
+    evidence_digest TEXT NOT NULL,
+    reverts_edit_id INTEGER NOT NULL DEFAULT 0,
+    editor TEXT NOT NULL,
+    comment TEXT NOT NULL DEFAULT '',
     created TEXT NOT NULL
 );
 
@@ -222,6 +244,7 @@ CREATE INDEX IF NOT EXISTS idx_knowledge_edges_to ON knowledge_edges(to_node);
 CREATE INDEX IF NOT EXISTS idx_knowledge_node_evidence_citation ON knowledge_node_evidence(citation_id);
 CREATE INDEX IF NOT EXISTS idx_knowledge_edge_evidence_citation ON knowledge_edge_evidence(citation_id);
 CREATE INDEX IF NOT EXISTS idx_knowledge_reviews_object ON knowledge_reviews(object_type, object_id, id);
+CREATE INDEX IF NOT EXISTS idx_knowledge_edits_object ON knowledge_edits(object_type, object_id, id);
 CREATE INDEX IF NOT EXISTS idx_knowledge_node_merges_source ON knowledge_node_merges(source_node, id);
 CREATE INDEX IF NOT EXISTS idx_knowledge_node_merges_target ON knowledge_node_merges(target_node, id);
 
@@ -235,6 +258,18 @@ CREATE TRIGGER IF NOT EXISTS knowledge_reviews_no_delete
 BEFORE DELETE ON knowledge_reviews
 BEGIN
     SELECT RAISE(ABORT, 'knowledge review history is append-only');
+END;
+
+CREATE TRIGGER IF NOT EXISTS knowledge_edits_no_update
+BEFORE UPDATE ON knowledge_edits
+BEGIN
+    SELECT RAISE(ABORT, 'knowledge edit history is append-only');
+END;
+
+CREATE TRIGGER IF NOT EXISTS knowledge_edits_no_delete
+BEFORE DELETE ON knowledge_edits
+BEGIN
+    SELECT RAISE(ABORT, 'knowledge edit history is append-only');
 END;
 
 CREATE TRIGGER IF NOT EXISTS knowledge_node_merges_no_update
@@ -448,7 +483,8 @@ func validKnowledgeRelationKind(kind KnowledgeRelationKind) bool {
 }
 
 func validKnowledgeStatus(status KnowledgeStatus) bool {
-	return status == KnowledgeStatusActive || status == KnowledgeStatusDraft || status == KnowledgeStatusResolved
+	return status == KnowledgeStatusActive || status == KnowledgeStatusDraft ||
+		status == KnowledgeStatusRejected || status == KnowledgeStatusResolved
 }
 
 func validKnowledgeOrigin(origin KnowledgeOrigin) bool {
@@ -640,12 +676,19 @@ func (s *Store) upsertKnowledgeGraph(graph KnowledgeGraph, requireCurrentEvidenc
 		if err != nil {
 			return rollback(fmt.Errorf("preserve knowledge node review %q: %w", node.ID, err))
 		}
+		label, body := node.Label, node.Body
+		if node.Origin == KnowledgeOriginGenerated {
+			label, body, err = knowledgeContentForUpsert(tx, KnowledgeObjectNode, node.ID, label, body)
+			if err != nil {
+				return rollback(fmt.Errorf("preserve knowledge node edit %q: %w", node.ID, err))
+			}
+		}
 		if _, err := tx.Exec(`INSERT INTO knowledge_nodes
 (id, kind, label, body, status, origin, confidence, created, updated)
 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
 ON CONFLICT(id) DO UPDATE SET kind=excluded.kind, label=excluded.label, body=excluded.body,
 status=excluded.status, origin=excluded.origin, confidence=excluded.confidence, updated=excluded.updated`,
-			node.ID, node.Kind, node.Label, node.Body, status, node.Origin,
+			node.ID, node.Kind, label, body, status, node.Origin,
 			node.Confidence, node.Created, node.Updated); err != nil {
 			return rollback(fmt.Errorf("upsert knowledge node %q: %w", node.ID, err))
 		}
@@ -663,13 +706,20 @@ status=excluded.status, origin=excluded.origin, confidence=excluded.confidence, 
 		if err != nil {
 			return rollback(fmt.Errorf("preserve knowledge edge review %q: %w", edge.ID, err))
 		}
+		label := edge.Label
+		if edge.Origin == KnowledgeOriginGenerated {
+			label, _, err = knowledgeContentForUpsert(tx, KnowledgeObjectEdge, edge.ID, label, "")
+			if err != nil {
+				return rollback(fmt.Errorf("preserve knowledge edge edit %q: %w", edge.ID, err))
+			}
+		}
 		if _, err := tx.Exec(`INSERT INTO knowledge_edges
 (id, from_node, to_node, kind, label, status, origin, confidence, created, updated)
 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 ON CONFLICT(id) DO UPDATE SET from_node=excluded.from_node, to_node=excluded.to_node,
 kind=excluded.kind, label=excluded.label, status=excluded.status, origin=excluded.origin,
 confidence=excluded.confidence, updated=excluded.updated`,
-			edge.ID, edge.From, edge.To, edge.Kind, edge.Label, status,
+			edge.ID, edge.From, edge.To, edge.Kind, label, status,
 			edge.Origin, edge.Confidence, edge.Created, edge.Updated); err != nil {
 			return rollback(fmt.Errorf("upsert knowledge edge %q: %w", edge.ID, err))
 		}
@@ -722,7 +772,8 @@ func knowledgeStatusForUpsert(tx *sql.Tx, objectTable, evidenceTable, ownerColum
 		}
 		return "", err
 	}
-	if existingOrigin != KnowledgeOriginGenerated || (existing != KnowledgeStatusActive && existing != KnowledgeStatusResolved) {
+	if existingOrigin != KnowledgeOriginGenerated ||
+		(existing != KnowledgeStatusActive && existing != KnowledgeStatusRejected && existing != KnowledgeStatusResolved) {
 		return incoming, nil
 	}
 	stored, err := loadKnowledgeEvidence(tx, evidenceTable, ownerColumn, id)

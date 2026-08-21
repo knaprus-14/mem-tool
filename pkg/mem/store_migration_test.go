@@ -18,7 +18,12 @@ id INTEGER PRIMARY KEY AUTOINCREMENT, title TEXT NOT NULL DEFAULT '', text TEXT 
 tags TEXT NOT NULL DEFAULT '[]', created TEXT NOT NULL, backend TEXT NOT NULL,
 dims INTEGER NOT NULL, embedding BLOB NOT NULL, source_file TEXT NOT NULL DEFAULT '',
 chunk_label TEXT NOT NULL DEFAULT '', chunk_index INTEGER NOT NULL DEFAULT 0,
-total_chunks INTEGER NOT NULL DEFAULT 0, important INTEGER NOT NULL DEFAULT 0);`
+total_chunks INTEGER NOT NULL DEFAULT 0, important INTEGER NOT NULL DEFAULT 0);
+CREATE TABLE knowledge_reviews (
+id INTEGER PRIMARY KEY AUTOINCREMENT, object_type TEXT NOT NULL, object_id TEXT NOT NULL,
+action TEXT NOT NULL, previous_status TEXT NOT NULL, new_status TEXT NOT NULL,
+reviewer TEXT NOT NULL, comment TEXT NOT NULL DEFAULT '', evidence_digest TEXT NOT NULL,
+created TEXT NOT NULL);`
 	if _, err := db.Exec(legacySchema); err != nil {
 		db.Close()
 		t.Fatal(err)
@@ -81,8 +86,9 @@ VALUES ('Legacy', 'legacy text', '[]', '2026-01-01T00:00:00Z', 'test', 1, x'0000
 	wantTables := map[string]bool{
 		"knowledge_nodes": false, "knowledge_edges": false,
 		"knowledge_node_evidence": false, "knowledge_edge_evidence": false,
-		"knowledge_reviews": false, "knowledge_node_merges": false, "knowledge_analysis_runs": false,
-		"knowledge_analysis_batches": false,
+		"knowledge_reviews": false, "knowledge_edits": false, "knowledge_node_merges": false, "knowledge_analysis_runs": false,
+		"knowledge_analysis_batches": false, "knowledge_extraction_runs": false,
+		"knowledge_extraction_batches": false, "knowledge_extraction_coverage": false,
 	}
 	tableRows, err := store.db.Query(`SELECT name FROM sqlite_master WHERE type = 'table'`)
 	if err != nil {
@@ -102,5 +108,23 @@ VALUES ('Legacy', 'legacy text', '[]', '2026-01-01T00:00:00Z', 'test', 1, x'0000
 		if !found {
 			t.Errorf("migration did not create %s", name)
 		}
+	}
+	reviewColumns, err := store.db.Query(`PRAGMA table_info(knowledge_reviews)`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer reviewColumns.Close()
+	hasRevertsReviewID := false
+	for reviewColumns.Next() {
+		var cid, notNull, primaryKey int
+		var name, columnType string
+		var defaultValue any
+		if err := reviewColumns.Scan(&cid, &name, &columnType, &notNull, &defaultValue, &primaryKey); err != nil {
+			t.Fatal(err)
+		}
+		hasRevertsReviewID = hasRevertsReviewID || name == "reverts_review_id"
+	}
+	if !hasRevertsReviewID {
+		t.Fatal("migration did not add knowledge_reviews.reverts_review_id")
 	}
 }

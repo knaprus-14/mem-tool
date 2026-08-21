@@ -449,6 +449,122 @@ func TestHandleMapStatusAndApproveExposeReviewWorkflow(t *testing.T) {
 	}
 }
 
+func TestHandleMapCoverageCLIReportsScopedPhysicalPages(t *testing.T) {
+	store, err := mem.NewStore(filepath.Join(t.TempDir(), "db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	const text = "Coverage CLI evidence"
+	const source = "C:/docs/coverage-cli.pdf"
+	if _, err := store.AddDocumentChunk(text, "Coverage CLI", []string{"manual"}, "test", []float32{1, 0},
+		"page 7", 0, 1, false, mem.Provenance{
+			DocumentID: "doc-coverage-cli", DocumentRevision: mem.ChunkContentHash("coverage cli revision"),
+			ChunkHash: mem.ChunkContentHash(text), SourcePath: source, MediaType: "application/pdf",
+			Page: 7, BlockIndex: 0, BlockChunkIndex: 0, BlockTotalChunks: 1,
+			ExtractionMethod: "text", OCRConfidence: -1,
+		}); err != nil {
+		t.Fatal(err)
+	}
+
+	stdout, _, err := captureCLIStreams(func() error {
+		return handleMap(testCLIConfig(1500, "paragraph"), store, []string{"coverage", "--document", source, "--pages", "7", "--tag", "manual", "--json"})
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var report mem.KnowledgeCoverageReport
+	if err := json.Unmarshal([]byte(stdout), &report); err != nil {
+		t.Fatalf("decode coverage JSON: %v\n%s", err, stdout)
+	}
+	if report.Summary.Documents != 1 || report.Summary.ChunksWithText != 1 || report.Scope.PageFrom != 7 || report.Scope.PageTo != 7 {
+		t.Fatalf("unexpected coverage JSON: %#v", report)
+	}
+
+	human, _, err := captureCLIStreams(func() error {
+		return handleMap(testCLIConfig(1500, "paragraph"), store, []string{"coverage", "--pages", "7-7"})
+	})
+	if err != nil || !strings.Contains(human, "Покрытие карты знаний") || !strings.Contains(human, "покрыто 0 из 1") ||
+		!strings.Contains(human, "Непокрытые страницы: 7") || strings.Contains(human, report.SnapshotDigest) {
+		t.Fatalf("unexpected human coverage output=%q err=%v", human, err)
+	}
+	if _, _, err := captureCLIStreams(func() error {
+		return handleMap(testCLIConfig(1500, "paragraph"), store, []string{"coverage", "--pages", "9-2"})
+	}); err == nil {
+		t.Fatal("invalid coverage range was accepted")
+	}
+}
+
+func TestHandleMapExtractRunsControlledBatchesAndUpdatesProcessingCoverage(t *testing.T) {
+	store, err := mem.NewStore(filepath.Join(t.TempDir(), "db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	const source = "C:/docs/extract-cli.pdf"
+	texts := []string{"First extraction evidence", "Second extraction evidence"}
+	for i, text := range texts {
+		if _, err := store.AddDocumentChunk(text, "Extract CLI", []string{"manual"}, "test", []float32{1, 0},
+			fmt.Sprintf("page %d", i+1), i, len(texts), false, mem.Provenance{
+				DocumentID: "doc-extract-cli", DocumentRevision: mem.ChunkContentHash("extract cli revision"),
+				ChunkHash: mem.ChunkContentHash(text), SourcePath: source, MediaType: "application/pdf",
+				Page: i + 1, BlockIndex: i, BlockChunkIndex: 0, BlockTotalChunks: 1,
+				ExtractionMethod: "text", OCRConfidence: -1,
+			}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	focus := "полный разбор"
+	plan, err := store.BuildKnowledgeExtractionJobPlan(focus, mem.KnowledgeCoverageOptions{Document: source}, mem.MaxAnswerContextChars, 1)
+	if err != nil || len(plan.Batches) != 1 || len(plan.Batches[0].Prompt.Evidence) != 2 {
+		t.Fatalf("unexpected CLI extraction fixture plan=%#v err=%v", plan, err)
+	}
+	citation := plan.Batches[0].Prompt.Evidence[0].CitationID
+	fake := &fakeAnswerProvider{answer: `{"nodes":[{"ref":"n1","kind":"claim","label":"Extracted CLI claim","confidence":0.9,"citations":["` + citation + `"]}]}`}
+	originalProvider := newAnswerProvider
+	defer func() { newAnswerProvider = originalProvider }()
+	newAnswerProvider = func(mem.AnswerConfig) (mem.AnswerProvider, error) { return fake, nil }
+	cfg := testCLIConfig(1500, "paragraph")
+	cfg.Answer.BaseURL = "http://localhost:11434"
+	cfg.Answer.Model = "test-chat"
+
+	dryOut, _, err := captureCLIStreams(func() error {
+		return handleMap(cfg, store, []string{
+			"extract", focus, "--document", source, "-context-chars", strconv.Itoa(mem.MaxAnswerContextChars), "-batches", "1", "--dry-run",
+		})
+	})
+	if err != nil || !strings.Contains(dryOut, "План извлечения") || fake.calls != 0 {
+		t.Fatalf("dry extraction plan changed state: stdout=%q calls=%d err=%v", dryOut, fake.calls, err)
+	}
+
+	stdout, stderr, err := captureCLIStreams(func() error {
+		return handleMap(cfg, store, []string{
+			"extract", focus, "--document", source, "-context-chars", strconv.Itoa(mem.MaxAnswerContextChars), "-batches", "1",
+		})
+	})
+	if err != nil || fake.calls != 1 || !strings.Contains(stdout, "processed=2") || !strings.Contains(stderr, "checkpoints") {
+		t.Fatalf("extraction CLI failed: stdout=%q stderr=%q calls=%d err=%v", stdout, stderr, fake.calls, err)
+	}
+	report, err := store.BuildKnowledgeCoverageReport(mem.KnowledgeCoverageOptions{Document: source})
+	if err != nil || report.Summary.ProcessedChunks != 2 || report.Summary.UnprocessedChunks != 0 || report.Summary.CoveredChunks != 1 {
+		t.Fatalf("processing coverage was not updated: report=%#v err=%v", report.Summary, err)
+	}
+	runsJSON, _, err := captureCLIStreams(func() error {
+		return handleMap(cfg, store, []string{"extract-runs", "--json"})
+	})
+	if err != nil || !strings.Contains(runsJSON, `"status": "completed"`) {
+		t.Fatalf("extraction run history is unavailable: output=%q err=%v", runsJSON, err)
+	}
+	secondOut, _, err := captureCLIStreams(func() error {
+		return handleMap(cfg, store, []string{
+			"extract", focus, "--document", source, "-context-chars", strconv.Itoa(mem.MaxAnswerContextChars), "-batches", "1",
+		})
+	})
+	if err != nil || !strings.Contains(secondOut, "Задание не требуется") || fake.calls != 1 {
+		t.Fatalf("processed chunks were generated again: output=%q calls=%d err=%v", secondOut, fake.calls, err)
+	}
+}
+
 func TestHandleMapApproveBatchAndReviews(t *testing.T) {
 	root := t.TempDir()
 	store, err := mem.NewStore(filepath.Join(root, "db"))
@@ -509,6 +625,28 @@ func TestHandleMapApproveBatchAndReviews(t *testing.T) {
 	var records []mem.KnowledgeReviewRecord
 	if err := json.Unmarshal([]byte(historyJSON), &records); err != nil || len(records) != 1 || records[0].Reviewer != "Руслан" {
 		t.Fatalf("reviews JSON is incomplete: records=%#v err=%v output=%q", records, err, historyJSON)
+	}
+	current, err := store.ReviewKnowledgeGraph()
+	if err != nil || len(current.Items) != 1 {
+		t.Fatalf("review report before edit failed: report=%#v err=%v", current, err)
+	}
+	if _, err := store.EditKnowledgeObject(mem.KnowledgeEditRequest{
+		ObjectType: mem.KnowledgeObjectNode, ID: "batch-cli", Editor: "Руслан",
+		Comment: "Уточнено вручную", Label: "Batch CLI уточнённый",
+		ExpectedStatus: current.Items[0].Status, ExpectedContentDigest: current.Items[0].ContentDigest,
+		ExpectedEvidenceDigest: current.Items[0].EvidenceDigest,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	editsJSON, stderr, err := captureCLIStreams(func() error {
+		return handleMap(testCLIConfig(1500, "paragraph"), store, []string{"edits", "--json", "-limit", "10"})
+	})
+	if err != nil || stderr != "" {
+		t.Fatalf("edits CLI failed: output=%q stderr=%q err=%v", editsJSON, stderr, err)
+	}
+	var edits []mem.KnowledgeEditRecord
+	if err := json.Unmarshal([]byte(editsJSON), &edits); err != nil || len(edits) != 1 || edits[0].Editor != "Руслан" || edits[0].NewLabel != "Batch CLI уточнённый" {
+		t.Fatalf("edits JSON is incomplete: edits=%#v err=%v output=%q", edits, err, editsJSON)
 	}
 }
 

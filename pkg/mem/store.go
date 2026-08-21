@@ -242,7 +242,15 @@ func initSchema(db *sql.DB) error {
 		_ = tx.Rollback()
 		return err
 	}
+	if _, err := tx.Exec(knowledgeExtractionRunSchema); err != nil {
+		_ = tx.Rollback()
+		return err
+	}
 	if err := migrateEntrySchema(tx); err != nil {
+		_ = tx.Rollback()
+		return err
+	}
+	if err := migrateKnowledgeReviewSchema(tx); err != nil {
 		_ = tx.Rollback()
 		return err
 	}
@@ -263,7 +271,13 @@ func initSchema(db *sql.DB) error {
 		if _, err := db.Exec(corpusAnalysisRunSchema); err != nil {
 			return err
 		}
+		if _, err := db.Exec(knowledgeExtractionRunSchema); err != nil {
+			return err
+		}
 		if err := migrateEntrySchemaDB(db); err != nil {
+			return err
+		}
+		if err := migrateKnowledgeReviewSchemaDB(db); err != nil {
 			return err
 		}
 	}
@@ -277,6 +291,44 @@ type schemaQuerier interface {
 
 func migrateEntrySchema(tx *sql.Tx) error   { return ensureEntryColumns(tx) }
 func migrateEntrySchemaDB(db *sql.DB) error { return ensureEntryColumns(db) }
+
+func migrateKnowledgeReviewSchema(tx *sql.Tx) error {
+	return ensureKnowledgeReviewColumns(tx)
+}
+
+func migrateKnowledgeReviewSchemaDB(db *sql.DB) error {
+	return ensureKnowledgeReviewColumns(db)
+}
+
+// ensureKnowledgeReviewColumns extends the append-only audit schema without
+// rewriting historical records. Zero means that a record is not an undo.
+func ensureKnowledgeReviewColumns(q schemaQuerier) error {
+	rows, err := q.Query(`PRAGMA table_info(knowledge_reviews)`)
+	if err != nil {
+		return fmt.Errorf("inspect knowledge_reviews schema: %w", err)
+	}
+	hasRevertsReviewID := false
+	for rows.Next() {
+		var cid, notNull, primaryKey int
+		var name, columnType string
+		var defaultValue any
+		if err := rows.Scan(&cid, &name, &columnType, &notNull, &defaultValue, &primaryKey); err != nil {
+			rows.Close()
+			return fmt.Errorf("read knowledge_reviews schema: %w", err)
+		}
+		hasRevertsReviewID = hasRevertsReviewID || name == "reverts_review_id"
+	}
+	if err := rows.Close(); err != nil {
+		return err
+	}
+	if hasRevertsReviewID {
+		return nil
+	}
+	if _, err := q.Exec(`ALTER TABLE knowledge_reviews ADD COLUMN reverts_review_id INTEGER NOT NULL DEFAULT 0`); err != nil {
+		return fmt.Errorf("add knowledge_reviews.reverts_review_id: %w", err)
+	}
+	return nil
+}
 
 // ensureEntryColumns makes existing databases readable by adding provenance
 // and embedding-space metadata in place. Existing rows retain their original

@@ -37,7 +37,7 @@ func TestKnowledgeMapHTMLContainsOfflineInteractiveProvenancePayload(t *testing.
 	if err != nil {
 		t.Fatal(err)
 	}
-	if data.Version != KnowledgeMapViewVersion || len(data.Graph.Nodes) != 2 || len(data.Review.Items) != 3 || data.Merges == nil ||
+	if data.Version != KnowledgeMapViewVersion || len(data.Graph.Nodes) != 2 || len(data.Review.Items) != 3 || data.Merges == nil || data.LatestEdits == nil ||
 		data.Layout == nil || data.Layout.Nodes["view-claim"].X != 120 || data.Workspace != nil {
 		t.Fatalf("view payload is incomplete: %#v", data)
 	}
@@ -55,13 +55,24 @@ func TestKnowledgeMapHTMLContainsOfflineInteractiveProvenancePayload(t *testing.
 		`страница `, `фрагмент `, `refreshBtn`, `liveMode`,
 		`resetLayoutBtn`, `scheduleLayoutSave`, `X-Mem-Session`, `savedLayout`,
 		`двойной щелчок — освободить`, `connect-src 'self'`,
+		`sourceAction`, `ОТКРЫТЬ PDF`, `/api/source?citation=`,
+		`Открытие физической страницы доступно через mem map open`,
+		`reviewAction`, `ПОДТВЕРДИТЬ`, `/api/review/approve`,
+		`ОТКЛОНИТЬ`, `ВЕРНУТЬ В РАБОТУ`, `ОТМЕНИТЬ ПОДТВЕРЖДЕНИЕ`,
+		`/api/review/reject`, `/api/review/reopen`, `/api/review/undo`,
+		`expected_evidence_digest`, `expected_review_id`, `Проверяющий`, `Комментарий / причина`,
+		`rejected:'отклонено'`, `latest_reviews`,
+		`editAction`, `РЕДАКТИРОВАНИЕ`, `СОХРАНИТЬ ПРАВКУ`, `ОТМЕНИТЬ ПОСЛЕДНЮЮ ПРАВКУ`,
+		`/api/edit`, `/api/edit/undo`, `expected_content_digest`, `expected_edit_id`,
+		`Автор правки`, `Комментарий к правке`, `latest_edits`,
 	} {
 		if !strings.Contains(html, marker) {
 			t.Errorf("HTML is missing %q", marker)
 		}
 	}
 	if strings.Contains(html, `details.append(title,badges,field('ID',item.id))`) ||
-		strings.Contains(html, `details.append(field('Evidence digest'`) {
+		strings.Contains(html, `details.append(field('Evidence digest'`) ||
+		strings.Contains(html, `title.textContent=item.label||item.id`) {
 		t.Fatal("technical identifiers are still rendered in the primary details view")
 	}
 	if strings.Contains(html, attack) || strings.Contains(html, `</title><script>alert(1)</script>`) {

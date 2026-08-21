@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -135,6 +137,301 @@ func TestKnowledgeMapWorkspacePersistsAndProtectsLayout(t *testing.T) {
 	}
 }
 
+func TestKnowledgeMapWorkspaceServesOnlyAuthorizedCurrentPDFEvidence(t *testing.T) {
+	store, anchor, source := knowledgeMapPDFSourceFixture(t)
+	defer store.Close()
+	const token = "source-session-capability-with-enough-entropy"
+	const host = "127.0.0.1:8765"
+	handler := NewKnowledgeMapWorkspaceHandler(store, "", token, DefaultKnowledgeMapView)
+
+	page := requestKnowledgeMap(t, handler, http.MethodGet, "/", host)
+	if page.Code != http.StatusOK || !strings.Contains(page.Body.String(), "ОТКРЫТЬ PDF") ||
+		!strings.Contains(page.Body.String(), "/api/source?citation=") {
+		t.Fatalf("workspace page has no physical-page source action: status=%d", page.Code)
+	}
+	var sourceCookie *http.Cookie
+	for _, cookie := range page.Result().Cookies() {
+		if strings.HasPrefix(cookie.Name, "mem_map_source_") {
+			sourceCookie = cookie
+			break
+		}
+	}
+	if sourceCookie == nil || !sourceCookie.HttpOnly || sourceCookie.SameSite != http.SameSiteStrictMode || sourceCookie.Path != "/api/source" {
+		t.Fatalf("source session cookie is missing or unsafe: %#v", sourceCookie)
+	}
+	if got := requestKnowledgeMapSource(t, handler, http.MethodGet, host, anchor.CitationID, nil, "same-origin", ""); got.Code != http.StatusForbidden {
+		t.Fatalf("source request without session cookie was accepted: %d", got.Code)
+	}
+	if got := requestKnowledgeMapSource(t, handler, http.MethodGet, host, anchor.CitationID, sourceCookie, "cross-site", ""); got.Code != http.StatusForbidden {
+		t.Fatalf("cross-site source request was accepted: %d", got.Code)
+	}
+	partial := requestKnowledgeMapSource(t, handler, http.MethodGet, host, anchor.CitationID, sourceCookie, "same-origin", "bytes=0-3")
+	if partial.Code != http.StatusPartialContent || partial.Body.String() != "%PDF" ||
+		partial.Header().Get("Content-Type") != "application/pdf" ||
+		!strings.Contains(partial.Header().Get("Content-Disposition"), filepath.Base(source)) {
+		t.Fatalf("authorized PDF range response is invalid: status=%d type=%q disposition=%q body=%q",
+			partial.Code, partial.Header().Get("Content-Type"), partial.Header().Get("Content-Disposition"), partial.Body.String())
+	}
+	if got := requestKnowledgeMapSource(t, handler, http.MethodGet, host, "cite-unknown", sourceCookie, "same-origin", ""); got.Code != http.StatusNotFound {
+		t.Fatalf("unknown source citation returned %d", got.Code)
+	}
+	if got := requestKnowledgeMapSource(t, handler, http.MethodPost, host, anchor.CitationID, sourceCookie, "same-origin", ""); got.Code != http.StatusMethodNotAllowed || got.Header().Get("Allow") != "GET, HEAD" {
+		t.Fatalf("source write method was accepted: status=%d allow=%q", got.Code, got.Header().Get("Allow"))
+	}
+	readOnly := NewKnowledgeMapLiveHandler(store, "")
+	if got := requestKnowledgeMapSource(t, readOnly, http.MethodGet, host, anchor.CitationID, sourceCookie, "same-origin", ""); got.Code != http.StatusNotFound {
+		t.Fatalf("read-only handler exposed local PDF source: %d", got.Code)
+	}
+}
+
+func TestKnowledgeMapWorkspaceApprovesPinnedDraftWithoutUserFacingID(t *testing.T) {
+	store, anchor := graphStoreAndAnchor(t)
+	defer store.Close()
+	const objectID = "workspace-review-node"
+	if err := store.UpsertKnowledgeGraph(KnowledgeGraph{Nodes: []KnowledgeNode{{
+		ID: objectID, Kind: KnowledgeNodeClaim, Label: "Проверяемое утверждение",
+		Status: KnowledgeStatusDraft, Origin: KnowledgeOriginGenerated,
+		Evidence: []EvidenceAnchor{anchor},
+	}}}); err != nil {
+		t.Fatal(err)
+	}
+	digest, err := KnowledgeEvidenceDigest([]EvidenceAnchor{anchor})
+	if err != nil {
+		t.Fatal(err)
+	}
+	const token = "review-session-capability-with-enough-entropy"
+	const host = "127.0.0.1:8765"
+	handler := NewKnowledgeMapWorkspaceHandler(store, "", token, DefaultKnowledgeMapView)
+	page := requestKnowledgeMap(t, handler, http.MethodGet, "/", host)
+	if page.Code != http.StatusOK || !strings.Contains(page.Body.String(), "ПОДТВЕРДИТЬ") ||
+		!strings.Contains(page.Body.String(), "/api/review/approve") ||
+		!strings.Contains(page.Body.String(), "expected_evidence_digest") {
+		t.Fatalf("workspace page has no pinned review action: status=%d", page.Code)
+	}
+
+	request := KnowledgeApprovalRequest{
+		ObjectType: KnowledgeObjectNode, ID: objectID, Reviewer: "Руслан",
+		Comment: "Источник проверен", ExpectedEvidenceDigest: digest,
+	}
+	raw, err := json.Marshal(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for name, response := range map[string]*httptest.ResponseRecorder{
+		"missing origin": requestKnowledgeMapApproval(t, handler, http.MethodPost, host, "", token, "same-origin", "application/json", raw),
+		"wrong token":    requestKnowledgeMapApproval(t, handler, http.MethodPost, host, "http://"+host, "wrong", "same-origin", "application/json", raw),
+		"cross site":     requestKnowledgeMapApproval(t, handler, http.MethodPost, host, "http://"+host, token, "cross-site", "application/json", raw),
+	} {
+		if response.Code != http.StatusForbidden {
+			t.Errorf("%s review request returned %d", name, response.Code)
+		}
+	}
+	if got := requestKnowledgeMapApproval(t, handler, http.MethodGet, host, "http://"+host, token, "same-origin", "application/json", nil); got.Code != http.StatusMethodNotAllowed || got.Header().Get("Allow") != "POST" {
+		t.Fatalf("review GET was accepted: status=%d allow=%q", got.Code, got.Header().Get("Allow"))
+	}
+	if got := requestKnowledgeMapApproval(t, handler, http.MethodPost, host, "http://"+host, token, "same-origin", "text/plain", raw); got.Code != http.StatusUnsupportedMediaType {
+		t.Fatalf("review request with unsafe content type returned %d", got.Code)
+	}
+	unpinned := request
+	unpinned.ExpectedEvidenceDigest = ""
+	unpinnedRaw, err := json.Marshal(unpinned)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := requestKnowledgeMapApproval(t, handler, http.MethodPost, host, "http://"+host, token, "same-origin", "application/json", unpinnedRaw); got.Code != http.StatusBadRequest {
+		t.Fatalf("unpinned review request returned %d: %s", got.Code, got.Body.String())
+	}
+	changed := request
+	changed.ExpectedEvidenceDigest = "sha256:" + strings.Repeat("0", 64)
+	changedRaw, err := json.Marshal(changed)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := requestKnowledgeMapApproval(t, handler, http.MethodPost, host, "http://"+host, token, "same-origin", "application/json", changedRaw); got.Code != http.StatusConflict {
+		t.Fatalf("changed evidence digest returned %d: %s", got.Code, got.Body.String())
+	}
+	readOnly := NewKnowledgeMapLiveHandler(store, "")
+	if got := requestKnowledgeMapApproval(t, readOnly, http.MethodPost, host, "http://"+host, token, "same-origin", "application/json", raw); got.Code != http.StatusNotFound {
+		t.Fatalf("read-only handler exposed review mutation: %d", got.Code)
+	}
+
+	approved := requestKnowledgeMapApproval(t, handler, http.MethodPost, host, "http://"+host, token, "same-origin", "application/json", raw)
+	if approved.Code != http.StatusOK {
+		t.Fatalf("valid review failed: status=%d body=%q", approved.Code, approved.Body.String())
+	}
+	var result KnowledgeApprovalResult
+	if err := json.Unmarshal(approved.Body.Bytes(), &result); err != nil {
+		t.Fatal(err)
+	}
+	if result.ID != objectID || result.Status != KnowledgeStatusActive || result.Review.Reviewer != "Руслан" || result.Review.Comment != "Источник проверен" {
+		t.Fatalf("approval response lost review data: %#v", result)
+	}
+	graph, err := store.LoadKnowledgeGraph()
+	if err != nil || len(graph.Nodes) != 1 || graph.Nodes[0].Status != KnowledgeStatusActive {
+		t.Fatalf("approved object was not activated: graph=%#v err=%v", graph, err)
+	}
+	reviews, err := store.ListKnowledgeReviews(10)
+	if err != nil || len(reviews) != 1 || reviews[0].ObjectID != objectID {
+		t.Fatalf("approval audit was not appended: reviews=%#v err=%v", reviews, err)
+	}
+}
+
+func TestKnowledgeMapWorkspaceRejectsReopensAndUndoesWithoutUserFacingIDs(t *testing.T) {
+	store, anchor := graphStoreAndAnchor(t)
+	defer store.Close()
+	const objectID = "workspace-review-lifecycle"
+	if err := store.UpsertKnowledgeGraph(KnowledgeGraph{Nodes: []KnowledgeNode{{
+		ID: objectID, Kind: KnowledgeNodeClaim, Label: "Решение по утверждению",
+		Status: KnowledgeStatusDraft, Origin: KnowledgeOriginGenerated, Evidence: []EvidenceAnchor{anchor},
+	}}}); err != nil {
+		t.Fatal(err)
+	}
+	digest, err := KnowledgeEvidenceDigest([]EvidenceAnchor{anchor})
+	if err != nil {
+		t.Fatal(err)
+	}
+	const token = "review-lifecycle-session-capability"
+	const host = "127.0.0.1:8765"
+	handler := NewKnowledgeMapWorkspaceHandler(store, "", token, DefaultKnowledgeMapView)
+	page := requestKnowledgeMap(t, handler, http.MethodGet, "/", host)
+	for _, marker := range []string{"ОТКЛОНИТЬ", "ВЕРНУТЬ В РАБОТУ", "ОТМЕНИТЬ ПОДТВЕРЖДЕНИЕ", "/api/review/reject", "/api/review/reopen", "/api/review/undo", "expected_review_id"} {
+		if page.Code != http.StatusOK || !strings.Contains(page.Body.String(), marker) {
+			t.Fatalf("workspace page is missing %q: status=%d", marker, page.Code)
+		}
+	}
+	request := KnowledgeReviewMutationRequest{
+		ObjectType: KnowledgeObjectNode, ID: objectID, Reviewer: "Руслан", ExpectedEvidenceDigest: digest,
+	}
+	raw, err := json.Marshal(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := requestKnowledgeMapMutation(t, handler, "/api/review/reject", host, "http://"+host, token, "same-origin", raw); got.Code != http.StatusBadRequest {
+		t.Fatalf("rejection without reason returned %d: %s", got.Code, got.Body.String())
+	}
+	request.Comment = "Нет подтверждения в приведённой выдержке"
+	raw, _ = json.Marshal(request)
+	if got := requestKnowledgeMapMutation(t, handler, "/api/review/reject", host, "http://"+host, "wrong", "same-origin", raw); got.Code != http.StatusForbidden {
+		t.Fatalf("rejection with wrong session returned %d", got.Code)
+	}
+	rejected := requestKnowledgeMapMutation(t, handler, "/api/review/reject", host, "http://"+host, token, "same-origin", raw)
+	if rejected.Code != http.StatusOK {
+		t.Fatalf("valid rejection failed: status=%d body=%q", rejected.Code, rejected.Body.String())
+	}
+	var rejectedResult KnowledgeReviewMutationResult
+	if err := json.Unmarshal(rejected.Body.Bytes(), &rejectedResult); err != nil || rejectedResult.Status != KnowledgeStatusRejected {
+		t.Fatalf("rejection response is invalid: result=%#v err=%v", rejectedResult, err)
+	}
+
+	request.Comment = "Вернуть для повторной проверки"
+	raw, _ = json.Marshal(request)
+	reopened := requestKnowledgeMapMutation(t, handler, "/api/review/reopen", host, "http://"+host, token, "same-origin", raw)
+	if reopened.Code != http.StatusOK {
+		t.Fatalf("valid reopen failed: status=%d body=%q", reopened.Code, reopened.Body.String())
+	}
+	approvalRaw, _ := json.Marshal(KnowledgeApprovalRequest{
+		ObjectType: KnowledgeObjectNode, ID: objectID, Reviewer: "Руслан", ExpectedEvidenceDigest: digest,
+	})
+	approved := requestKnowledgeMapApproval(t, handler, http.MethodPost, host, "http://"+host, token, "same-origin", "application/json", approvalRaw)
+	if approved.Code != http.StatusOK {
+		t.Fatalf("approval after reopen failed: status=%d body=%q", approved.Code, approved.Body.String())
+	}
+	var approvalResult KnowledgeApprovalResult
+	if err := json.Unmarshal(approved.Body.Bytes(), &approvalResult); err != nil {
+		t.Fatal(err)
+	}
+	request.Comment = "Подтверждение было преждевременным"
+	request.ExpectedReviewID = approvalResult.Review.ID + 1
+	raw, _ = json.Marshal(request)
+	if got := requestKnowledgeMapMutation(t, handler, "/api/review/undo", host, "http://"+host, token, "same-origin", raw); got.Code != http.StatusConflict {
+		t.Fatalf("undo with stale review pin returned %d: %s", got.Code, got.Body.String())
+	}
+	request.ExpectedReviewID = approvalResult.Review.ID
+	raw, _ = json.Marshal(request)
+	undone := requestKnowledgeMapMutation(t, handler, "/api/review/undo", host, "http://"+host, token, "same-origin", raw)
+	if undone.Code != http.StatusOK {
+		t.Fatalf("valid undo failed: status=%d body=%q", undone.Code, undone.Body.String())
+	}
+	var undoResult KnowledgeReviewMutationResult
+	if err := json.Unmarshal(undone.Body.Bytes(), &undoResult); err != nil || undoResult.Status != KnowledgeStatusDraft || undoResult.Review.RevertsReviewID != approvalResult.Review.ID {
+		t.Fatalf("undo response is invalid: result=%#v err=%v", undoResult, err)
+	}
+	readOnly := NewKnowledgeMapLiveHandler(store, "")
+	if got := requestKnowledgeMapMutation(t, readOnly, "/api/review/reject", host, "http://"+host, token, "same-origin", raw); got.Code != http.StatusNotFound {
+		t.Fatalf("read-only handler exposed rejection: %d", got.Code)
+	}
+}
+
+func TestKnowledgeMapWorkspaceEditsAndUndoesPinnedContent(t *testing.T) {
+	store, anchor := graphStoreAndAnchor(t)
+	defer store.Close()
+	const objectID = "workspace-edit-node"
+	if err := store.UpsertKnowledgeGraph(KnowledgeGraph{Nodes: []KnowledgeNode{{
+		ID: objectID, Kind: KnowledgeNodeClaim, Label: "Исходное название", Body: "Исходное описание",
+		Status: KnowledgeStatusDraft, Origin: KnowledgeOriginGenerated, Evidence: []EvidenceAnchor{anchor},
+	}}}); err != nil {
+		t.Fatal(err)
+	}
+	item := knowledgeReviewItemByID(t, store, KnowledgeObjectNode, objectID)
+	const token = "edit-session-capability-with-enough-entropy"
+	const host = "127.0.0.1:8765"
+	handler := NewKnowledgeMapWorkspaceHandler(store, "", token, DefaultKnowledgeMapView)
+	page := requestKnowledgeMap(t, handler, http.MethodGet, "/", host)
+	for _, marker := range []string{"РЕДАКТИРОВАНИЕ", "СОХРАНИТЬ ПРАВКУ", "ОТМЕНИТЬ ПОСЛЕДНЮЮ ПРАВКУ", "/api/edit", "/api/edit/undo", "expected_content_digest", "expected_edit_id"} {
+		if page.Code != http.StatusOK || !strings.Contains(page.Body.String(), marker) {
+			t.Fatalf("workspace page is missing %q: status=%d", marker, page.Code)
+		}
+	}
+	request := KnowledgeEditRequest{
+		ObjectType: KnowledgeObjectNode, ID: objectID, Editor: "Руслан", Comment: "Уточнение по источнику",
+		Label: "Уточнённое название", Body: "Уточнённое описание",
+		ExpectedStatus: item.Status, ExpectedContentDigest: item.ContentDigest,
+		ExpectedEvidenceDigest: item.EvidenceDigest,
+	}
+	raw, err := json.Marshal(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := requestKnowledgeMapMutation(t, handler, "/api/edit", host, "http://"+host, "wrong", "same-origin", raw); got.Code != http.StatusForbidden {
+		t.Fatalf("edit with wrong session returned %d", got.Code)
+	}
+	invalid := append(append([]byte{}, raw...), []byte(` {}`)...)
+	if got := requestKnowledgeMapMutation(t, handler, "/api/edit", host, "http://"+host, token, "same-origin", invalid); got.Code != http.StatusBadRequest {
+		t.Fatalf("multi-object edit request returned %d", got.Code)
+	}
+	editedResponse := requestKnowledgeMapMutation(t, handler, "/api/edit", host, "http://"+host, token, "same-origin", raw)
+	if editedResponse.Code != http.StatusOK {
+		t.Fatalf("valid edit failed: status=%d body=%q", editedResponse.Code, editedResponse.Body.String())
+	}
+	var edited KnowledgeEditResult
+	if err := json.Unmarshal(editedResponse.Body.Bytes(), &edited); err != nil || edited.Label != request.Label || edited.Edit.Action != KnowledgeEditActionEdit {
+		t.Fatalf("edit response is invalid: result=%#v err=%v", edited, err)
+	}
+	undo := KnowledgeEditUndoRequest{
+		ObjectType: KnowledgeObjectNode, ID: objectID, Editor: "Руслан", Comment: "Отмена проверки",
+		ExpectedStatus: edited.Status, ExpectedContentDigest: edited.ContentDigest,
+		ExpectedEvidenceDigest: edited.EvidenceDigest, ExpectedEditID: edited.Edit.ID + 1,
+	}
+	raw, _ = json.Marshal(undo)
+	if got := requestKnowledgeMapMutation(t, handler, "/api/edit/undo", host, "http://"+host, token, "same-origin", raw); got.Code != http.StatusConflict {
+		t.Fatalf("undo with stale edit pin returned %d: %s", got.Code, got.Body.String())
+	}
+	undo.ExpectedEditID = edited.Edit.ID
+	raw, _ = json.Marshal(undo)
+	undoneResponse := requestKnowledgeMapMutation(t, handler, "/api/edit/undo", host, "http://"+host, token, "same-origin", raw)
+	if undoneResponse.Code != http.StatusOK {
+		t.Fatalf("valid edit undo failed: status=%d body=%q", undoneResponse.Code, undoneResponse.Body.String())
+	}
+	var undone KnowledgeEditResult
+	if err := json.Unmarshal(undoneResponse.Body.Bytes(), &undone); err != nil || undone.Label != "Исходное название" || undone.Edit.RevertsEditID != edited.Edit.ID {
+		t.Fatalf("edit undo response is invalid: result=%#v err=%v", undone, err)
+	}
+	readOnly := NewKnowledgeMapLiveHandler(store, "")
+	if got := requestKnowledgeMapMutation(t, readOnly, "/api/edit", host, "http://"+host, token, "same-origin", raw); got.Code != http.StatusNotFound {
+		t.Fatalf("read-only handler exposed content editing: %d", got.Code)
+	}
+}
+
 func requestKnowledgeMap(t *testing.T, handler http.Handler, method, path, host string) *httptest.ResponseRecorder {
 	t.Helper()
 	req := httptest.NewRequest(method, "http://127.0.0.1"+path, nil)
@@ -153,6 +450,58 @@ func requestKnowledgeMapLayout(t *testing.T, handler http.Handler, method, host,
 	if method == http.MethodPut {
 		req.Header.Set("Content-Type", "application/json")
 	}
+	recorder := httptest.NewRecorder()
+	handler.ServeHTTP(recorder, req)
+	return recorder
+}
+
+func requestKnowledgeMapSource(t *testing.T, handler http.Handler, method, host, citation string, cookie *http.Cookie, fetchSite, byteRange string) *httptest.ResponseRecorder {
+	t.Helper()
+	req := httptest.NewRequest(method, "http://127.0.0.1/api/source?citation="+url.QueryEscape(citation), nil)
+	req.Host = host
+	if cookie != nil {
+		req.AddCookie(cookie)
+	}
+	if fetchSite != "" {
+		req.Header.Set("Sec-Fetch-Site", fetchSite)
+	}
+	if byteRange != "" {
+		req.Header.Set("Range", byteRange)
+	}
+	recorder := httptest.NewRecorder()
+	handler.ServeHTTP(recorder, req)
+	return recorder
+}
+
+func requestKnowledgeMapApproval(t *testing.T, handler http.Handler, method, host, origin, token, fetchSite, contentType string, body []byte) *httptest.ResponseRecorder {
+	t.Helper()
+	req := httptest.NewRequest(method, "http://127.0.0.1/api/review/approve", bytes.NewReader(body))
+	req.Host = host
+	if origin != "" {
+		req.Header.Set("Origin", origin)
+	}
+	if token != "" {
+		req.Header.Set("X-Mem-Session", token)
+	}
+	if fetchSite != "" {
+		req.Header.Set("Sec-Fetch-Site", fetchSite)
+	}
+	if contentType != "" {
+		req.Header.Set("Content-Type", contentType)
+	}
+	recorder := httptest.NewRecorder()
+	handler.ServeHTTP(recorder, req)
+	return recorder
+}
+
+func requestKnowledgeMapMutation(t *testing.T, handler http.Handler, path, host, origin, token, fetchSite string, body []byte) *httptest.ResponseRecorder {
+	t.Helper()
+	req := httptest.NewRequest(http.MethodPost, "http://127.0.0.1"+path, bytes.NewReader(body))
+	req.Host = host
+	req.Header.Set("Origin", origin)
+	req.Header.Set("X-Mem-Session", token)
+	req.Header.Set("Sec-Fetch-Site", fetchSite)
+	req.Header.Set("Content-Type", "application/json")
 	recorder := httptest.NewRecorder()
 	handler.ServeHTTP(recorder, req)
 	return recorder

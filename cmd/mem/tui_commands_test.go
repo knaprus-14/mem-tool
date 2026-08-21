@@ -83,9 +83,10 @@ func TestTUICommandMenuCoversCLICommandsAndSubcommands(t *testing.T) {
 	}
 
 	for _, subcommand := range []string{
-		"map build", "map analyze", "map duplicates", "map merge-node", "map merges",
+		"map build", "map coverage", "map extract", "map extract-runs", "map extract-run",
+		"map analyze", "map duplicates", "map merge-node", "map merges",
 		"map runs", "map run", "map prune-runs", "map status", "map approve",
-		"map approve-batch", "map reviews", "map export", "map export-html",
+		"map approve-batch", "map reviews", "map edits", "map export", "map export-html",
 		"config set-backend", "config set-polza-key", "config set-polza-model",
 		"config set-ollama-model", "config set-answer-model", "config set-answer-base-url",
 		"config set-answer-timeout", "config set-answer-max-tokens",

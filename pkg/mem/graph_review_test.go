@@ -396,3 +396,169 @@ func TestKnowledgeApprovalValidatesReviewerCommentAndBatchDigest(t *testing.T) {
 		t.Fatalf("unpinned batch was accepted: %v", err)
 	}
 }
+
+func TestKnowledgeRejectReopenAndUndoArePinnedAndAppendOnly(t *testing.T) {
+	store, anchor := graphStoreAndAnchor(t)
+	defer store.Close()
+	fragment := KnowledgeGraph{Nodes: []KnowledgeNode{{
+		ID: "review-lifecycle", Kind: KnowledgeNodeClaim, Label: "Lifecycle",
+		Status: KnowledgeStatusDraft, Origin: KnowledgeOriginGenerated, Evidence: []EvidenceAnchor{anchor},
+	}}}
+	if err := store.UpsertKnowledgeGraph(fragment); err != nil {
+		t.Fatal(err)
+	}
+	digest, err := KnowledgeEvidenceDigest([]EvidenceAnchor{anchor})
+	if err != nil {
+		t.Fatal(err)
+	}
+	base := KnowledgeReviewMutationRequest{
+		ObjectType: KnowledgeObjectNode, ID: "review-lifecycle", Reviewer: "Руслан",
+		ExpectedEvidenceDigest: digest,
+	}
+	if _, err := store.RejectKnowledgeObject(base); err == nil || !strings.Contains(err.Error(), "comment") {
+		t.Fatalf("rejection without a reason was accepted: %v", err)
+	}
+	base.Comment = "Формулировка не подтверждается источником"
+	rejected, err := store.RejectKnowledgeObject(base)
+	if err != nil || rejected.Status != KnowledgeStatusRejected || rejected.Review.Action != KnowledgeReviewActionReject {
+		t.Fatalf("rejection failed: result=%#v err=%v", rejected, err)
+	}
+	if err := store.UpsertKnowledgeGraph(fragment); err != nil {
+		t.Fatal(err)
+	}
+	report, err := store.ReviewKnowledgeGraph()
+	if err != nil || report.Summary.Rejected != 1 || report.Items[0].Status != KnowledgeStatusRejected {
+		t.Fatalf("exact re-extraction did not preserve rejection: report=%#v err=%v", report, err)
+	}
+
+	undoReject := base
+	undoReject.Comment = "Отменяю ошибочное отклонение"
+	undoReject.ExpectedReviewID = rejected.Review.ID
+	undone, err := store.UndoKnowledgeReview(undoReject)
+	if err != nil || undone.Status != KnowledgeStatusDraft || undone.Review.RevertsReviewID != rejected.Review.ID {
+		t.Fatalf("rejection undo failed: result=%#v err=%v", undone, err)
+	}
+	undoAgain := undoReject
+	undoAgain.ExpectedReviewID = undone.Review.ID
+	if _, err := store.UndoKnowledgeReview(undoAgain); !errors.Is(err, ErrKnowledgeReviewNotReversible) {
+		t.Fatalf("undo record was reversible: %v", err)
+	}
+
+	base.ExpectedReviewID = 0
+	base.Comment = "Повторная проверка"
+	rejected, err = store.RejectKnowledgeObject(base)
+	if err != nil {
+		t.Fatal(err)
+	}
+	reopen := base
+	reopen.Comment = "Новые основания для проверки"
+	reopened, err := store.ReopenKnowledgeObject(reopen)
+	if err != nil || reopened.Status != KnowledgeStatusDraft || reopened.Review.Action != KnowledgeReviewActionReopen {
+		t.Fatalf("reopen failed: result=%#v err=%v", reopened, err)
+	}
+	undoReopen := reopen
+	undoReopen.ExpectedReviewID = reopened.Review.ID
+	undone, err = store.UndoKnowledgeReview(undoReopen)
+	if err != nil || undone.Status != KnowledgeStatusRejected || undone.Review.RevertsReviewID != reopened.Review.ID {
+		t.Fatalf("reopen undo failed: result=%#v err=%v", undone, err)
+	}
+	latest, err := store.ListLatestKnowledgeReviews()
+	if err != nil || len(latest) != 1 || latest[0].Action != KnowledgeReviewActionUndo || latest[0].RevertsReviewID != reopened.Review.ID {
+		t.Fatalf("latest review snapshot is wrong: reviews=%#v err=%v", latest, err)
+	}
+	reviews, err := store.ListKnowledgeReviews(10)
+	if err != nil || len(reviews) != 5 {
+		t.Fatalf("review lifecycle audit is incomplete: reviews=%#v err=%v", reviews, err)
+	}
+}
+
+func TestKnowledgeApprovalUndoRequiresIncidentRelationsFirst(t *testing.T) {
+	store, anchor := graphStoreAndAnchor(t)
+	defer store.Close()
+	graph := KnowledgeGraph{
+		Nodes: []KnowledgeNode{
+			{ID: "undo-a", Kind: KnowledgeNodeClaim, Label: "A", Status: KnowledgeStatusDraft, Origin: KnowledgeOriginGenerated, Evidence: []EvidenceAnchor{anchor}},
+			{ID: "undo-b", Kind: KnowledgeNodeClaim, Label: "B", Status: KnowledgeStatusDraft, Origin: KnowledgeOriginGenerated, Evidence: []EvidenceAnchor{anchor}},
+		},
+		Edges: []KnowledgeEdge{{
+			ID: "undo-edge", From: "undo-a", To: "undo-b", Kind: KnowledgeRelationSupports,
+			Status: KnowledgeStatusDraft, Origin: KnowledgeOriginGenerated, Evidence: []EvidenceAnchor{anchor},
+		}},
+	}
+	if err := store.UpsertKnowledgeGraph(graph); err != nil {
+		t.Fatal(err)
+	}
+	digest, err := KnowledgeEvidenceDigest([]EvidenceAnchor{anchor})
+	if err != nil {
+		t.Fatal(err)
+	}
+	approvals := make(map[string]KnowledgeApprovalResult)
+	for _, id := range []string{"undo-a", "undo-b"} {
+		result, err := store.ApproveKnowledgeObjectWithReview(KnowledgeApprovalRequest{
+			ObjectType: KnowledgeObjectNode, ID: id, Reviewer: "reviewer", ExpectedEvidenceDigest: digest,
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		approvals[id] = result
+	}
+	edgeApproval, err := store.ApproveKnowledgeObjectWithReview(KnowledgeApprovalRequest{
+		ObjectType: KnowledgeObjectEdge, ID: "undo-edge", Reviewer: "reviewer", ExpectedEvidenceDigest: digest,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	undoA := KnowledgeReviewMutationRequest{
+		ObjectType: KnowledgeObjectNode, ID: "undo-a", Reviewer: "reviewer",
+		ExpectedEvidenceDigest: digest, ExpectedReviewID: approvals["undo-a"].Review.ID,
+	}
+	if _, err := store.UndoKnowledgeReview(undoA); !errors.Is(err, ErrKnowledgeActiveRelations) {
+		t.Fatalf("active incident relation did not block node undo: %v", err)
+	}
+	if _, err := store.UndoKnowledgeReview(KnowledgeReviewMutationRequest{
+		ObjectType: KnowledgeObjectEdge, ID: "undo-edge", Reviewer: "reviewer",
+		ExpectedEvidenceDigest: digest, ExpectedReviewID: edgeApproval.Review.ID,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.UndoKnowledgeReview(undoA); err != nil {
+		t.Fatal(err)
+	}
+	loaded, err := store.LoadKnowledgeGraph()
+	if err != nil {
+		t.Fatal(err)
+	}
+	statuses := make(map[string]KnowledgeStatus)
+	for _, node := range loaded.Nodes {
+		statuses[node.ID] = node.Status
+	}
+	if statuses["undo-a"] != KnowledgeStatusDraft || statuses["undo-b"] != KnowledgeStatusActive || loaded.Edges[0].Status != KnowledgeStatusDraft {
+		t.Fatalf("undo broke graph status invariants: %#v", loaded)
+	}
+}
+
+func TestKnowledgeRejectionFailsClosedOnChangedEvidenceDigest(t *testing.T) {
+	store, anchor := graphStoreAndAnchor(t)
+	defer store.Close()
+	if err := store.UpsertKnowledgeGraph(KnowledgeGraph{Nodes: []KnowledgeNode{{
+		ID: "reject-pinned", Kind: KnowledgeNodeClaim, Label: "Pinned",
+		Status: KnowledgeStatusDraft, Origin: KnowledgeOriginGenerated, Evidence: []EvidenceAnchor{anchor},
+	}}}); err != nil {
+		t.Fatal(err)
+	}
+	_, err := store.RejectKnowledgeObject(KnowledgeReviewMutationRequest{
+		ObjectType: KnowledgeObjectNode, ID: "reject-pinned", Reviewer: "reviewer", Comment: "reason",
+		ExpectedEvidenceDigest: "sha256:" + strings.Repeat("0", 64),
+	})
+	if !errors.Is(err, ErrKnowledgeEvidenceChanged) {
+		t.Fatalf("changed evidence digest did not block rejection: %v", err)
+	}
+	loaded, loadErr := store.LoadKnowledgeGraph()
+	if loadErr != nil || loaded.Nodes[0].Status != KnowledgeStatusDraft {
+		t.Fatalf("failed rejection changed object: graph=%#v err=%v", loaded, loadErr)
+	}
+	reviews, listErr := store.ListKnowledgeReviews(10)
+	if listErr != nil || len(reviews) != 0 {
+		t.Fatalf("failed rejection wrote audit: reviews=%#v err=%v", reviews, listErr)
+	}
+}

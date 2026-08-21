@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -11,6 +12,7 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	mem "github.com/knaprus-14/mem-tool/pkg/mem"
 )
@@ -432,6 +434,210 @@ func TestHandleMapApproveBatchAndReviews(t *testing.T) {
 	var records []mem.KnowledgeReviewRecord
 	if err := json.Unmarshal([]byte(historyJSON), &records); err != nil || len(records) != 1 || records[0].Reviewer != "Руслан" {
 		t.Fatalf("reviews JSON is incomplete: records=%#v err=%v output=%q", records, err, historyJSON)
+	}
+}
+
+func TestHandleMapAnalysisRunHistoryShowAndPrune(t *testing.T) {
+	store := cliCorpusStoreWithClaims(t, 5)
+	defer store.Close()
+	budget := cliCorpusTwoClaimBudget(t, store, "pressure")
+	plan, err := store.BuildCorpusAnalysisPlan("pressure", budget, 3)
+	if err != nil {
+		t.Fatal(err)
+	}
+	answer := mem.AnswerConfig{BaseURL: "http://127.0.0.1:11434", Model: "history-test", MaxTokens: 1000, Temperature: 0.1}
+	completed, err := store.PrepareCorpusAnalysisRun("completed history", budget, 3, plan, answer, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, batch := range completed.Batches {
+		if err := store.SaveCorpusAnalysisBatchInsufficient(completed.ID, batch.BatchID, "no finding"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := store.CompleteCorpusAnalysisRun(completed.ID); err != nil {
+		t.Fatal(err)
+	}
+	running, err := store.PrepareCorpusAnalysisRun("running history", budget, 3, plan, answer, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.SaveCorpusAnalysisBatchFailure(running.ID, running.Batches[0].BatchID, errors.New("retry later")); err != nil {
+		t.Fatal(err)
+	}
+
+	historyJSON, stderr, err := captureCLIStreams(func() error {
+		return handleMap(testCLIConfig(1500, "paragraph"), store, []string{"runs", "--json", "-limit", "10"})
+	})
+	if err != nil || stderr != "" {
+		t.Fatalf("run history failed: output=%q stderr=%q err=%v", historyJSON, stderr, err)
+	}
+	var history []mem.CorpusAnalysisRunSummary
+	if err := json.Unmarshal([]byte(historyJSON), &history); err != nil || len(history) != 2 {
+		t.Fatalf("run history JSON is incomplete: history=%#v err=%v output=%q", history, err, historyJSON)
+	}
+	var sawCompleted, sawRunning bool
+	for _, run := range history {
+		switch run.ID {
+		case completed.ID:
+			sawCompleted = run.Status == mem.CorpusAnalysisRunCompleted && run.InsufficientBatches == 3
+		case running.ID:
+			sawRunning = run.Status == mem.CorpusAnalysisRunRunning && run.FailedBatches == 1
+		}
+	}
+	if !sawCompleted || !sawRunning {
+		t.Fatalf("run history lost statuses: %#v", history)
+	}
+
+	detailJSON, stderr, err := captureCLIStreams(func() error {
+		return handleMap(testCLIConfig(1500, "paragraph"), store, []string{"run", running.ID, "--json"})
+	})
+	if err != nil || stderr != "" {
+		t.Fatalf("run detail failed: output=%q stderr=%q err=%v", detailJSON, stderr, err)
+	}
+	var detail mem.CorpusAnalysisRun
+	if err := json.Unmarshal([]byte(detailJSON), &detail); err != nil || detail.ID != running.ID || detail.Batches[0].Reason != "retry later" {
+		t.Fatalf("run detail JSON is incomplete: run=%#v err=%v output=%q", detail, err, detailJSON)
+	}
+
+	previewJSON, stderr, err := captureCLIStreams(func() error {
+		return handleMap(testCLIConfig(1500, "paragraph"), store, []string{"prune-runs", "-older-than", "1ns", "-keep", "0", "--json"})
+	})
+	if err != nil || stderr != "" {
+		t.Fatalf("prune preview failed: output=%q stderr=%q err=%v", previewJSON, stderr, err)
+	}
+	var preview mem.CorpusAnalysisRunPruneResult
+	if err := json.Unmarshal([]byte(previewJSON), &preview); err != nil || !preview.DryRun || len(preview.Runs) != 1 || preview.Runs[0].ID != completed.ID {
+		t.Fatalf("prune preview is unsafe or incomplete: result=%#v err=%v output=%q", preview, err, previewJSON)
+	}
+	if _, err := store.LoadCorpusAnalysisRun(completed.ID); err != nil {
+		t.Fatalf("preview deleted completed run: %v", err)
+	}
+
+	deleted, _, err := captureCLIStreams(func() error {
+		return handleMap(testCLIConfig(1500, "paragraph"), store, []string{"prune-runs", "-older-than", "1ns", "-keep", "0", "--yes"})
+	})
+	if err != nil || !strings.Contains(deleted, "runs=1 batches=3") {
+		t.Fatalf("confirmed prune failed: output=%q err=%v", deleted, err)
+	}
+	if _, err := store.LoadCorpusAnalysisRun(completed.ID); err == nil {
+		t.Fatal("confirmed prune kept completed run")
+	}
+	if resumable, err := store.LoadCorpusAnalysisRun(running.ID); err != nil || resumable.Status != mem.CorpusAnalysisRunRunning {
+		t.Fatalf("confirmed prune removed running run: run=%#v err=%v", resumable, err)
+	}
+}
+
+func TestHandleMapDuplicateDetectionMergeAndHistory(t *testing.T) {
+	store, anchor := cliGraphStoreAndAnchor(t)
+	defer store.Close()
+	if err := store.UpsertKnowledgeGraph(mem.KnowledgeGraph{Nodes: []mem.KnowledgeNode{
+		{ID: "cli-duplicate-target", Kind: mem.KnowledgeNodeClaim, Label: "Canonical pressure", Body: "Maximum pressure is 1.0 MPa.", Status: mem.KnowledgeStatusActive, Origin: mem.KnowledgeOriginGenerated, Confidence: 0.9, Evidence: []mem.EvidenceAnchor{anchor}},
+		{ID: "cli-duplicate-source", Kind: mem.KnowledgeNodeClaim, Label: "Duplicate pressure", Body: "Working pressure shall not exceed 1.0 MPa.", Status: mem.KnowledgeStatusDraft, Origin: mem.KnowledgeOriginGenerated, Confidence: 0.88, Evidence: []mem.EvidenceAnchor{anchor}},
+	}}); err != nil {
+		t.Fatal(err)
+	}
+	originalEmbedding := getEmbeddingContext
+	defer func() { getEmbeddingContext = originalEmbedding }()
+	getEmbeddingContext = func(_ context.Context, _ *Config, text string) ([]float32, error) {
+		if strings.Contains(text, "Canonical") {
+			return []float32{1, 0}, nil
+		}
+		return []float32{0.99, 0.01}, nil
+	}
+	stdout, stderr, err := captureCLIStreams(func() error {
+		return handleMap(testCLIConfig(1500, "paragraph"), store, []string{"duplicates", "--json", "-kind", "claim", "-threshold", "0.95"})
+	})
+	if err != nil || !strings.Contains(stderr, "embedding node=2/2") {
+		t.Fatalf("duplicate detection failed: stdout=%q stderr=%q err=%v", stdout, stderr, err)
+	}
+	var report mem.KnowledgeDuplicateReport
+	if err := json.Unmarshal([]byte(stdout), &report); err != nil || len(report.Candidates) != 1 {
+		t.Fatalf("duplicate report is incomplete: report=%#v err=%v output=%q", report, err, stdout)
+	}
+	candidate := report.Candidates[0]
+	source, target := candidate.Left, candidate.Right
+	if source.ID != candidate.SuggestedSource {
+		source, target = candidate.Right, candidate.Left
+	}
+	manifest := mem.KnowledgeNodeMergeRequest{
+		SourceID: source.ID, TargetID: target.ID, Reviewer: "Руслан", Comment: "Один норматив",
+		ExpectedSourceNodeDigest: source.NodeDigest, ExpectedTargetNodeDigest: target.NodeDigest,
+		ExpectedSourceEvidenceDigest: source.EvidenceDigest, ExpectedTargetEvidenceDigest: target.EvidenceDigest,
+		Similarity: candidate.Similarity, EmbeddingSpace: candidate.EmbeddingSpace,
+	}
+	encoded, err := json.Marshal(manifest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	manifestPath := filepath.Join(t.TempDir(), "merge.json")
+	if err := os.WriteFile(manifestPath, encoded, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	merged, stderr, err := captureCLIStreams(func() error {
+		return handleMap(testCLIConfig(1500, "paragraph"), store, []string{"merge-node", manifestPath})
+	})
+	if err != nil || stderr != "" || !strings.Contains(merged, "source=cli-duplicate-source target=cli-duplicate-target") {
+		t.Fatalf("duplicate merge failed: stdout=%q stderr=%q err=%v", merged, stderr, err)
+	}
+	historyJSON, stderr, err := captureCLIStreams(func() error {
+		return handleMap(testCLIConfig(1500, "paragraph"), store, []string{"merges", "--json"})
+	})
+	if err != nil || stderr != "" {
+		t.Fatalf("merge history failed: output=%q stderr=%q err=%v", historyJSON, stderr, err)
+	}
+	var history []mem.KnowledgeNodeMergeRecord
+	if err := json.Unmarshal([]byte(historyJSON), &history); err != nil || len(history) != 1 || !history[0].Current || history[0].Reviewer != "Руслан" {
+		t.Fatalf("merge history is incomplete: history=%#v err=%v output=%q", history, err, historyJSON)
+	}
+}
+
+func TestHandleMapExportHTMLIsSelfContainedAndRequiresForce(t *testing.T) {
+	store, anchor := cliGraphStoreAndAnchor(t)
+	defer store.Close()
+	if err := store.UpsertKnowledgeGraph(mem.KnowledgeGraph{Nodes: []mem.KnowledgeNode{{
+		ID: "html-map-node", Kind: mem.KnowledgeNodeContradiction, Label: "Conflicting limits",
+		Status: mem.KnowledgeStatusDraft, Origin: mem.KnowledgeOriginGenerated,
+		Evidence: []mem.EvidenceAnchor{anchor},
+	}}}); err != nil {
+		t.Fatal(err)
+	}
+	outputPath := filepath.Join(t.TempDir(), "knowledge-map.html")
+	stdout, stderr, err := captureCLIStreams(func() error {
+		return handleMap(testCLIConfig(1500, "paragraph"), store, []string{"export-html", outputPath, "--title", "Project map"})
+	})
+	if err != nil || stderr != "" || !strings.Contains(stdout, "nodes=1 edges=0") {
+		t.Fatalf("HTML export failed: stdout=%q stderr=%q err=%v", stdout, stderr, err)
+	}
+	content, err := os.ReadFile(outputPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Contains(content, []byte(`<title>Project map</title>`)) || !bytes.Contains(content, []byte(`data-mem-map="v1"`)) || !bytes.Contains(content, []byte(`html-map-node`)) {
+		t.Fatalf("HTML export is incomplete: %q", content[:min(len(content), 500)])
+	}
+	if _, _, err := captureCLIStreams(func() error {
+		return handleMap(testCLIConfig(1500, "paragraph"), store, []string{"export-html", outputPath})
+	}); err == nil || !strings.Contains(err.Error(), "--force") {
+		t.Fatalf("existing HTML was overwritten without --force: %v", err)
+	}
+	if _, _, err := captureCLIStreams(func() error {
+		return handleMap(testCLIConfig(1500, "paragraph"), store, []string{"export-html", outputPath, "--force"})
+	}); err != nil {
+		t.Fatalf("forced HTML export failed: %v", err)
+	}
+}
+
+func TestParseAnalysisRunRetention(t *testing.T) {
+	duration, err := parseAnalysisRunRetention("30d")
+	if err != nil || duration != 30*24*time.Hour {
+		t.Fatalf("30d was not parsed: duration=%s err=%v", duration, err)
+	}
+	if _, err := parseAnalysisRunRetention("0d"); err == nil {
+		t.Fatal("zero-day retention was accepted")
+	}
+	if _, err := parseAnalysisRunRetention("later"); err == nil {
+		t.Fatal("invalid retention was accepted")
 	}
 }
 

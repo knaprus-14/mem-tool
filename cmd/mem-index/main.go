@@ -308,8 +308,13 @@ func handleFind(args []string) int {
 		return 1
 	}
 	defer store.Close()
+	identity, err := mem.EmbeddingIdentityForConfig(cfg)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "ошибка embedding identity: %v\n", err)
+		return 1
+	}
 
-	fmt.Printf(">> Поиск через %s... ", cfg.Backend)
+	fmt.Printf(">> Поиск через %s/%s... ", identity.Backend, identity.Model)
 	queryVec, err := mem.GetEmbedding(cfg, query)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "ошибка эмбеддинга: %v\n", err)
@@ -317,7 +322,7 @@ func handleFind(args []string) int {
 	}
 	fmt.Printf("вектор %d измерений\n", len(queryVec))
 
-	results, err := store.Search(queryVec, cfg.Backend, limit, query)
+	results, err := store.Search(queryVec, identity.SpaceID, limit, query)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "ошибка поиска: %v\n", err)
 		return 1
@@ -435,6 +440,12 @@ func handleShow(args []string) int {
 		fmt.Printf("  Hash:        %s\n", e.Hash)
 	}
 	fmt.Printf("  Backend:     %s (%d dims)\n", e.Backend, e.Dims)
+	if e.EmbeddingSpace != "" {
+		fmt.Printf("  Model:       %s\n", e.EmbeddingModel)
+		fmt.Printf("  Space:       %s\n", e.EmbeddingSpace)
+	} else if len(e.Embedding) > 0 {
+		fmt.Println("  Space:       unknown (legacy vector; run mem-index scan .)")
+	}
 	fmt.Printf("  Stale:       %v\n", e.Stale)
 	fmt.Printf("  Last seen:   %s\n", e.LastSeenAt)
 	fmt.Println()

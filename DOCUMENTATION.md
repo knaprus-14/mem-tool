@@ -173,12 +173,21 @@ mem map build "сравнение требований двух документ
 mem map analyze "требования к рабочему давлению" -context-chars 32000
 mem map analyze "требования к рабочему давлению" -context-chars 32000 -batches 8
 mem map analyze "требования к рабочему давлению" -context-chars 32000 -batches 8 -resume kar-0123456789abcdef0123456789abcdef
+mem map duplicates --json -kind claim -threshold 0.92
+mem map merge-node merge-node.json
+mem map merges --json
+mem map runs
+mem map runs --json -status running
+mem map run kar-0123456789abcdef0123456789abcdef --json
+mem map prune-runs -older-than 30d -keep 20
+mem map prune-runs -older-than 30d -keep 20 --yes
 mem map status
 mem map status --json
 mem map approve node kn-0123456789abcdef0123456789abcdef --reviewer "Руслан" --comment "Проверено по документу"
 mem map approve-batch review-manifest.json
 mem map reviews --json -limit 100
 mem map export
+mem map export-html knowledge-map.html --title "Карта проекта"
 ```
 
 `map build` использует тот же hybrid retrieval и локальную chat/instruct-модель,
@@ -234,6 +243,64 @@ checkpoint с SHA-256 digest; raw-ответ модели в checkpoint не п�
 только `pending`/`failed`. Флаг `-resume <run-id>` дополнительно фиксирует ожидаемый
 run: если claim, evidence, фокус или параметры изменились, возобновление
 отклоняется до обращения к модели.
+
+История checkpoints управляется отдельно от карты. `mem map runs` показывает
+запуски от новых к старым, покрытие и число `pending/completed/insufficient/failed`
+пакетов; `-status running|completed`, `-limit N` и `--json` позволяют отфильтровать
+вывод. `mem map run <run-id>` загружает один запуск вместе с checkpoint-статусами,
+причинами ошибок/недостаточности и сохранёнными проверенными фрагментами графа.
+
+`mem map prune-runs -older-than 30d -keep 20` только показывает кандидатов.
+Удаление выполняется лишь при явном повторе с `--yes`, одной транзакцией удаляя
+run и его batches. Кандидатами бывают только `completed` старше cutoff, а последние
+`-keep N` завершённых запусков защищены независимо от возраста. `running` никогда
+не удаляются этой командой: в том числе запуск с `failed` batch остаётся доступным
+для повторного `map analyze`/`-resume`. Для автоматизации доступны `--dry-run` и
+`--json`; `--dry-run` и `--yes` взаимоисключающие.
+
+Семантические дубликаты также обрабатываются отдельным review-gated workflow.
+`mem map duplicates` эмбеддит точный текст `label + body` каждого выбранного узла
+в текущем configured `embedding_space` и сравнивает только узлы одинакового kind.
+Документные chunk-векторы для этого не переиспользуются: два разных утверждения
+из одного chunk иначе получили бы ложное сходство. Узлы с `stale/missing` evidence
+и уже `resolved` исключаются. По умолчанию threshold равен `0.92`, `-nodes 200`
+ограничивает число вызовов embedding API, а `-limit 100` — число показанных пар.
+Команда только строит кандидатов и не меняет карту автоматически.
+
+Когда пара состоит из generated `draft` и `active` узла того же kind, отчёт
+предлагает первый как `source`, второй как канонический `target`. Для объединения
+нужен явный JSON-манифест и ручно заявленный reviewer:
+
+```json
+{
+  "source_id": "kn-source",
+  "target_id": "kn-canonical",
+  "reviewer": "Руслан",
+  "comment": "Один и тот же норматив",
+  "expected_source_node_digest": "sha256:...",
+  "expected_target_node_digest": "sha256:...",
+  "expected_source_evidence_digest": "sha256:...",
+  "expected_target_evidence_digest": "sha256:...",
+  "similarity": 0.97,
+  "embedding_space": "sha256:..."
+}
+```
+
+`mem map merge-node merge-node.json` повторно проверяет оба node/evidence digest,
+current-состояние всех anchors, одинаковый kind и статусы `generated draft ->
+active`. Это логическое, недеструктивное объединение: source и его provenance не
+удаляются, а получают `resolved`; его generated draft-связи также становятся
+`resolved`. Active или manual/source-связи блокируют операцию вместо скрытой потери
+семантики. Решение записывается одновременно в `knowledge_reviews` (`action=merge`)
+и append-only `knowledge_node_merges`.
+
+Повторное извлечение с тем же точным содержимым и evidence сохраняет объединение.
+Изменение source/target content digest, evidence digest или статуса target делает
+запись stale и при следующем graph-upsert возвращает generated source и его связи
+в `draft`. `mem map merges [--json]` показывает полную историю и флаг `current`;
+старые записи не переписываются. Значение similarity является зафиксированным
+результатом детектора, а не доказательством эквивалентности: окончательное решение
+остаётся за reviewer.
 
 Все проверенные ответы объединяются по постоянным host-derived IDs. Findings и
 relations записываются в knowledge graph только после успешного завершения и
@@ -310,6 +377,31 @@ ref, пропущенный confidence/evidence, неподдерживаемы�
 либо база остаётся без изменений. `map export` пишет полный сохранённый граф в JSON
 на `stdout`.
 
+`mem map export-html knowledge-map.html` создаёт интерактивный provenance-first
+снимок всей карты, а не иерархическое дерево. HTML полностью автономен: CSS,
+force-layout и данные встроены в один файл, внешних CDN, сетевых запросов и
+серверного процесса нет. Существующий файл не перезаписывается без `--force`;
+`--title` задаёт заголовок вкладки.
+
+Визуализация поддерживает:
+
+- направленные типизированные связи и несколько входящих/исходящих ветвей;
+- force-layout, pan, zoom, fit и ручное перетаскивание узлов;
+- поиск по ID, label, body и kind;
+- независимые фильтры node kind, relation kind, `draft/active/resolved` и
+  `current/stale/missing` evidence;
+- особую геометрию/цвет для `contradiction`, `gap`, document/topic и остальных
+  типов, а также подсветку `contradicts`/`reveals_gap`;
+- детальную панель узла или связи с body, status/origin/confidence, merge-target,
+  evidence digest, точной выдержкой, source path, page, block/chunk coordinates,
+  citation ID, document revision, chunk hash и evidence hash;
+- адаптивные панели для узкого окна и клавиши `/` (поиск), `Esc` (сброс).
+
+HTML является read-only snapshot: approval, merge и повторный анализ выполняются
+через проверяемые CLI-команды, после чего файл нужно экспортировать заново. В него
+попадают сохранённые evidence excerpts и локальные source paths, поэтому такой файл
+следует считать потенциально чувствительным и передавать только осознанно.
+
 Эта проверка доказывает структурную привязку каждого объекта к реально переданному
 evidence, но не доказывает семантическое следование утверждения из цитаты.
 `map analyze` остаётся focus-driven анализом, а не доказательством отсутствия иных
@@ -318,10 +410,11 @@ evidence, но не доказывает семантическое следов
 с фокусом, semantic affinity и разнообразию документов. Текущая кластеризация
 greedy и не перебирает все попарные сочетания. Сохранённая identity подтверждает
 настроенные backend/model/endpoint, но не является digest весов модели: текущие
-embedding API не возвращают такой digest. Отдельная база `.fileindex` пока всё ещё
-фильтрует векторы только по backend и размерности. Объединения близких по смыслу
-узлов, управления/очистки истории analysis runs и интерактивной визуализации пока
-нет.
+embedding API не возвращают такой digest. Отдельная база `.fileindex` теперь
+сохраняет ту же configured identity и допускает semantic search только внутри
+точно совпадающего `embedding_space`; legacy-векторы без identity исключаются до
+обычного `mem-index scan`. Автоматического объединения без review, live-обновления
+HTML и совместного многопользовательского редактирования пока нет.
 
 ### Версия 1.8 — Re-ranking (повторное ранжирование)
 После гибридного поиска оценки докручиваются:
@@ -636,8 +729,10 @@ mem> _
   - `mem-index init <dir>` — создать `.fileindex/` + первый scan.
   - `mem-index scan <dir> [-enrich] [-no-embed]` — инкрементальный rescan.
     Быстрый skip применяется только к активной записи с неизменными mtime/size и
-    актуальным embedding-бэкендом. `-no-embed` сохраняет новые файлы как metadata-only;
-    они появятся в семантическом поиске после обычного `scan`/`enrich` с embedding.
+    точно совпадающим `embedding_space` (backend + model + endpoint fingerprint).
+    `-no-embed` сохраняет новые файлы как metadata-only; они появятся в
+    семантическом поиске после обычного `scan`/`enrich` с embedding. Старый вектор
+    сохраняется вместе с исходной identity только когда поисковый текст не менялся.
   - `mem-index enrich <dir>` — повторный scan с извлечением аннотаций.
   - `mem-index find "запрос"` — семантический поиск с гибридным boost.
   - `mem-index list [-limit N] [-include-stale]` — последние записи.
@@ -665,8 +760,12 @@ mem> _
   скорее всего изменится, вызовется re-embed).
 - **Embedding:** переиспользует `mem.GetEmbedding(cfg, text)` (Ollama bge-m3 1024-dim
   или Polza text-embedding-3-small 1536-dim). Тот же config.json, что у `mem`.
-  Поиск использует только активные векторы текущего backend; после смены backend
-  обычный scan пересчитывает даже файлы с неизменными mtime/size.
+  В БД сохраняются `embedding_model` и безопасный `embedding_space` fingerprint
+  настроенных backend/model/endpoint (без API key и без самого endpoint). Поиск
+  использует только активные векторы с точным совпадением space. После смены
+  backend, модели или endpoint обычный scan пересчитывает даже файлы с неизменными
+  mtime/size. Additive-миграция не приписывает legacy-векторам текущую identity:
+  до re-scan они остаются читаемыми, но исключены из семантического поиска.
 - **Архитектурные решения:**
   - **Отдельный бинарь** (а не подкоманда `mem fileindex`) — пользователь явно попросил
     «отдельную программу», плюс нет лишних зависимостей (bubbletea, TUI) в `mem-index`.

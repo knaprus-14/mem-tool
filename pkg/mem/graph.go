@@ -195,11 +195,29 @@ CREATE TABLE IF NOT EXISTS knowledge_reviews (
     created TEXT NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS knowledge_node_merges (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    source_node TEXT NOT NULL,
+    target_node TEXT NOT NULL,
+    kind TEXT NOT NULL,
+    similarity REAL NOT NULL,
+    embedding_space TEXT NOT NULL,
+    source_node_digest TEXT NOT NULL,
+    target_node_digest TEXT NOT NULL,
+    source_evidence_digest TEXT NOT NULL,
+    target_evidence_digest TEXT NOT NULL,
+    reviewer TEXT NOT NULL,
+    comment TEXT NOT NULL DEFAULT '',
+    created TEXT NOT NULL
+);
+
 CREATE INDEX IF NOT EXISTS idx_knowledge_edges_from ON knowledge_edges(from_node);
 CREATE INDEX IF NOT EXISTS idx_knowledge_edges_to ON knowledge_edges(to_node);
 CREATE INDEX IF NOT EXISTS idx_knowledge_node_evidence_citation ON knowledge_node_evidence(citation_id);
 CREATE INDEX IF NOT EXISTS idx_knowledge_edge_evidence_citation ON knowledge_edge_evidence(citation_id);
 CREATE INDEX IF NOT EXISTS idx_knowledge_reviews_object ON knowledge_reviews(object_type, object_id, id);
+CREATE INDEX IF NOT EXISTS idx_knowledge_node_merges_source ON knowledge_node_merges(source_node, id);
+CREATE INDEX IF NOT EXISTS idx_knowledge_node_merges_target ON knowledge_node_merges(target_node, id);
 
 CREATE TRIGGER IF NOT EXISTS knowledge_reviews_no_update
 BEFORE UPDATE ON knowledge_reviews
@@ -211,6 +229,18 @@ CREATE TRIGGER IF NOT EXISTS knowledge_reviews_no_delete
 BEFORE DELETE ON knowledge_reviews
 BEGIN
     SELECT RAISE(ABORT, 'knowledge review history is append-only');
+END;
+
+CREATE TRIGGER IF NOT EXISTS knowledge_node_merges_no_update
+BEFORE UPDATE ON knowledge_node_merges
+BEGIN
+    SELECT RAISE(ABORT, 'knowledge node merge history is append-only');
+END;
+
+CREATE TRIGGER IF NOT EXISTS knowledge_node_merges_no_delete
+BEFORE DELETE ON knowledge_node_merges
+BEGIN
+    SELECT RAISE(ABORT, 'knowledge node merge history is append-only');
 END;
 `
 
@@ -645,6 +675,9 @@ confidence=excluded.confidence, updated=excluded.updated`,
 				return rollback(err)
 			}
 		}
+	}
+	if err := invalidateChangedKnowledgeNodeMerges(tx, s.entries); err != nil {
+		return rollback(err)
 	}
 	if _, err := tx.Exec(`UPDATE knowledge_edges
 SET status = ?, updated = ?

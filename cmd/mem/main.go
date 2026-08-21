@@ -667,7 +667,7 @@ func parseAskArgs(args []string) ([]string, int, error) {
 
 func handleMap(cfg *Config, store *Store, args []string) error {
 	if len(args) == 0 {
-		return errors.New("использование: mem map <build|analyze|status|approve|approve-batch|reviews|export>\n  mem map build <фокус> [-limit N] [-context-chars N]\n  mem map analyze <фокус> [-context-chars N] [-batches N] [-resume <run-id>]\n  mem map status [--json]\n  mem map approve <node|edge> <id> --reviewer <имя> [--comment <текст>] [--evidence-digest <sha256>]\n  mem map approve-batch <manifest.json>\n  mem map reviews [--json] [-limit N]\n  mem map export")
+		return errors.New("использование: mem map <build|analyze|duplicates|merge-node|merges|runs|run|prune-runs|status|approve|approve-batch|reviews|export|export-html>\n  mem map build <фокус> [-limit N] [-context-chars N]\n  mem map analyze <фокус> [-context-chars N] [-batches N] [-resume <run-id>]\n  mem map duplicates [--json] [-threshold 0.92] [-kind claim] [-nodes N] [-limit N]\n  mem map merge-node <manifest.json>\n  mem map merges [--json] [-limit N]\n  mem map runs [--json] [-limit N] [-status running|completed]\n  mem map run <run-id> [--json]\n  mem map prune-runs -older-than <duration> [-keep N] [--dry-run|--yes] [--json]\n  mem map status [--json]\n  mem map approve <node|edge> <id> --reviewer <имя> [--comment <текст>] [--evidence-digest <sha256>]\n  mem map approve-batch <manifest.json>\n  mem map reviews [--json] [-limit N]\n  mem map export\n  mem map export-html <output.html> [--title <текст>] [--force]")
 	}
 	switch args[0] {
 	case "export":
@@ -684,6 +684,8 @@ func handleMap(cfg *Config, store *Store, args []string) error {
 		}
 		fmt.Fprintln(os.Stdout, string(encoded))
 		return nil
+	case "export-html":
+		return handleMapExportHTML(store, args[1:])
 	case "status":
 		return handleMapStatus(store, args[1:])
 	case "approve":
@@ -692,13 +694,81 @@ func handleMap(cfg *Config, store *Store, args []string) error {
 		return handleMapApproveBatch(store, args[1:])
 	case "reviews":
 		return handleMapReviews(store, args[1:])
+	case "duplicates":
+		return handleMapDuplicates(cfg, store, args[1:])
+	case "merge-node":
+		return handleMapMergeNode(store, args[1:])
+	case "merges":
+		return handleMapMerges(store, args[1:])
+	case "runs":
+		return handleMapRuns(store, args[1:])
+	case "run":
+		return handleMapRun(store, args[1:])
+	case "prune-runs":
+		return handleMapPruneRuns(store, args[1:])
 	case "analyze":
 		return handleMapAnalyze(cfg, store, args[1:])
 	case "build":
 		return handleMapBuild(cfg, store, args[1:])
 	default:
-		return fmt.Errorf("неизвестная подкоманда map: %s (доступны build, analyze, status, approve, approve-batch, reviews, export)", args[0])
+		return fmt.Errorf("неизвестная подкоманда map: %s (доступны build, analyze, duplicates, merge-node, merges, runs, run, prune-runs, status, approve, approve-batch, reviews, export, export-html)", args[0])
 	}
+}
+
+func handleMapExportHTML(store *Store, args []string) error {
+	if len(args) == 0 {
+		return errors.New("использование: mem map export-html <output.html> [--title <текст>] [--force]")
+	}
+	outputPath := strings.TrimSpace(args[0])
+	if outputPath == "" || strings.HasPrefix(outputPath, "-") {
+		return errors.New("map export-html: укажи путь к output.html первым аргументом")
+	}
+	title, force := "", false
+	for i := 1; i < len(args); i++ {
+		switch args[i] {
+		case "--force":
+			force = true
+		case "--title":
+			if i+1 >= len(args) {
+				return errors.New("использование: mem map export-html <output.html> [--title <текст>] [--force]")
+			}
+			i++
+			title = args[i]
+		default:
+			return fmt.Errorf("неизвестный аргумент map export-html: %s", args[i])
+		}
+	}
+	if !strings.EqualFold(filepath.Ext(outputPath), ".html") && !strings.EqualFold(filepath.Ext(outputPath), ".htm") {
+		return errors.New("map export-html: выходной файл должен иметь расширение .html или .htm")
+	}
+	if info, err := os.Stat(outputPath); err == nil {
+		if info.IsDir() {
+			return fmt.Errorf("map export-html: %s является папкой", outputPath)
+		}
+		if !force {
+			return fmt.Errorf("map export-html: файл %s уже существует; используй --force для перезаписи", outputPath)
+		}
+	} else if !os.IsNotExist(err) {
+		return fmt.Errorf("map export-html: inspect output: %w", err)
+	}
+	data, err := store.BuildKnowledgeMapViewData()
+	if err != nil {
+		return fmt.Errorf("map export-html: %w", err)
+	}
+	var output bytes.Buffer
+	if err := mem.WriteKnowledgeMapHTML(&output, title, data); err != nil {
+		return fmt.Errorf("map export-html: %w", err)
+	}
+	if err := os.WriteFile(outputPath, output.Bytes(), 0o600); err != nil {
+		return fmt.Errorf("map export-html: write output: %w", err)
+	}
+	absolute, err := filepath.Abs(outputPath)
+	if err != nil {
+		absolute = outputPath
+	}
+	fmt.Fprintf(os.Stdout, "Интерактивная карта сохранена: %s (nodes=%d edges=%d merges=%d)\n",
+		absolute, len(data.Graph.Nodes), len(data.Graph.Edges), len(data.Merges))
+	return nil
 }
 
 func handleMapStatus(store *Store, args []string) error {
@@ -877,6 +947,402 @@ func handleMapReviews(store *Store, args []string) error {
 		}
 		fmt.Fprintf(os.Stdout, "  digest %s\n", review.EvidenceDigest)
 	}
+	return nil
+}
+
+func handleMapDuplicates(cfg *Config, store *Store, args []string) error {
+	jsonOutput := false
+	threshold := mem.DefaultKnowledgeDuplicateThreshold
+	limit, nodeLimit := 100, 200
+	var kind mem.KnowledgeNodeKind
+	for i := 0; i < len(args); i++ {
+		switch args[i] {
+		case "--json":
+			jsonOutput = true
+		case "-threshold":
+			if i+1 >= len(args) {
+				return errors.New("использование: mem map duplicates [--json] [-threshold 0.92] [-kind claim] [-nodes N] [-limit N]")
+			}
+			i++
+			parsed, err := strconv.ParseFloat(args[i], 64)
+			if err != nil || parsed < 0 || parsed > 1 {
+				return errors.New("map duplicates: -threshold должен быть от 0 до 1")
+			}
+			threshold = parsed
+		case "-limit", "-nodes":
+			flag := args[i]
+			if i+1 >= len(args) {
+				return errors.New("использование: mem map duplicates [--json] [-threshold 0.92] [-kind claim] [-nodes N] [-limit N]")
+			}
+			i++
+			parsed, err := strconv.Atoi(args[i])
+			if err != nil || parsed < 1 || parsed > 1000 {
+				return fmt.Errorf("map duplicates: %s должен быть от 1 до 1000", flag)
+			}
+			if flag == "-limit" {
+				limit = parsed
+			} else {
+				nodeLimit = parsed
+			}
+		case "-kind":
+			if i+1 >= len(args) {
+				return errors.New("использование: mem map duplicates [--json] [-threshold 0.92] [-kind claim] [-nodes N] [-limit N]")
+			}
+			i++
+			kind = mem.KnowledgeNodeKind(strings.TrimSpace(args[i]))
+			if !cliKnowledgeNodeKind(kind) {
+				return fmt.Errorf("map duplicates: неподдерживаемый kind %q", kind)
+			}
+		default:
+			return fmt.Errorf("неизвестный аргумент map duplicates: %s", args[i])
+		}
+	}
+	graph, err := store.LoadKnowledgeGraph()
+	if err != nil {
+		return fmt.Errorf("map duplicates: %w", err)
+	}
+	type pendingNode struct {
+		node   mem.KnowledgeNode
+		digest string
+	}
+	pending := make([]pendingNode, 0)
+	for _, node := range graph.Nodes {
+		if node.Status == mem.KnowledgeStatusResolved || (kind != "" && node.Kind != kind) {
+			continue
+		}
+		current := true
+		for _, anchor := range node.Evidence {
+			if store.ResolveEvidenceAnchor(anchor).State != mem.EvidenceCurrent {
+				current = false
+				break
+			}
+		}
+		if !current {
+			continue
+		}
+		digest, err := mem.KnowledgeNodeContentDigest(node)
+		if err != nil {
+			return fmt.Errorf("map duplicates: digest node %s: %w", node.ID, err)
+		}
+		pending = append(pending, pendingNode{node: node, digest: digest})
+		if len(pending) == nodeLimit {
+			break
+		}
+	}
+	identity, err := mem.EmbeddingIdentityForConfig(cfg)
+	if err != nil {
+		return fmt.Errorf("map duplicates: %w", err)
+	}
+	vectors := make([]mem.KnowledgeNodeVector, 0, len(pending))
+	if len(pending) >= 2 {
+		rootCtx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
+		defer stop()
+		ctx, cancel := mem.AnswerContext(rootCtx, cfg.Answer.WithDefaults())
+		defer cancel()
+		for i, item := range pending {
+			text := strings.TrimSpace(item.node.Label)
+			if body := strings.TrimSpace(item.node.Body); body != "" {
+				text += "\n\n" + body
+			}
+			fmt.Fprintf(os.Stderr, "[MAP DUPLICATES] embedding node=%d/%d id=%s\n", i+1, len(pending), item.node.ID)
+			vector, err := getEmbeddingContext(ctx, cfg, text)
+			if err != nil {
+				return fmt.Errorf("map duplicates: embed node %s: %w", item.node.ID, err)
+			}
+			vectors = append(vectors, mem.KnowledgeNodeVector{NodeID: item.node.ID, NodeDigest: item.digest, Embedding: vector})
+		}
+	}
+	report, err := store.DetectKnowledgeNodeDuplicates(vectors, identity.SpaceID, threshold, limit, kind)
+	if err != nil {
+		return fmt.Errorf("map duplicates: %w", err)
+	}
+	if jsonOutput {
+		encoded, err := json.MarshalIndent(report, "", "  ")
+		if err != nil {
+			return fmt.Errorf("map duplicates: encode report: %w", err)
+		}
+		fmt.Fprintln(os.Stdout, string(encoded))
+		return nil
+	}
+	fmt.Fprintf(os.Stdout, "Duplicate candidates: pairs=%d threshold=%.4f eligible=%d scanned=%d embedded=%d\n",
+		len(report.Candidates), report.Threshold, report.EligibleNodes, report.ScannedNodes, len(vectors))
+	fmt.Fprintf(os.Stdout, "Skipped: resolved=%d non_current=%d changed=%d no_vector=%d\n",
+		report.SkippedResolved, report.SkippedNonCurrent, report.SkippedChanged, report.SkippedNoVector)
+	for _, candidate := range report.Candidates {
+		fmt.Fprintf(os.Stdout, "- similarity=%.6f kind=%s %s <> %s\n",
+			candidate.Similarity, candidate.Left.Kind, candidate.Left.ID, candidate.Right.ID)
+		fmt.Fprintf(os.Stdout, "  %s <> %s\n", candidate.Left.Label, candidate.Right.Label)
+		if candidate.SuggestedSource != "" {
+			fmt.Fprintf(os.Stdout, "  merge suggestion: source=%s target=%s\n", candidate.SuggestedSource, candidate.SuggestedTarget)
+		}
+		fmt.Fprintf(os.Stdout, "  left_node=%s left_evidence=%s\n", candidate.Left.NodeDigest, candidate.Left.EvidenceDigest)
+		fmt.Fprintf(os.Stdout, "  right_node=%s right_evidence=%s\n", candidate.Right.NodeDigest, candidate.Right.EvidenceDigest)
+	}
+	return nil
+}
+
+func cliKnowledgeNodeKind(kind mem.KnowledgeNodeKind) bool {
+	switch kind {
+	case mem.KnowledgeNodeDocument, mem.KnowledgeNodeTopic, mem.KnowledgeNodeClaim, mem.KnowledgeNodeNote,
+		mem.KnowledgeNodeQuestion, mem.KnowledgeNodeCard, mem.KnowledgeNodeContradiction, mem.KnowledgeNodeGap:
+		return true
+	default:
+		return false
+	}
+}
+
+func handleMapMergeNode(store *Store, args []string) error {
+	if len(args) != 1 {
+		return errors.New("использование: mem map merge-node <manifest.json>")
+	}
+	file, err := os.Open(args[0])
+	if err != nil {
+		return fmt.Errorf("map merge-node: open manifest: %w", err)
+	}
+	defer file.Close()
+	decoder := json.NewDecoder(io.LimitReader(file, 1<<20))
+	decoder.DisallowUnknownFields()
+	var request mem.KnowledgeNodeMergeRequest
+	if err := decoder.Decode(&request); err != nil {
+		return fmt.Errorf("map merge-node: decode manifest: %w", err)
+	}
+	if err := ensureJSONEOF(decoder); err != nil {
+		return fmt.Errorf("map merge-node: decode manifest: %w", err)
+	}
+	result, err := store.MergeKnowledgeDuplicate(request)
+	if err != nil {
+		return fmt.Errorf("map merge-node: %w", err)
+	}
+	fmt.Fprintf(os.Stdout, "Duplicate node merged: source=%s target=%s kind=%s similarity=%.6f resolved_edges=%d merge=%d review=%d\n",
+		result.Merge.SourceID, result.Merge.TargetID, result.Merge.Kind, result.Merge.Similarity,
+		result.ResolvedEdges, result.Merge.ID, result.Review.ID)
+	return nil
+}
+
+func handleMapMerges(store *Store, args []string) error {
+	jsonOutput, limit := false, 100
+	for i := 0; i < len(args); i++ {
+		switch args[i] {
+		case "--json":
+			jsonOutput = true
+		case "-limit":
+			if i+1 >= len(args) {
+				return errors.New("использование: mem map merges [--json] [-limit N]")
+			}
+			i++
+			parsed, err := strconv.Atoi(args[i])
+			if err != nil || parsed < 1 || parsed > 1000 {
+				return errors.New("map merges: -limit должен быть от 1 до 1000")
+			}
+			limit = parsed
+		default:
+			return fmt.Errorf("неизвестный аргумент map merges: %s", args[i])
+		}
+	}
+	records, err := store.ListKnowledgeNodeMerges(limit)
+	if err != nil {
+		return fmt.Errorf("map merges: %w", err)
+	}
+	if jsonOutput {
+		encoded, err := json.MarshalIndent(records, "", "  ")
+		if err != nil {
+			return fmt.Errorf("map merges: encode report: %w", err)
+		}
+		fmt.Fprintln(os.Stdout, string(encoded))
+		return nil
+	}
+	fmt.Fprintf(os.Stdout, "Node merge history: records=%d limit=%d\n", len(records), limit)
+	for _, record := range records {
+		state := "stale"
+		if record.Current {
+			state = "current"
+		}
+		fmt.Fprintf(os.Stdout, "- #%d [%s] %s -> %s kind=%s similarity=%.6f reviewer=%s created=%s\n",
+			record.ID, state, record.SourceID, record.TargetID, record.Kind, record.Similarity, record.Reviewer, record.Created)
+		if record.StateReason != "" {
+			fmt.Fprintf(os.Stdout, "  reason %s\n", record.StateReason)
+		}
+		if record.Comment != "" {
+			fmt.Fprintf(os.Stdout, "  comment %s\n", strings.Join(strings.Fields(record.Comment), " "))
+		}
+	}
+	return nil
+}
+
+func handleMapRuns(store *Store, args []string) error {
+	jsonOutput, limit := false, 100
+	var status mem.CorpusAnalysisRunStatus
+	for i := 0; i < len(args); i++ {
+		switch args[i] {
+		case "--json":
+			jsonOutput = true
+		case "-limit":
+			if i+1 >= len(args) {
+				return errors.New("использование: mem map runs [--json] [-limit N] [-status running|completed]")
+			}
+			i++
+			parsed, err := strconv.Atoi(args[i])
+			if err != nil || parsed < 1 || parsed > 1000 {
+				return errors.New("map runs: -limit должен быть от 1 до 1000")
+			}
+			limit = parsed
+		case "-status":
+			if i+1 >= len(args) {
+				return errors.New("использование: mem map runs [--json] [-limit N] [-status running|completed]")
+			}
+			i++
+			status = mem.CorpusAnalysisRunStatus(strings.TrimSpace(args[i]))
+			if status != mem.CorpusAnalysisRunRunning && status != mem.CorpusAnalysisRunCompleted {
+				return errors.New("map runs: -status должен быть running или completed")
+			}
+		default:
+			return fmt.Errorf("неизвестный аргумент map runs: %s", args[i])
+		}
+	}
+	runs, err := store.ListCorpusAnalysisRuns(limit, status)
+	if err != nil {
+		return fmt.Errorf("map runs: %w", err)
+	}
+	if jsonOutput {
+		encoded, err := json.MarshalIndent(runs, "", "  ")
+		if err != nil {
+			return fmt.Errorf("map runs: encode report: %w", err)
+		}
+		fmt.Fprintln(os.Stdout, string(encoded))
+		return nil
+	}
+	fmt.Fprintf(os.Stdout, "Analysis runs: records=%d limit=%d", len(runs), limit)
+	if status != "" {
+		fmt.Fprintf(os.Stdout, " status=%s", status)
+	}
+	fmt.Fprintln(os.Stdout)
+	for _, run := range runs {
+		fmt.Fprintf(os.Stdout, "- %s [%s] batches=%d completed=%d insufficient=%d failed=%d pending=%d updated=%s\n",
+			run.ID, run.Status, run.BatchCount, run.CompletedBatches, run.InsufficientBatches,
+			run.FailedBatches, run.PendingBatches, run.Updated)
+		fmt.Fprintf(os.Stdout, "  focus %s\n", strings.Join(strings.Fields(run.Focus), " "))
+		fmt.Fprintf(os.Stdout, "  coverage claims=%d/%d documents=%d/%d context=%d max_batches=%d\n",
+			run.CoveredClaims, run.EligibleClaims, run.CoveredDocuments, run.EligibleDocuments,
+			run.ContextChars, run.MaxBatches)
+	}
+	return nil
+}
+
+func handleMapRun(store *Store, args []string) error {
+	if len(args) < 1 || len(args) > 2 || (len(args) == 2 && args[1] != "--json") {
+		return errors.New("использование: mem map run <run-id> [--json]")
+	}
+	run, err := store.LoadCorpusAnalysisRun(args[0])
+	if err != nil {
+		return fmt.Errorf("map run: %w", err)
+	}
+	if len(args) == 2 {
+		encoded, err := json.MarshalIndent(run, "", "  ")
+		if err != nil {
+			return fmt.Errorf("map run: encode report: %w", err)
+		}
+		fmt.Fprintln(os.Stdout, string(encoded))
+		return nil
+	}
+	fmt.Fprintf(os.Stdout, "Analysis run %s [%s]\n", run.ID, run.Status)
+	fmt.Fprintf(os.Stdout, "Focus: %s\n", strings.Join(strings.Fields(run.Focus), " "))
+	fmt.Fprintf(os.Stdout, "Coverage: claims=%d/%d documents=%d/%d context=%d max_batches=%d\n",
+		run.CoveredClaims, run.EligibleClaims, run.CoveredDocuments, run.EligibleDocuments,
+		run.ContextChars, run.MaxBatches)
+	fmt.Fprintf(os.Stdout, "Created: %s\nUpdated: %s\n", run.Created, run.Updated)
+	for _, batch := range run.Batches {
+		fmt.Fprintf(os.Stdout, "- batch %d %s [%s] findings=%d relations=%d updated=%s\n",
+			batch.Ordinal+1, batch.BatchID, batch.Status, len(batch.Graph.Nodes), len(batch.Graph.Edges), batch.Updated)
+		if batch.Reason != "" {
+			fmt.Fprintf(os.Stdout, "  reason %s\n", strings.Join(strings.Fields(batch.Reason), " "))
+		}
+	}
+	return nil
+}
+
+func parseAnalysisRunRetention(value string) (time.Duration, error) {
+	value = strings.TrimSpace(value)
+	if strings.HasSuffix(value, "d") {
+		days, err := strconv.Atoi(strings.TrimSuffix(value, "d"))
+		if err != nil || days < 1 || days > 36500 {
+			return 0, errors.New("число дней должно быть от 1 до 36500")
+		}
+		return time.Duration(days) * 24 * time.Hour, nil
+	}
+	duration, err := time.ParseDuration(value)
+	if err != nil || duration <= 0 {
+		return 0, errors.New("ожидается положительная duration, например 720h или 30d")
+	}
+	return duration, nil
+}
+
+func handleMapPruneRuns(store *Store, args []string) error {
+	var olderThan time.Duration
+	keepLatest := 20
+	dryRun, yes, jsonOutput := false, false, false
+	for i := 0; i < len(args); i++ {
+		switch args[i] {
+		case "-older-than":
+			if i+1 >= len(args) {
+				return errors.New("использование: mem map prune-runs -older-than <duration> [-keep N] [--dry-run|--yes] [--json]")
+			}
+			i++
+			parsed, err := parseAnalysisRunRetention(args[i])
+			if err != nil {
+				return fmt.Errorf("map prune-runs: -older-than: %w", err)
+			}
+			olderThan = parsed
+		case "-keep":
+			if i+1 >= len(args) {
+				return errors.New("использование: mem map prune-runs -older-than <duration> [-keep N] [--dry-run|--yes] [--json]")
+			}
+			i++
+			parsed, err := strconv.Atoi(args[i])
+			if err != nil || parsed < 0 || parsed > 10000 {
+				return errors.New("map prune-runs: -keep должен быть от 0 до 10000")
+			}
+			keepLatest = parsed
+		case "--dry-run":
+			dryRun = true
+		case "--yes":
+			yes = true
+		case "--json":
+			jsonOutput = true
+		default:
+			return fmt.Errorf("неизвестный аргумент map prune-runs: %s", args[i])
+		}
+	}
+	if olderThan == 0 {
+		return errors.New("map prune-runs: обязателен -older-than, например 30d")
+	}
+	if dryRun && yes {
+		return errors.New("map prune-runs: --dry-run и --yes несовместимы")
+	}
+	preview := !yes
+	result, err := store.PruneCompletedCorpusAnalysisRuns(time.Now().UTC().Add(-olderThan), keepLatest, preview)
+	if err != nil {
+		return fmt.Errorf("map prune-runs: %w", err)
+	}
+	if jsonOutput {
+		encoded, err := json.MarshalIndent(result, "", "  ")
+		if err != nil {
+			return fmt.Errorf("map prune-runs: encode report: %w", err)
+		}
+		fmt.Fprintln(os.Stdout, string(encoded))
+		return nil
+	}
+	if preview {
+		fmt.Fprintf(os.Stdout, "Analysis run cleanup preview: candidates=%d completed_before=%s keep_latest=%d\n",
+			len(result.Runs), result.CompletedBefore, result.KeepLatest)
+		for _, run := range result.Runs {
+			fmt.Fprintf(os.Stdout, "- %s [completed] batches=%d updated=%s focus=%s\n",
+				run.ID, run.BatchCount, run.Updated, strings.Join(strings.Fields(run.Focus), " "))
+		}
+		fmt.Fprintln(os.Stdout, "Изменений нет. Для удаления повтори команду с --yes.")
+		return nil
+	}
+	fmt.Fprintf(os.Stdout, "Analysis run cleanup complete: runs=%d batches=%d completed_before=%s keep_latest=%d\n",
+		result.DeletedRuns, result.DeletedBatches, result.CompletedBefore, result.KeepLatest)
 	return nil
 }
 
@@ -1828,6 +2294,28 @@ func printUsage() {
       Проверенные batch-результаты сохраняются как checkpoints; повтор команды
       продолжает run. Knowledge graph изменяется только после завершения всех пакетов.
 
+  mem map duplicates [--json] [-threshold 0.92] [-kind claim] [-nodes N] [-limit N]
+      Найти близкие по смыслу узлы одного kind. Эмбеддится точный label+body,
+      stale/missing/resolved узлы исключаются; результат ничего не объединяет.
+
+  mem map merge-node <manifest.json>
+      После ручной проверки пометить generated draft как resolved в пользу active
+      канонического узла. Манифест закрепляет node/evidence digests из duplicates.
+
+  mem map merges [--json] [-limit N]
+      Показать append-only историю объединений и их текущее current/stale состояние.
+
+  mem map runs [--json] [-limit N] [-status running|completed]
+      Показать историю analysis runs, покрытие и состояния batch-checkpoints.
+
+  mem map run <run-id> [--json]
+      Показать один analysis run со всеми batch-checkpoints и причинами ошибок.
+
+  mem map prune-runs -older-than <duration> [-keep N] [--dry-run|--yes] [--json]
+      Найти завершённые runs старше duration (например 30d или 720h), сохранив
+      последние N (по умолчанию 20). Без --yes выводит preview и ничего не удаляет;
+      running runs никогда не удаляются.
+
   mem map status [--json]
       Показать draft/active/resolved, состояние current/stale/missing для каждого
       evidence anchor и очередь объектов, готовых к подтверждению.
@@ -1845,6 +2333,11 @@ func printUsage() {
 
   mem map export
       Вывести сохранённый граф знаний в JSON (stdout).
+
+  mem map export-html <output.html> [--title <текст>] [--force]
+      Создать автономную офлайн HTML-карту с force-layout, pan/zoom/drag,
+      поиском, фильтрами и provenance-панелью. Существующий файл не меняется
+      без явного --force.
 
   mem recent [-limit N]
       Показать последние записи
@@ -1955,11 +2448,18 @@ func printUsage() {
   mem map build "архитектура импорта" -limit 10
   mem map analyze "требования к рабочему давлению"
   mem map analyze "требования к рабочему давлению" -batches 8 -resume kar-0123456789abcdef0123456789abcdef
+  mem map duplicates --json -kind claim -threshold 0.92
+  mem map merge-node merge-node.json
+  mem map merges
+  mem map runs -status running
+  mem map run kar-0123456789abcdef0123456789abcdef --json
+  mem map prune-runs -older-than 30d -keep 20
   mem map status
   mem map approve node kn-0123456789abcdef0123456789abcdef --reviewer "Руслан"
   mem map approve-batch review-manifest.json
   mem map reviews --json
   mem map export
+  mem map export-html knowledge-map.html --title "Карта проекта"
   mem show 50                            # одна запись целиком
   mem show --from-file docs/arch.md      # все чанки документа
   mem add-file ./документация.txt

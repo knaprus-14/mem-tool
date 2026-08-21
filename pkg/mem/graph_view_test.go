@@ -1,0 +1,83 @@
+package mem
+
+import (
+	"bytes"
+	"encoding/json"
+	"strings"
+	"testing"
+)
+
+func TestKnowledgeMapHTMLContainsOfflineInteractiveProvenancePayload(t *testing.T) {
+	store, anchor := graphStoreAndAnchor(t)
+	defer store.Close()
+	attack := `</script><script>alert("x")</script>`
+	graph := KnowledgeGraph{
+		Nodes: []KnowledgeNode{
+			{ID: "view-claim", Kind: KnowledgeNodeClaim, Label: attack, Body: "Pinned claim", Status: KnowledgeStatusActive, Origin: KnowledgeOriginGenerated, Evidence: []EvidenceAnchor{anchor}},
+			{ID: "view-gap", Kind: KnowledgeNodeGap, Label: "Evidence gap", Status: KnowledgeStatusDraft, Origin: KnowledgeOriginGenerated, Evidence: []EvidenceAnchor{anchor}},
+		},
+		Edges: []KnowledgeEdge{{
+			ID: "view-edge", From: "view-claim", To: "view-gap", Kind: KnowledgeRelationRevealsGap,
+			Status: KnowledgeStatusDraft, Origin: KnowledgeOriginGenerated, Evidence: []EvidenceAnchor{anchor},
+		}},
+	}
+	if err := store.UpsertKnowledgeGraph(graph); err != nil {
+		t.Fatal(err)
+	}
+	data, err := store.BuildKnowledgeMapViewData()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if data.Version != KnowledgeMapViewVersion || len(data.Graph.Nodes) != 2 || len(data.Review.Items) != 3 || data.Merges == nil {
+		t.Fatalf("view payload is incomplete: %#v", data)
+	}
+	var output bytes.Buffer
+	if err := WriteKnowledgeMapHTML(&output, `Map </title><script>alert(1)</script>`, data); err != nil {
+		t.Fatal(err)
+	}
+	html := output.String()
+	for _, marker := range []string{
+		`data-mem-map="v1"`, `Content-Security-Policy`, `function tick`, `pointerdown`,
+		`statusFilters`, `evidenceFilters`, `relationFilters`, `showEvidence`,
+		`contradiction`, `reveals_gap`, `document_revision`,
+	} {
+		if !strings.Contains(html, marker) {
+			t.Errorf("HTML is missing %q", marker)
+		}
+	}
+	if strings.Contains(html, attack) || strings.Contains(html, `</title><script>alert(1)</script>`) {
+		t.Fatal("untrusted title or graph text escaped its data/title context")
+	}
+	if !strings.Contains(html, `\u003c/script\u003e`) || !strings.Contains(html, `&lt;/title&gt;`) {
+		t.Fatal("HTML does not contain safely escaped untrusted text")
+	}
+	if strings.Contains(html, `src="http`) || strings.Contains(html, `href="http`) {
+		t.Fatal("offline map contains a remote dependency")
+	}
+	const payloadStart = `<script id="mem-map-data" type="application/json">`
+	start := strings.Index(html, payloadStart)
+	if start < 0 {
+		t.Fatal("map payload start not found")
+	}
+	start += len(payloadStart)
+	end := strings.Index(html[start:], `</script>`)
+	if end < 0 {
+		t.Fatal("map payload end not found")
+	}
+	var decoded KnowledgeMapViewData
+	if err := json.Unmarshal([]byte(html[start:start+end]), &decoded); err != nil {
+		t.Fatalf("embedded payload is not valid JSON: %v", err)
+	}
+	if len(decoded.Graph.Nodes) != 2 || decoded.Graph.Nodes[0].Label != attack || decoded.Review.Items[0].Evidence[0].Anchor.SourcePath == "" {
+		t.Fatalf("embedded payload lost graph provenance: %#v", decoded)
+	}
+}
+
+func TestKnowledgeMapHTMLRejectsInvalidArguments(t *testing.T) {
+	if err := WriteKnowledgeMapHTML(nil, "", KnowledgeMapViewData{Version: KnowledgeMapViewVersion}); err == nil {
+		t.Fatal("nil writer was accepted")
+	}
+	if err := WriteKnowledgeMapHTML(&bytes.Buffer{}, "", KnowledgeMapViewData{Version: KnowledgeMapViewVersion + 1}); err == nil {
+		t.Fatal("unknown view version was accepted")
+	}
+}

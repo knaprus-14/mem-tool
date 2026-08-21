@@ -66,30 +66,61 @@ const (
 )
 
 type CorpusAnalysisRun struct {
-	ID                string
-	Focus             string
-	ContextChars      int
-	MaxBatches        int
-	GenerationDigest  string
-	PlanDigest        string
-	EligibleClaims    int
-	CoveredClaims     int
-	EligibleDocuments int
-	CoveredDocuments  int
-	Status            CorpusAnalysisRunStatus
-	Created           string
-	Updated           string
-	Batches           []CorpusAnalysisRunBatch
+	ID                string                   `json:"id"`
+	Focus             string                   `json:"focus"`
+	ContextChars      int                      `json:"context_chars"`
+	MaxBatches        int                      `json:"max_batches"`
+	GenerationDigest  string                   `json:"generation_digest"`
+	PlanDigest        string                   `json:"plan_digest"`
+	EligibleClaims    int                      `json:"eligible_claims"`
+	CoveredClaims     int                      `json:"covered_claims"`
+	EligibleDocuments int                      `json:"eligible_documents"`
+	CoveredDocuments  int                      `json:"covered_documents"`
+	Status            CorpusAnalysisRunStatus  `json:"status"`
+	Created           string                   `json:"created"`
+	Updated           string                   `json:"updated"`
+	Batches           []CorpusAnalysisRunBatch `json:"batches"`
 }
 
 type CorpusAnalysisRunBatch struct {
-	Ordinal      int
-	BatchID      string
-	PromptDigest string
-	Status       CorpusAnalysisBatchStatus
-	Graph        KnowledgeGraph
-	Reason       string
-	Updated      string
+	Ordinal      int                       `json:"ordinal"`
+	BatchID      string                    `json:"batch_id"`
+	PromptDigest string                    `json:"prompt_digest"`
+	Status       CorpusAnalysisBatchStatus `json:"status"`
+	Graph        KnowledgeGraph            `json:"graph,omitempty"`
+	Reason       string                    `json:"reason,omitempty"`
+	Updated      string                    `json:"updated"`
+}
+
+// CorpusAnalysisRunSummary is the lightweight, result-free history view used
+// by list and cleanup operations. Failed batches still belong to a running,
+// resumable run and are deliberately reported separately.
+type CorpusAnalysisRunSummary struct {
+	ID                  string                  `json:"id"`
+	Focus               string                  `json:"focus"`
+	ContextChars        int                     `json:"context_chars"`
+	MaxBatches          int                     `json:"max_batches"`
+	EligibleClaims      int                     `json:"eligible_claims"`
+	CoveredClaims       int                     `json:"covered_claims"`
+	EligibleDocuments   int                     `json:"eligible_documents"`
+	CoveredDocuments    int                     `json:"covered_documents"`
+	Status              CorpusAnalysisRunStatus `json:"status"`
+	BatchCount          int                     `json:"batch_count"`
+	PendingBatches      int                     `json:"pending_batches"`
+	CompletedBatches    int                     `json:"completed_batches"`
+	InsufficientBatches int                     `json:"insufficient_batches"`
+	FailedBatches       int                     `json:"failed_batches"`
+	Created             string                  `json:"created"`
+	Updated             string                  `json:"updated"`
+}
+
+type CorpusAnalysisRunPruneResult struct {
+	DryRun          bool                       `json:"dry_run"`
+	CompletedBefore string                     `json:"completed_before"`
+	KeepLatest      int                        `json:"keep_latest"`
+	DeletedRuns     int                        `json:"deleted_runs"`
+	DeletedBatches  int                        `json:"deleted_batches"`
+	Runs            []CorpusAnalysisRunSummary `json:"runs"`
 }
 
 type corpusAnalysisPlanBatchManifest struct {
@@ -260,6 +291,154 @@ func (s *Store) LoadCorpusAnalysisRun(runID string) (CorpusAnalysisRun, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	return loadCorpusAnalysisRun(s.db, runID)
+}
+
+// ListCorpusAnalysisRuns returns newest runs first without loading stored graph
+// fragments. An empty status includes both running and completed runs.
+func (s *Store) ListCorpusAnalysisRuns(limit int, status CorpusAnalysisRunStatus) ([]CorpusAnalysisRunSummary, error) {
+	if limit < 1 || limit > 1000 {
+		return nil, errors.New("analysis run limit must be between 1 and 1000")
+	}
+	if status != "" && status != CorpusAnalysisRunRunning && status != CorpusAnalysisRunCompleted {
+		return nil, fmt.Errorf("unsupported analysis run status %q", status)
+	}
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return listCorpusAnalysisRuns(s.db, limit, status)
+}
+
+func listCorpusAnalysisRuns(q interface {
+	Query(string, ...any) (*sql.Rows, error)
+}, limit int, status CorpusAnalysisRunStatus) ([]CorpusAnalysisRunSummary, error) {
+	query := `SELECT r.id, r.focus, r.context_chars, r.max_batches,
+		r.eligible_claims, r.covered_claims, r.eligible_documents, r.covered_documents,
+		r.status, r.batch_count,
+		COALESCE(SUM(CASE WHEN b.status = ? THEN 1 ELSE 0 END), 0),
+		COALESCE(SUM(CASE WHEN b.status = ? THEN 1 ELSE 0 END), 0),
+		COALESCE(SUM(CASE WHEN b.status = ? THEN 1 ELSE 0 END), 0),
+		COALESCE(SUM(CASE WHEN b.status = ? THEN 1 ELSE 0 END), 0),
+		r.created, r.updated
+		FROM knowledge_analysis_runs r
+		LEFT JOIN knowledge_analysis_batches b ON b.run_id = r.id`
+	args := []any{
+		CorpusAnalysisBatchPending, CorpusAnalysisBatchCompleted,
+		CorpusAnalysisBatchInsufficient, CorpusAnalysisBatchFailed,
+	}
+	if status != "" {
+		query += ` WHERE r.status = ?`
+		args = append(args, status)
+	}
+	query += ` GROUP BY r.id ORDER BY r.updated DESC, r.id DESC`
+	if limit > 0 {
+		query += ` LIMIT ?`
+		args = append(args, limit)
+	}
+	rows, err := q.Query(query, args...)
+	if err != nil {
+		return nil, fmt.Errorf("list analysis runs: %w", err)
+	}
+	defer rows.Close()
+	runs := make([]CorpusAnalysisRunSummary, 0)
+	for rows.Next() {
+		var run CorpusAnalysisRunSummary
+		if err := rows.Scan(
+			&run.ID, &run.Focus, &run.ContextChars, &run.MaxBatches,
+			&run.EligibleClaims, &run.CoveredClaims, &run.EligibleDocuments, &run.CoveredDocuments,
+			&run.Status, &run.BatchCount, &run.PendingBatches, &run.CompletedBatches,
+			&run.InsufficientBatches, &run.FailedBatches, &run.Created, &run.Updated,
+		); err != nil {
+			return nil, fmt.Errorf("scan analysis run summary: %w", err)
+		}
+		if run.Status != CorpusAnalysisRunRunning && run.Status != CorpusAnalysisRunCompleted {
+			return nil, fmt.Errorf("analysis run %q has invalid status %q", run.ID, run.Status)
+		}
+		if run.PendingBatches+run.CompletedBatches+run.InsufficientBatches+run.FailedBatches != run.BatchCount {
+			return nil, fmt.Errorf("analysis run %q batch count mismatch", run.ID)
+		}
+		runs = append(runs, run)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("read analysis run summaries: %w", err)
+	}
+	return runs, nil
+}
+
+// PruneCompletedCorpusAnalysisRuns removes only completed runs older than the
+// cutoff. The newest keepLatest completed runs are protected regardless of
+// age. Running runs, including those with failed batches, are never candidates.
+func (s *Store) PruneCompletedCorpusAnalysisRuns(completedBefore time.Time, keepLatest int, dryRun bool) (CorpusAnalysisRunPruneResult, error) {
+	if completedBefore.IsZero() {
+		return CorpusAnalysisRunPruneResult{}, errors.New("analysis run prune cutoff is required")
+	}
+	if keepLatest < 0 || keepLatest > 10000 {
+		return CorpusAnalysisRunPruneResult{}, errors.New("analysis run keep count must be between 0 and 10000")
+	}
+	cutoff := completedBefore.UTC()
+	result := CorpusAnalysisRunPruneResult{
+		DryRun: dryRun, CompletedBefore: cutoff.Format(time.RFC3339), KeepLatest: keepLatest,
+		Runs: make([]CorpusAnalysisRunSummary, 0),
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	tx, err := s.db.Begin()
+	if err != nil {
+		return CorpusAnalysisRunPruneResult{}, fmt.Errorf("begin analysis run prune: %w", err)
+	}
+	rollback := func(cause error) (CorpusAnalysisRunPruneResult, error) {
+		if rollbackErr := tx.Rollback(); rollbackErr != nil && rollbackErr != sql.ErrTxDone {
+			return CorpusAnalysisRunPruneResult{}, fmt.Errorf("%v; rollback failed: %w", cause, rollbackErr)
+		}
+		return CorpusAnalysisRunPruneResult{}, cause
+	}
+	completed, err := listCorpusAnalysisRuns(tx, 0, CorpusAnalysisRunCompleted)
+	if err != nil {
+		return rollback(err)
+	}
+	for index, run := range completed {
+		if index < keepLatest {
+			continue
+		}
+		updated, parseErr := time.Parse(time.RFC3339, run.Updated)
+		if parseErr != nil {
+			return rollback(fmt.Errorf("analysis run %q has invalid updated timestamp: %w", run.ID, parseErr))
+		}
+		if updated.Before(cutoff) {
+			result.Runs = append(result.Runs, run)
+		}
+	}
+	if dryRun {
+		if err := tx.Rollback(); err != nil && err != sql.ErrTxDone {
+			return CorpusAnalysisRunPruneResult{}, fmt.Errorf("finish analysis run prune preview: %w", err)
+		}
+		return result, nil
+	}
+	for _, run := range result.Runs {
+		batchResult, err := tx.Exec(`DELETE FROM knowledge_analysis_batches WHERE run_id = ?`, run.ID)
+		if err != nil {
+			return rollback(fmt.Errorf("delete analysis run %q batches: %w", run.ID, err))
+		}
+		deletedBatches, err := batchResult.RowsAffected()
+		if err != nil {
+			return rollback(fmt.Errorf("count analysis run %q deleted batches: %w", run.ID, err))
+		}
+		runResult, err := tx.Exec(`DELETE FROM knowledge_analysis_runs WHERE id = ? AND status = ?`, run.ID, CorpusAnalysisRunCompleted)
+		if err != nil {
+			return rollback(fmt.Errorf("delete analysis run %q: %w", run.ID, err))
+		}
+		deletedRuns, err := runResult.RowsAffected()
+		if err != nil {
+			return rollback(fmt.Errorf("count deleted analysis run %q: %w", run.ID, err))
+		}
+		if deletedRuns != 1 {
+			return rollback(fmt.Errorf("completed analysis run %q changed concurrently", run.ID))
+		}
+		result.DeletedRuns += int(deletedRuns)
+		result.DeletedBatches += int(deletedBatches)
+	}
+	if err := tx.Commit(); err != nil {
+		return CorpusAnalysisRunPruneResult{}, fmt.Errorf("commit analysis run prune: %w", err)
+	}
+	return result, nil
 }
 
 func loadCorpusAnalysisRun(q interface {

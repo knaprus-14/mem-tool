@@ -81,6 +81,13 @@ func Scan(opts ScanOptions, store *Store, cfg *mem.Config) (ScanReport, error) {
 	if err != nil {
 		return ScanReport{}, fmt.Errorf("Scan: абсолютный путь: %w", err)
 	}
+	var identity mem.EmbeddingIdentity
+	if opts.Embed {
+		identity, err = mem.EmbeddingIdentityForConfig(cfg)
+		if err != nil {
+			return ScanReport{}, fmt.Errorf("Scan: embedding identity: %w", err)
+		}
+	}
 
 	report := ScanReport{}
 	visited := make(map[string]bool) // relPath → true
@@ -128,9 +135,11 @@ func Scan(opts ScanOptions, store *Store, cfg *mem.Config) (ScanReport, error) {
 		existing, exists := store.GetByPath(relPath)
 
 		// Быстрый skip допустим только для активной записи с теми же метаданными.
-		// Если backend сменился или embedding отсутствует, обычный scan должен
-		// пересчитать вектор даже при неизменном mtime.
-		vectorCurrent := exists && existing.Backend == cfg.Backend && len(existing.Embedding) > 0
+		// Только точное известное vector space можно считать актуальным. Старые
+		// строки без provenance и векторы другой модели пересчитываются даже при
+		// неизменном mtime и той же размерности.
+		vectorCurrent := exists && existing.EmbeddingSpace != "" &&
+			existing.EmbeddingSpace == identity.SpaceID && len(existing.Embedding) > 0
 		sameMetadata := exists && existing.Mtime == info.ModTime().Unix() && existing.Size == info.Size()
 		if exists && !existing.Stale && !opts.Enrich && sameMetadata && (!opts.Embed || vectorCurrent) {
 			report.Skipped++
@@ -151,6 +160,13 @@ func Scan(opts ScanOptions, store *Store, cfg *mem.Config) (ScanReport, error) {
 			Backend: cfg.Backend,
 		}
 		entry.ParentDir = parentDirChain(absRoot, fullPath, 2)
+		if exists {
+			entry.Hash = existing.Hash
+			entry.Tags = existing.Tags
+			if !opts.Enrich {
+				entry.Annotation = existing.Annotation
+			}
+		}
 
 		// Аннотация (если Enrich).
 		annotationFailed := false
@@ -183,10 +199,15 @@ func Scan(opts ScanOptions, store *Store, cfg *mem.Config) (ScanReport, error) {
 			}
 			entry.Embedding = vec
 			entry.Dims = len(vec)
+			entry.Backend = identity.Backend
+			entry.EmbeddingModel = identity.Model
+			entry.EmbeddingSpace = identity.SpaceID
 		} else if exists && (!opts.Enrich || annotationFailed) {
 			entry.Embedding = existing.Embedding
 			entry.Dims = existing.Dims
 			entry.Backend = existing.Backend
+			entry.EmbeddingModel = existing.EmbeddingModel
+			entry.EmbeddingSpace = existing.EmbeddingSpace
 		}
 
 		if opts.DryRun {

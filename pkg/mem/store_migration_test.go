@@ -81,7 +81,7 @@ VALUES ('Legacy', 'legacy text', '[]', '2026-01-01T00:00:00Z', 'test', 1, x'0000
 	wantTables := map[string]bool{
 		"knowledge_nodes": false, "knowledge_edges": false,
 		"knowledge_node_evidence": false, "knowledge_edge_evidence": false,
-		"knowledge_reviews": false, "knowledge_analysis_runs": false,
+		"knowledge_reviews": false, "knowledge_node_merges": false, "knowledge_analysis_runs": false,
 		"knowledge_analysis_batches": false,
 	}
 	tableRows, err := store.db.Query(`SELECT name FROM sqlite_master WHERE type = 'table'`)

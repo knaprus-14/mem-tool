@@ -19,23 +19,25 @@ import (
 // FileEntry — одна запись в каталоге файлов.
 // Path хранится ОТНОСИТЕЛЬНО scan-root (для портабельности БД).
 type FileEntry struct {
-	ID         int64
-	Path       string // relative to scan-root
-	Name       string // basename
-	Ext        string // ".fb2", ".pdf", ...
-	Size       int64
-	Mtime      int64  // unix seconds
-	ParentDir  string // последние 2 уровня parent_dir_chain
-	Hash       string // xxhash первых 64 KB (опционально)
-	Annotation string // извлечённый текст аннотации
-	Backend    string // ollama / polza
-	Embedding  []float32
-	Dims       int
-	Tags       []string
-	Stale      bool
-	CreatedAt  string
-	UpdatedAt  string
-	LastSeenAt string
+	ID             int64
+	Path           string // relative to scan-root
+	Name           string // basename
+	Ext            string // ".fb2", ".pdf", ...
+	Size           int64
+	Mtime          int64  // unix seconds
+	ParentDir      string // последние 2 уровня parent_dir_chain
+	Hash           string // xxhash первых 64 KB (опционально)
+	Annotation     string // извлечённый текст аннотации
+	Backend        string // ollama / polza
+	EmbeddingModel string
+	EmbeddingSpace string
+	Embedding      []float32
+	Dims           int
+	Tags           []string
+	Stale          bool
+	CreatedAt      string
+	UpdatedAt      string
+	LastSeenAt     string
 }
 
 // Scored — обёртка для результатов Search с score.
@@ -74,6 +76,8 @@ CREATE TABLE IF NOT EXISTS files (
     hash TEXT,
     annotation TEXT,
     backend TEXT NOT NULL,
+    embedding_model TEXT NOT NULL DEFAULT '',
+    embedding_space TEXT NOT NULL DEFAULT '',
     dims INTEGER NOT NULL,
     embedding BLOB NOT NULL,
     tags TEXT NOT NULL DEFAULT '[]',
@@ -98,7 +102,7 @@ func NewStore(dir string) (*Store, error) {
 	if err != nil {
 		return nil, fmt.Errorf("открытие БД: %w", err)
 	}
-	if _, err := db.Exec(storeSchema); err != nil {
+	if err := initStoreSchema(db); err != nil {
 		_ = db.Close()
 		return nil, fmt.Errorf("создание схемы: %w", err)
 	}
@@ -110,6 +114,60 @@ func NewStore(dir string) (*Store, error) {
 	return s, nil
 }
 
+type schemaQuerier interface {
+	Query(string, ...any) (*sql.Rows, error)
+	Exec(string, ...any) (sql.Result, error)
+}
+
+func initStoreSchema(db *sql.DB) error {
+	tx, err := db.Begin()
+	if err != nil {
+		return err
+	}
+	if _, err := tx.Exec(storeSchema); err != nil {
+		_ = tx.Rollback()
+		return err
+	}
+	if err := ensureFileColumns(tx); err != nil {
+		_ = tx.Rollback()
+		return err
+	}
+	return tx.Commit()
+}
+
+// ensureFileColumns adds embedding provenance without guessing it for legacy
+// rows. Their empty values mean "unknown" until a normal embedding scan
+// regenerates the vector under the current configuration.
+func ensureFileColumns(q schemaQuerier) error {
+	rows, err := q.Query(`PRAGMA table_info(files)`)
+	if err != nil {
+		return fmt.Errorf("inspect files schema: %w", err)
+	}
+	existing := make(map[string]bool)
+	for rows.Next() {
+		var cid, notNull, primaryKey int
+		var name, columnType string
+		var defaultValue any
+		if err := rows.Scan(&cid, &name, &columnType, &notNull, &defaultValue, &primaryKey); err != nil {
+			rows.Close()
+			return fmt.Errorf("read files schema: %w", err)
+		}
+		existing[name] = true
+	}
+	if err := rows.Close(); err != nil {
+		return err
+	}
+	for _, column := range []string{"embedding_model", "embedding_space"} {
+		if existing[column] {
+			continue
+		}
+		if _, err := q.Exec("ALTER TABLE files ADD COLUMN " + column + " TEXT NOT NULL DEFAULT ''"); err != nil {
+			return fmt.Errorf("add files.%s: %w", column, err)
+		}
+	}
+	return nil
+}
+
 // Close закрывает соединение с БД.
 func (s *Store) Close() error {
 	return s.db.Close()
@@ -118,7 +176,7 @@ func (s *Store) Close() error {
 // loadAll загружает все записи в in-memory кэш.
 func (s *Store) loadAll() error {
 	rows, err := s.db.Query(`SELECT id, path, name, ext, size, mtime, parent_dir, hash,
-		annotation, backend, dims, embedding, tags, stale, created_at, updated_at, last_seen_at
+		annotation, backend, embedding_model, embedding_space, dims, embedding, tags, stale, created_at, updated_at, last_seen_at
 		FROM files ORDER BY id`)
 	if err != nil {
 		return err
@@ -132,7 +190,8 @@ func (s *Store) loadAll() error {
 		var stale int
 
 		if err := rows.Scan(&e.ID, &e.Path, &e.Name, &e.Ext, &e.Size, &e.Mtime,
-			&e.ParentDir, &e.Hash, &e.Annotation, &e.Backend, &e.Dims, &embBytes,
+			&e.ParentDir, &e.Hash, &e.Annotation, &e.Backend, &e.EmbeddingModel,
+			&e.EmbeddingSpace, &e.Dims, &embBytes,
 			&tagsJSON, &stale, &e.CreatedAt, &e.UpdatedAt, &e.LastSeenAt); err != nil {
 			return err
 		}
@@ -166,6 +225,12 @@ func (s *Store) Upsert(entry *FileEntry) error {
 	if entry.Backend == "" {
 		return fmt.Errorf("Upsert: пустой Backend")
 	}
+	if len(entry.Embedding) == 0 {
+		entry.EmbeddingModel = ""
+		entry.EmbeddingSpace = ""
+	} else if (strings.TrimSpace(entry.EmbeddingModel) == "") != (strings.TrimSpace(entry.EmbeddingSpace) == "") {
+		return fmt.Errorf("Upsert: embedding model и space должны быть заданы вместе")
+	}
 	if entry.LastSeenAt == "" {
 		entry.LastSeenAt = time.Now().UTC().Format(time.RFC3339)
 	}
@@ -197,11 +262,12 @@ func (s *Store) Upsert(entry *FileEntry) error {
 		entry.CreatedAt = entry.LastSeenAt
 		entry.UpdatedAt = entry.LastSeenAt
 		res, err := s.db.Exec(`INSERT INTO files
-			(path, name, ext, size, mtime, parent_dir, hash, annotation, backend, dims,
+			(path, name, ext, size, mtime, parent_dir, hash, annotation, backend, embedding_model, embedding_space, dims,
 			 embedding, tags, stale, created_at, updated_at, last_seen_at)
-			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?)`,
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?)`,
 			entry.Path, entry.Name, entry.Ext, entry.Size, entry.Mtime,
-			entry.ParentDir, entry.Hash, entry.Annotation, entry.Backend, entry.Dims,
+			entry.ParentDir, entry.Hash, entry.Annotation, entry.Backend,
+			entry.EmbeddingModel, entry.EmbeddingSpace, entry.Dims,
 			embBytes, tagsJSON, entry.CreatedAt, entry.UpdatedAt, entry.LastSeenAt)
 		if err != nil {
 			return fmt.Errorf("INSERT: %w", err)
@@ -225,11 +291,12 @@ func (s *Store) Upsert(entry *FileEntry) error {
 	entry.ID = existingID
 	_, err = s.db.Exec(`UPDATE files SET
 		name = ?, ext = ?, size = ?, mtime = ?, parent_dir = ?, hash = ?, annotation = ?,
-		backend = ?, dims = ?, embedding = ?, tags = ?, stale = 0,
+		backend = ?, embedding_model = ?, embedding_space = ?, dims = ?, embedding = ?, tags = ?, stale = 0,
 		updated_at = ?, last_seen_at = ?
 		WHERE id = ?`,
 		entry.Name, entry.Ext, entry.Size, entry.Mtime, entry.ParentDir, entry.Hash,
-		entry.Annotation, entry.Backend, entry.Dims, embBytes, tagsJSON,
+		entry.Annotation, entry.Backend, entry.EmbeddingModel, entry.EmbeddingSpace,
+		entry.Dims, embBytes, tagsJSON,
 		entry.UpdatedAt, entry.LastSeenAt, existingID)
 	if err != nil {
 		return fmt.Errorf("UPDATE: %w", err)
@@ -311,14 +378,14 @@ func (s *Store) List(limit int, includeStale bool) ([]FileEntry, error) {
 }
 
 // Search ищет top-K ближайших к queryVec записей (cosine similarity in-Go).
-// Исключает stale, metadata-only записи и векторы от другого backend.
+// Исключает stale, metadata-only, legacy-unknown и несовместимые vector spaces.
 // Применяет гибридный boost: +0.05 если query substring встречается в Name.
-func (s *Store) Search(queryVec []float32, backend string, k int, query string) ([]Scored, error) {
+func (s *Store) Search(queryVec []float32, embeddingSpace string, k int, query string) ([]Scored, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
-	if strings.TrimSpace(backend) == "" {
-		return nil, fmt.Errorf("Search: пустой backend")
+	if strings.TrimSpace(embeddingSpace) == "" {
+		return nil, fmt.Errorf("Search: пустой embedding space")
 	}
 	if len(queryVec) == 0 {
 		return nil, fmt.Errorf("Search: пустой query vector")
@@ -331,7 +398,7 @@ func (s *Store) Search(queryVec []float32, backend string, k int, query string) 
 	var results []Scored
 	for i := range s.files {
 		e := s.files[i]
-		if e.Stale || e.Backend != backend {
+		if e.Stale || e.EmbeddingSpace != embeddingSpace {
 			continue
 		}
 		if len(e.Embedding) == 0 || len(e.Embedding) != len(queryVec) {

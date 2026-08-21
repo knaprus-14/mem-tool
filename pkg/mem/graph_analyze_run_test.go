@@ -1,8 +1,10 @@
 package mem
 
 import (
+	"errors"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestCorpusAnalysisRunPersistsValidatedBatchesAndResumesIdempotently(t *testing.T) {
@@ -162,6 +164,93 @@ func TestCorpusAnalysisRunRejectsTamperedBatchResult(t *testing.T) {
 	}
 	if _, err := store.LoadCorpusAnalysisRun(run.ID); err == nil || !strings.Contains(err.Error(), "digest mismatch") {
 		t.Fatalf("tampered result was accepted: %v", err)
+	}
+}
+
+func TestCorpusAnalysisRunHistoryAndPruneProtectsRunningAndLatest(t *testing.T) {
+	store, plan, budget := corpusAnalysisRunFixture(t)
+	defer store.Close()
+	answer := corpusAnalysisRunAnswerConfig()
+
+	completeRun := func(focus string) CorpusAnalysisRun {
+		t.Helper()
+		run, err := store.PrepareCorpusAnalysisRun(focus, budget, 3, plan, answer, "")
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, batch := range run.Batches {
+			if err := store.SaveCorpusAnalysisBatchInsufficient(run.ID, batch.BatchID, "no cross-document finding"); err != nil {
+				t.Fatal(err)
+			}
+		}
+		if err := store.CompleteCorpusAnalysisRun(run.ID); err != nil {
+			t.Fatal(err)
+		}
+		return run
+	}
+	oldCompleted := completeRun("old completed pressure analysis")
+	latestCompleted := completeRun("latest completed pressure analysis")
+	running, err := store.PrepareCorpusAnalysisRun("resumable pressure analysis", budget, 3, plan, answer, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.SaveCorpusAnalysisBatchFailure(running.ID, running.Batches[0].BatchID, errors.New("temporary model outage")); err != nil {
+		t.Fatal(err)
+	}
+
+	updates := map[string]string{
+		oldCompleted.ID:    "2020-01-01T00:00:00Z",
+		latestCompleted.ID: "2022-01-01T00:00:00Z",
+		running.ID:         "2019-01-01T00:00:00Z",
+	}
+	for id, updated := range updates {
+		if _, err := store.db.Exec(`UPDATE knowledge_analysis_runs SET updated = ? WHERE id = ?`, updated, id); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	runs, err := store.ListCorpusAnalysisRuns(10, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(runs) != 3 || runs[0].ID != latestCompleted.ID || runs[1].ID != oldCompleted.ID || runs[2].ID != running.ID {
+		t.Fatalf("analysis history order is wrong: %#v", runs)
+	}
+	if runs[0].InsufficientBatches != 3 || runs[0].Status != CorpusAnalysisRunCompleted {
+		t.Fatalf("completed summary lost batch counts: %#v", runs[0])
+	}
+	if runs[2].FailedBatches != 1 || runs[2].PendingBatches != 2 || runs[2].Status != CorpusAnalysisRunRunning {
+		t.Fatalf("running summary lost resumable state: %#v", runs[2])
+	}
+
+	cutoff := time.Date(2030, 1, 1, 0, 0, 0, 0, time.UTC)
+	preview, err := store.PruneCompletedCorpusAnalysisRuns(cutoff, 1, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !preview.DryRun || len(preview.Runs) != 1 || preview.Runs[0].ID != oldCompleted.ID || preview.DeletedRuns != 0 {
+		t.Fatalf("unexpected prune preview: %#v", preview)
+	}
+	if _, err := store.LoadCorpusAnalysisRun(oldCompleted.ID); err != nil {
+		t.Fatalf("dry run deleted history: %v", err)
+	}
+
+	pruned, err := store.PruneCompletedCorpusAnalysisRuns(cutoff, 1, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if pruned.DryRun || pruned.DeletedRuns != 1 || pruned.DeletedBatches != 3 || len(pruned.Runs) != 1 {
+		t.Fatalf("unexpected prune result: %#v", pruned)
+	}
+	if _, err := store.LoadCorpusAnalysisRun(oldCompleted.ID); err == nil || !strings.Contains(err.Error(), "not found") {
+		t.Fatalf("old completed run survived prune: %v", err)
+	}
+	if _, err := store.LoadCorpusAnalysisRun(latestCompleted.ID); err != nil {
+		t.Fatalf("latest completed run was not protected: %v", err)
+	}
+	resumable, err := store.LoadCorpusAnalysisRun(running.ID)
+	if err != nil || resumable.Status != CorpusAnalysisRunRunning || resumable.Batches[0].Status != CorpusAnalysisBatchFailed {
+		t.Fatalf("running run was not protected: run=%#v err=%v", resumable, err)
 	}
 }
 

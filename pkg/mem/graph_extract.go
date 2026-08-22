@@ -25,15 +25,18 @@ Return exactly one JSON object and no Markdown. Use one of these forms:
 {"nodes":[{"ref":"n1","kind":"topic","label":"...","body":"...","confidence":0.8,"citations":["exact citation_id"]}],"edges":[{"from":"n1","to":"n2","kind":"supports","label":"...","confidence":0.8,"citations":["exact citation_id"]}]}
 {"insufficient_evidence":"brief explanation"}
 Allowed node kinds by semantic layer:
-- source: document, section, topic, definition, claim, formula, example, procedure;
+- source: document, section, topic, definition, claim, formula, example, procedure, event;
 - analytics: comparison, contradiction, gap, dependency, cause, effect, risk, constraint.
 Do not emit workspace kinds note, question, card, hypothesis, decision, or task; those are created only by explicit user actions.
 Allowed edge kinds: contains, about, supports, contradicts, derived_from, prerequisite,
 related, compares, reveals_gap, resolves, defines, exemplifies, depends_on, causes,
-mitigates, constrains, precedes.
+mitigates, constrains, precedes, happens_before.
 Use directions consistently: container contains member; definition defines subject; example
 exemplifies subject; dependent depends_on prerequisite; cause causes effect/risk; mitigation
-mitigates risk/effect; constraint constrains affected object; earlier step precedes later step.
+mitigates risk/effect; constraint constrains affected object; earlier step precedes later step;
+earlier event happens_before later event only when the evidence explicitly states dates or order.
+Never infer event order from citation order, chunk order, page number, or import timestamps.
+When evidence gives an exact or approximate event date, preserve it in the event label or body.
 Every node and edge must cite at least one exact citation_id from EVIDENCE_JSON.
 Use refs only to connect nodes inside this response. Do not invent persistent IDs, source paths,
 pages, hashes, revisions, citations, or evidence. Keep the graph concise and focused: prefer no

@@ -31,7 +31,7 @@ func TestKnowledgeMapLayoutRoundTripAndDelete(t *testing.T) {
 			Focus:          &KnowledgeMapFocus{NodeID: "layout-node", Depth: 2},
 			Collapsed:      []string{"layout-node"},
 			ClusterLayout:  true,
-			Representation: KnowledgeMapRepresentationCausal,
+			Representation: KnowledgeMapRepresentationTimeline,
 		},
 	}
 	saved, err := store.SaveKnowledgeMapLayout(DefaultKnowledgeMapView, want)
@@ -42,7 +42,7 @@ func TestKnowledgeMapLayoutRoundTripAndDelete(t *testing.T) {
 	if err != nil || loaded == nil || loaded.Nodes["layout-node"].X != want.Nodes["layout-node"].X ||
 		loaded.Viewport.Scale != want.Viewport.Scale || loaded.Updated != saved.Updated ||
 		loaded.State == nil || loaded.State.Focus.NodeID != "layout-node" || !loaded.State.ClusterLayout ||
-		loaded.State.Representation != KnowledgeMapRepresentationCausal {
+		loaded.State.Representation != KnowledgeMapRepresentationTimeline {
 		t.Fatalf("layout round trip failed: loaded=%#v err=%v", loaded, err)
 	}
 	if legacy, err := decodeKnowledgeMapLayout([]byte(`{"version":1,"nodes":{},"viewport":{"scale":1,"x":0,"y":0}}`)); err != nil || legacy.Version != 1 || legacy.State != nil {
@@ -56,6 +56,9 @@ func TestKnowledgeMapLayoutRoundTripAndDelete(t *testing.T) {
 	}
 	if legacy, err := decodeKnowledgeMapLayout([]byte(`{"version":4,"nodes":{},"viewport":{"scale":1,"x":0,"y":0},"state":{"filters":{"statuses":[],"evidence":[],"node_kinds":[],"relation_kinds":[]}}}`)); err != nil || legacy.Version != 4 || legacy.State == nil {
 		t.Fatalf("legacy v4 layout is not readable: layout=%#v err=%v", legacy, err)
+	}
+	if legacy, err := decodeKnowledgeMapLayout([]byte(`{"version":5,"nodes":{},"viewport":{"scale":1,"x":0,"y":0},"state":{"filters":{"statuses":[],"evidence":[],"node_kinds":[],"relation_kinds":[]},"representation":"procedure-sequence"}}`)); err != nil || legacy.Version != 5 || legacy.State == nil || legacy.State.Representation != KnowledgeMapRepresentationProcedure {
+		t.Fatalf("legacy v5 layout is not readable: layout=%#v err=%v", legacy, err)
 	}
 	if err := store.DeleteKnowledgeMapLayout(DefaultKnowledgeMapView); err != nil {
 		t.Fatal(err)
@@ -135,8 +138,14 @@ func TestKnowledgeMapLayoutRejectsInvalidOrUnknownNodes(t *testing.T) {
 		t.Fatalf("unknown layout field was accepted: %v", err)
 	}
 	invalidRepresentation := base
-	invalidRepresentation.State = &KnowledgeMapViewState{Representation: "timeline"}
+	invalidRepresentation.State = &KnowledgeMapViewState{Representation: "matrix"}
 	if _, err := store.SaveKnowledgeMapLayout(DefaultKnowledgeMapView, invalidRepresentation); err == nil || !strings.Contains(err.Error(), "representation") {
 		t.Fatalf("invalid representation was accepted: %v", err)
+	}
+	legacyTimeline := base
+	legacyTimeline.Version = knowledgeMapLayoutV5
+	legacyTimeline.State = &KnowledgeMapViewState{Representation: KnowledgeMapRepresentationTimeline}
+	if _, err := store.SaveKnowledgeMapLayout(DefaultKnowledgeMapView, legacyTimeline); err == nil || !strings.Contains(err.Error(), "version 6") {
+		t.Fatalf("v5 layout accepted timeline representation: %v", err)
 	}
 }

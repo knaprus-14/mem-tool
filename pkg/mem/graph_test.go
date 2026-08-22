@@ -13,7 +13,7 @@ func TestKnowledgeNodeKindsHaveExplicitSemanticLayers(t *testing.T) {
 		KnowledgeLayerSource: {
 			KnowledgeNodeDocument, KnowledgeNodeSection, KnowledgeNodeTopic,
 			KnowledgeNodeDefinition, KnowledgeNodeClaim, KnowledgeNodeFormula,
-			KnowledgeNodeExample, KnowledgeNodeProcedure,
+			KnowledgeNodeExample, KnowledgeNodeProcedure, KnowledgeNodeEvent,
 		},
 		KnowledgeLayerAnalytics: {
 			KnowledgeNodeComparison, KnowledgeNodeContradiction, KnowledgeNodeGap,

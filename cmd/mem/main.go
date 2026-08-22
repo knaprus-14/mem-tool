@@ -1756,7 +1756,7 @@ func cliKnowledgeNodeKind(kind mem.KnowledgeNodeKind) bool {
 	switch kind {
 	case mem.KnowledgeNodeDocument, mem.KnowledgeNodeSection, mem.KnowledgeNodeTopic,
 		mem.KnowledgeNodeDefinition, mem.KnowledgeNodeClaim, mem.KnowledgeNodeFormula,
-		mem.KnowledgeNodeExample, mem.KnowledgeNodeProcedure, mem.KnowledgeNodeComparison,
+		mem.KnowledgeNodeExample, mem.KnowledgeNodeProcedure, mem.KnowledgeNodeEvent, mem.KnowledgeNodeComparison,
 		mem.KnowledgeNodeNote, mem.KnowledgeNodeQuestion, mem.KnowledgeNodeCard,
 		mem.KnowledgeNodeHypothesis, mem.KnowledgeNodeDecision, mem.KnowledgeNodeTask,
 		mem.KnowledgeNodeContradiction, mem.KnowledgeNodeGap, mem.KnowledgeNodeDependency,

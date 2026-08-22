@@ -78,12 +78,12 @@ func TestKnowledgeMapHTMLContainsOfflineInteractiveProvenancePayload(t *testing.
 		`Автор правки`, `Комментарий к правке`, `latest_edits`,
 		`clusterFilters`, `buildTopology`, `clusterCenter`, `cluster_layout`,
 		`navigationAction`, `button.textContent='ФОКУС '+depth`, `СВЕРНУТЬ ВЕТВЬ`, `ПОКАЗАТЬ ВСЁ`,
-		`saveViewBtn`, `viewSelect`, `layoutURL`, `version:5`, `mem_map_last_view`,
+		`saveViewBtn`, `viewSelect`, `layoutURL`, `version:6`, `mem_map_last_view`,
 		`modalBackdrop`, `role="dialog"`, `showModal`, `Новое представление`,
 		`workspaceCreateAction`, `РАБОЧИЙ СЛОЙ`, `СОЗДАТЬ И ПРИВЯЗАТЬ`,
 		`/api/workspace/create`, `expected_parent_content_digest`, `workspace_creations`,
-		`section`, `definition`, `formula`, `procedure`, `comparison`, `dependency`,
-		`cause`, `effect`, `risk`, `constraint`, `depends_on`, `constrains`, `precedes`,
+		`section`, `definition`, `formula`, `procedure`, `event`, `comparison`, `dependency`,
+		`cause`, `effect`, `risk`, `constraint`, `depends_on`, `constrains`, `precedes`, `happens_before`,
 		`hypothesis`, `decision`, `task`, `hypothesizes_about`, `based_on`, `acts_on`,
 		`слой источника`, `аналитический слой`, `Уверенность извлечения`,
 		`Покрытие источниками`, `version<3`, `version<4`, `filterCatalogValues`,
@@ -98,6 +98,11 @@ func TestKnowledgeMapHTMLContainsOfflineInteractiveProvenancePayload(t *testing.
 		`ПРИЧИНЫ И СЛЕДСТВИЯ`, `causalView`, `causalGraph`, `causalRelationKinds`,
 		`buildCausalDiagram`, `causalCurve`, `updateCausalVisibility`,
 		`causes`, `mitigates`, `constrains`, `depends_on`,
+		`ПОСЛЕДОВАТЕЛЬНОСТЬ`, `procedure-sequence`, `procedureView`,
+		`buildProcedureSequences`, `procedureCoordinate`, `updateProcedureVisibility`,
+		`procedure-transition`, `В текущем графе нет связей precedes`,
+		`ХРОНОЛОГИЯ`, `timelineView`, `buildTimeline`, `updateTimelineVisibility`,
+		`timeline-transition`, `События без установленного порядка`, `version<6`,
 	} {
 		if !strings.Contains(html, marker) {
 			t.Errorf("HTML is missing %q", marker)

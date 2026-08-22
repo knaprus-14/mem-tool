@@ -991,7 +991,7 @@ func TestCLIKnowledgeNodeKindAcceptsExpandedSemanticTypes(t *testing.T) {
 	kinds := []mem.KnowledgeNodeKind{
 		mem.KnowledgeNodeDocument, mem.KnowledgeNodeSection, mem.KnowledgeNodeTopic,
 		mem.KnowledgeNodeDefinition, mem.KnowledgeNodeClaim, mem.KnowledgeNodeFormula,
-		mem.KnowledgeNodeExample, mem.KnowledgeNodeProcedure, mem.KnowledgeNodeComparison,
+		mem.KnowledgeNodeExample, mem.KnowledgeNodeProcedure, mem.KnowledgeNodeEvent, mem.KnowledgeNodeComparison,
 		mem.KnowledgeNodeDependency, mem.KnowledgeNodeCause, mem.KnowledgeNodeEffect,
 		mem.KnowledgeNodeRisk, mem.KnowledgeNodeConstraint, mem.KnowledgeNodeNote,
 		mem.KnowledgeNodeQuestion, mem.KnowledgeNodeCard, mem.KnowledgeNodeContradiction,

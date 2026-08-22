@@ -108,6 +108,7 @@ func TestDecodeKnowledgeExtractionAcceptsExpandedSemanticLayers(t *testing.T) {
 		`{"ref":"formula","kind":"formula","label":"Formula","confidence":0.9,"citations":["` + citation + `"]},` +
 		`{"ref":"example","kind":"example","label":"Example","confidence":0.9,"citations":["` + citation + `"]},` +
 		`{"ref":"procedure","kind":"procedure","label":"Procedure","confidence":0.9,"citations":["` + citation + `"]},` +
+		`{"ref":"event","kind":"event","label":"Event","confidence":0.9,"citations":["` + citation + `"]},` +
 		`{"ref":"comparison","kind":"comparison","label":"Comparison","confidence":0.9,"citations":["` + citation + `"]},` +
 		`{"ref":"dependency","kind":"dependency","label":"Dependency","confidence":0.9,"citations":["` + citation + `"]},` +
 		`{"ref":"cause","kind":"cause","label":"Cause","confidence":0.9,"citations":["` + citation + `"]},` +
@@ -123,6 +124,7 @@ func TestDecodeKnowledgeExtractionAcceptsExpandedSemanticLayers(t *testing.T) {
 		`{"from":"procedure","to":"risk","kind":"mitigates","confidence":0.8,"citations":["` + citation + `"]},` +
 		`{"from":"constraint","to":"procedure","kind":"constrains","confidence":0.8,"citations":["` + citation + `"]},` +
 		`{"from":"formula","to":"example","kind":"precedes","confidence":0.8,"citations":["` + citation + `"]},` +
+		`{"from":"event","to":"procedure","kind":"happens_before","confidence":0.8,"citations":["` + citation + `"]},` +
 		`{"from":"comparison","to":"formula","kind":"compares","confidence":0.8,"citations":["` + citation + `"]}` +
 		`]}`
 
@@ -130,7 +132,7 @@ func TestDecodeKnowledgeExtractionAcceptsExpandedSemanticLayers(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(decoded.Graph.Nodes) != 11 || len(decoded.Graph.Edges) != 9 {
+	if len(decoded.Graph.Nodes) != 12 || len(decoded.Graph.Edges) != 10 {
 		t.Fatalf("expanded semantic graph was truncated: %#v", decoded.Graph)
 	}
 	for _, node := range decoded.Graph.Nodes {

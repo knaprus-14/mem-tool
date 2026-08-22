@@ -20,6 +20,7 @@ const (
 	KnowledgeNodeFormula       KnowledgeNodeKind = "formula"
 	KnowledgeNodeExample       KnowledgeNodeKind = "example"
 	KnowledgeNodeProcedure     KnowledgeNodeKind = "procedure"
+	KnowledgeNodeEvent         KnowledgeNodeKind = "event"
 	KnowledgeNodeComparison    KnowledgeNodeKind = "comparison"
 	KnowledgeNodeNote          KnowledgeNodeKind = "note"
 	KnowledgeNodeQuestion      KnowledgeNodeKind = "question"
@@ -47,28 +48,29 @@ const (
 type KnowledgeRelationKind string
 
 const (
-	KnowledgeRelationContains     KnowledgeRelationKind = "contains"
-	KnowledgeRelationAbout        KnowledgeRelationKind = "about"
-	KnowledgeRelationSupports     KnowledgeRelationKind = "supports"
-	KnowledgeRelationContradicts  KnowledgeRelationKind = "contradicts"
-	KnowledgeRelationDerivedFrom  KnowledgeRelationKind = "derived_from"
-	KnowledgeRelationAsks         KnowledgeRelationKind = "asks"
-	KnowledgeRelationAnswers      KnowledgeRelationKind = "answers"
-	KnowledgeRelationPrerequisite KnowledgeRelationKind = "prerequisite"
-	KnowledgeRelationRelated      KnowledgeRelationKind = "related"
-	KnowledgeRelationCompares     KnowledgeRelationKind = "compares"
-	KnowledgeRelationRevealsGap   KnowledgeRelationKind = "reveals_gap"
-	KnowledgeRelationResolves     KnowledgeRelationKind = "resolves"
-	KnowledgeRelationDefines      KnowledgeRelationKind = "defines"
-	KnowledgeRelationExemplifies  KnowledgeRelationKind = "exemplifies"
-	KnowledgeRelationDependsOn    KnowledgeRelationKind = "depends_on"
-	KnowledgeRelationCauses       KnowledgeRelationKind = "causes"
-	KnowledgeRelationMitigates    KnowledgeRelationKind = "mitigates"
-	KnowledgeRelationConstrains   KnowledgeRelationKind = "constrains"
-	KnowledgeRelationPrecedes     KnowledgeRelationKind = "precedes"
-	KnowledgeRelationHypothesizes KnowledgeRelationKind = "hypothesizes_about"
-	KnowledgeRelationBasedOn      KnowledgeRelationKind = "based_on"
-	KnowledgeRelationActsOn       KnowledgeRelationKind = "acts_on"
+	KnowledgeRelationContains      KnowledgeRelationKind = "contains"
+	KnowledgeRelationAbout         KnowledgeRelationKind = "about"
+	KnowledgeRelationSupports      KnowledgeRelationKind = "supports"
+	KnowledgeRelationContradicts   KnowledgeRelationKind = "contradicts"
+	KnowledgeRelationDerivedFrom   KnowledgeRelationKind = "derived_from"
+	KnowledgeRelationAsks          KnowledgeRelationKind = "asks"
+	KnowledgeRelationAnswers       KnowledgeRelationKind = "answers"
+	KnowledgeRelationPrerequisite  KnowledgeRelationKind = "prerequisite"
+	KnowledgeRelationRelated       KnowledgeRelationKind = "related"
+	KnowledgeRelationCompares      KnowledgeRelationKind = "compares"
+	KnowledgeRelationRevealsGap    KnowledgeRelationKind = "reveals_gap"
+	KnowledgeRelationResolves      KnowledgeRelationKind = "resolves"
+	KnowledgeRelationDefines       KnowledgeRelationKind = "defines"
+	KnowledgeRelationExemplifies   KnowledgeRelationKind = "exemplifies"
+	KnowledgeRelationDependsOn     KnowledgeRelationKind = "depends_on"
+	KnowledgeRelationCauses        KnowledgeRelationKind = "causes"
+	KnowledgeRelationMitigates     KnowledgeRelationKind = "mitigates"
+	KnowledgeRelationConstrains    KnowledgeRelationKind = "constrains"
+	KnowledgeRelationPrecedes      KnowledgeRelationKind = "precedes"
+	KnowledgeRelationHappensBefore KnowledgeRelationKind = "happens_before"
+	KnowledgeRelationHypothesizes  KnowledgeRelationKind = "hypothesizes_about"
+	KnowledgeRelationBasedOn       KnowledgeRelationKind = "based_on"
+	KnowledgeRelationActsOn        KnowledgeRelationKind = "acts_on"
 )
 
 type KnowledgeStatus string
@@ -531,7 +533,7 @@ func KnowledgeNodeLayerForKind(kind KnowledgeNodeKind) KnowledgeNodeLayer {
 	switch kind {
 	case KnowledgeNodeDocument, KnowledgeNodeSection, KnowledgeNodeTopic,
 		KnowledgeNodeDefinition, KnowledgeNodeClaim, KnowledgeNodeFormula,
-		KnowledgeNodeExample, KnowledgeNodeProcedure:
+		KnowledgeNodeExample, KnowledgeNodeProcedure, KnowledgeNodeEvent:
 		return KnowledgeLayerSource
 	case KnowledgeNodeComparison, KnowledgeNodeContradiction, KnowledgeNodeGap,
 		KnowledgeNodeDependency, KnowledgeNodeCause, KnowledgeNodeEffect,
@@ -558,7 +560,8 @@ func validKnowledgeRelationKind(kind KnowledgeRelationKind) bool {
 		KnowledgeRelationCompares, KnowledgeRelationRevealsGap, KnowledgeRelationResolves,
 		KnowledgeRelationDefines, KnowledgeRelationExemplifies, KnowledgeRelationDependsOn,
 		KnowledgeRelationCauses, KnowledgeRelationMitigates, KnowledgeRelationConstrains,
-		KnowledgeRelationPrecedes, KnowledgeRelationHypothesizes, KnowledgeRelationBasedOn,
+		KnowledgeRelationPrecedes, KnowledgeRelationHappensBefore,
+		KnowledgeRelationHypothesizes, KnowledgeRelationBasedOn,
 		KnowledgeRelationActsOn:
 		return true
 	default:

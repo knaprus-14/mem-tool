@@ -31,7 +31,7 @@ func TestKnowledgeMapLayoutRoundTripAndDelete(t *testing.T) {
 			Focus:          &KnowledgeMapFocus{NodeID: "layout-node", Depth: 2},
 			Collapsed:      []string{"layout-node"},
 			ClusterLayout:  true,
-			Representation: KnowledgeMapRepresentationDocumentTree,
+			Representation: KnowledgeMapRepresentationCausal,
 		},
 	}
 	saved, err := store.SaveKnowledgeMapLayout(DefaultKnowledgeMapView, want)
@@ -42,7 +42,7 @@ func TestKnowledgeMapLayoutRoundTripAndDelete(t *testing.T) {
 	if err != nil || loaded == nil || loaded.Nodes["layout-node"].X != want.Nodes["layout-node"].X ||
 		loaded.Viewport.Scale != want.Viewport.Scale || loaded.Updated != saved.Updated ||
 		loaded.State == nil || loaded.State.Focus.NodeID != "layout-node" || !loaded.State.ClusterLayout ||
-		loaded.State.Representation != KnowledgeMapRepresentationDocumentTree {
+		loaded.State.Representation != KnowledgeMapRepresentationCausal {
 		t.Fatalf("layout round trip failed: loaded=%#v err=%v", loaded, err)
 	}
 	if legacy, err := decodeKnowledgeMapLayout([]byte(`{"version":1,"nodes":{},"viewport":{"scale":1,"x":0,"y":0}}`)); err != nil || legacy.Version != 1 || legacy.State != nil {
@@ -84,7 +84,7 @@ func TestKnowledgeMapNamedViewsAreListedWithPresentationState(t *testing.T) {
 			Focus:          &KnowledgeMapFocus{ClusterID: "named-view-node"},
 			Collapsed:      []string{"named-view-node"},
 			ClusterLayout:  true,
-			Representation: KnowledgeMapRepresentationDocumentTree,
+			Representation: KnowledgeMapRepresentationCausal,
 		},
 	}
 	if _, err := store.SaveKnowledgeMapLayout("Композиция", layout); err != nil {
@@ -93,7 +93,7 @@ func TestKnowledgeMapNamedViewsAreListedWithPresentationState(t *testing.T) {
 	views, err := store.ListKnowledgeMapViews()
 	if err != nil || len(views) != 2 || views[0].Name != DefaultKnowledgeMapView || views[1].Name != "Композиция" ||
 		!views[1].Focused || views[1].Collapsed != 1 || !views[1].ClusterLayout || views[1].NodeCount != 1 ||
-		views[1].Representation != KnowledgeMapRepresentationDocumentTree {
+		views[1].Representation != KnowledgeMapRepresentationCausal {
 		t.Fatalf("named view summaries are incomplete: views=%#v err=%v", views, err)
 	}
 }

@@ -95,6 +95,9 @@ func TestKnowledgeMapHTMLContainsOfflineInteractiveProvenancePayload(t *testing.
 		`representationSelect`, `document-tree`, `buildDocumentTree`, `sourceName`,
 		`updateDocumentTreeVisibility`, `nodeSearchText`, `ДЕРЕВО ДОКУМЕНТА`,
 		`физической странице`, `state:layoutState()`,
+		`ПРИЧИНЫ И СЛЕДСТВИЯ`, `causalView`, `causalGraph`, `causalRelationKinds`,
+		`buildCausalDiagram`, `causalCurve`, `updateCausalVisibility`,
+		`causes`, `mitigates`, `constrains`, `depends_on`,
 	} {
 		if !strings.Contains(html, marker) {
 			t.Errorf("HTML is missing %q", marker)

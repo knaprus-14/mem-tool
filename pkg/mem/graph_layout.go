@@ -29,6 +29,7 @@ type KnowledgeMapRepresentation string
 const (
 	KnowledgeMapRepresentationGraph        KnowledgeMapRepresentation = "graph"
 	KnowledgeMapRepresentationDocumentTree KnowledgeMapRepresentation = "document-tree"
+	KnowledgeMapRepresentationCausal       KnowledgeMapRepresentation = "causal"
 )
 
 type KnowledgeMapNodePosition struct {
@@ -316,8 +317,9 @@ func validateKnowledgeMapViewState(version int, state KnowledgeMapViewState) err
 		return errors.New("knowledge map representation requires version 5")
 	}
 	if version >= KnowledgeMapLayoutVersion && state.Representation != KnowledgeMapRepresentationGraph &&
-		state.Representation != KnowledgeMapRepresentationDocumentTree {
-		return errors.New("knowledge map representation must be graph or document-tree")
+		state.Representation != KnowledgeMapRepresentationDocumentTree &&
+		state.Representation != KnowledgeMapRepresentationCausal {
+		return errors.New("knowledge map representation must be graph, document-tree, or causal")
 	}
 	if err := validateUniqueMapValues("status", len(state.Filters.Statuses), func(index int) string {
 		value := state.Filters.Statuses[index]

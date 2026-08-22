@@ -37,6 +37,10 @@ mitigates risk/effect; constraint constrains affected object; earlier step prece
 earlier event happens_before later event only when the evidence explicitly states dates or order.
 Never infer event order from citation order, chunk order, page number, or import timestamps.
 When evidence gives an exact or approximate event date, preserve it in the event label or body.
+For a comparison, emit one comparison node that states the exact comparison aspect and connect it
+with compares edges to every compared subject. Cite evidence from each contrasted document on the
+comparison node or its incident compares edge. Never infer similarity or difference merely from
+matching labels, shared topics, citation order, or missing evidence.
 Every node and edge must cite at least one exact citation_id from EVIDENCE_JSON.
 Use refs only to connect nodes inside this response. Do not invent persistent IDs, source paths,
 pages, hashes, revisions, citations, or evidence. Keep the graph concise and focused: prefer no

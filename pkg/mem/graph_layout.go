@@ -13,12 +13,13 @@ import (
 )
 
 const (
-	KnowledgeMapLayoutVersion = 6
+	KnowledgeMapLayoutVersion = 7
 	knowledgeMapLayoutV1      = 1
 	knowledgeMapLayoutV2      = 2
 	knowledgeMapLayoutV3      = 3
 	knowledgeMapLayoutV4      = 4
 	knowledgeMapLayoutV5      = 5
+	knowledgeMapLayoutV6      = 6
 	DefaultKnowledgeMapView   = "default"
 	MaxKnowledgeMapViewNodes  = 10000
 	MaxKnowledgeMapLayoutJSON = 1 << 20
@@ -33,6 +34,7 @@ const (
 	KnowledgeMapRepresentationCausal       KnowledgeMapRepresentation = "causal"
 	KnowledgeMapRepresentationProcedure    KnowledgeMapRepresentation = "procedure-sequence"
 	KnowledgeMapRepresentationTimeline     KnowledgeMapRepresentation = "timeline"
+	KnowledgeMapRepresentationComparison   KnowledgeMapRepresentation = "comparison-matrix"
 )
 
 type KnowledgeMapNodePosition struct {
@@ -285,7 +287,7 @@ func decodeKnowledgeMapLayout(raw []byte) (KnowledgeMapLayout, error) {
 func validateKnowledgeMapLayout(layout KnowledgeMapLayout) error {
 	if layout.Version != knowledgeMapLayoutV1 && layout.Version != knowledgeMapLayoutV2 &&
 		layout.Version != knowledgeMapLayoutV3 && layout.Version != knowledgeMapLayoutV4 &&
-		layout.Version != knowledgeMapLayoutV5 &&
+		layout.Version != knowledgeMapLayoutV5 && layout.Version != knowledgeMapLayoutV6 &&
 		layout.Version != KnowledgeMapLayoutVersion {
 		return fmt.Errorf("unsupported knowledge map layout version %d", layout.Version)
 	}
@@ -324,11 +326,15 @@ func validateKnowledgeMapViewState(version int, state KnowledgeMapViewState) err
 		state.Representation != KnowledgeMapRepresentationDocumentTree &&
 		state.Representation != KnowledgeMapRepresentationCausal &&
 		state.Representation != KnowledgeMapRepresentationProcedure &&
-		state.Representation != KnowledgeMapRepresentationTimeline {
-		return errors.New("knowledge map representation must be graph, document-tree, causal, procedure-sequence, or timeline")
+		state.Representation != KnowledgeMapRepresentationTimeline &&
+		state.Representation != KnowledgeMapRepresentationComparison {
+		return errors.New("knowledge map representation must be graph, document-tree, causal, procedure-sequence, timeline, or comparison-matrix")
 	}
-	if version < KnowledgeMapLayoutVersion && state.Representation == KnowledgeMapRepresentationTimeline {
+	if version < knowledgeMapLayoutV6 && state.Representation == KnowledgeMapRepresentationTimeline {
 		return errors.New("knowledge map timeline representation requires version 6")
+	}
+	if version < KnowledgeMapLayoutVersion && state.Representation == KnowledgeMapRepresentationComparison {
+		return errors.New("knowledge map comparison-matrix representation requires version 7")
 	}
 	if err := validateUniqueMapValues("status", len(state.Filters.Statuses), func(index int) string {
 		value := state.Filters.Statuses[index]

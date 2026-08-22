@@ -50,9 +50,9 @@ type KnowledgeWorkspaceCreateResult struct {
 	Creation KnowledgeWorkspaceCreationRecord `json:"creation"`
 }
 
-// CreateKnowledgeWorkspaceNode creates a draft manual note or question and a
-// draft provenance edge in one transaction. Evidence is copied from the pinned
-// parent only after every anchor is verified against the current corpus.
+// CreateKnowledgeWorkspaceNode creates a draft manual workspace object and a
+// typed draft provenance edge in one transaction. Evidence is copied from the
+// pinned parent only after every anchor is verified against the current corpus.
 func (s *Store) CreateKnowledgeWorkspaceNode(request KnowledgeWorkspaceCreateRequest) (KnowledgeWorkspaceCreateResult, error) {
 	request, err := normalizeKnowledgeWorkspaceCreateRequest(request)
 	if err != nil {
@@ -111,9 +111,9 @@ func (s *Store) CreateKnowledgeWorkspaceNode(request KnowledgeWorkspaceCreateReq
 		}
 	}
 
-	relationKind := KnowledgeRelationDerivedFrom
-	if request.Kind == KnowledgeNodeQuestion {
-		relationKind = KnowledgeRelationAsks
+	relationKind, err := knowledgeWorkspaceRelationForKind(request.Kind)
+	if err != nil {
+		return rollback(err)
 	}
 	now := time.Now().UTC().Format(time.RFC3339Nano)
 	node := KnowledgeNode{
@@ -183,8 +183,8 @@ func normalizeKnowledgeWorkspaceCreateRequest(request KnowledgeWorkspaceCreateRe
 	if err := validateKnowledgeID(request.ParentNodeID); err != nil {
 		return KnowledgeWorkspaceCreateRequest{}, fmt.Errorf("invalid parent node: %w", err)
 	}
-	if request.Kind != KnowledgeNodeNote && request.Kind != KnowledgeNodeQuestion {
-		return KnowledgeWorkspaceCreateRequest{}, errors.New("knowledge workspace kind must be note or question")
+	if _, err := knowledgeWorkspaceRelationForKind(request.Kind); err != nil {
+		return KnowledgeWorkspaceCreateRequest{}, err
 	}
 	if request.Label == "" || !utf8.ValidString(request.Label) || utf8.RuneCountInString(request.Label) > MaxKnowledgeLabelRunes {
 		return KnowledgeWorkspaceCreateRequest{}, fmt.Errorf("knowledge workspace label must contain 1..%d runes", MaxKnowledgeLabelRunes)
@@ -208,6 +208,23 @@ func normalizeKnowledgeWorkspaceCreateRequest(request KnowledgeWorkspaceCreateRe
 		return KnowledgeWorkspaceCreateRequest{}, err
 	}
 	return request, nil
+}
+
+func knowledgeWorkspaceRelationForKind(kind KnowledgeNodeKind) (KnowledgeRelationKind, error) {
+	switch kind {
+	case KnowledgeNodeNote, KnowledgeNodeCard:
+		return KnowledgeRelationDerivedFrom, nil
+	case KnowledgeNodeQuestion:
+		return KnowledgeRelationAsks, nil
+	case KnowledgeNodeHypothesis:
+		return KnowledgeRelationHypothesizes, nil
+	case KnowledgeNodeDecision:
+		return KnowledgeRelationBasedOn, nil
+	case KnowledgeNodeTask:
+		return KnowledgeRelationActsOn, nil
+	default:
+		return "", errors.New("knowledge workspace kind must be note, question, card, hypothesis, decision, or task")
+	}
 }
 
 func newKnowledgeWorkspaceIDs() (string, string, error) {

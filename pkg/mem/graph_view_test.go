@@ -37,7 +37,9 @@ func TestKnowledgeMapHTMLContainsOfflineInteractiveProvenancePayload(t *testing.
 				NodeKinds:     []KnowledgeNodeKind{KnowledgeNodeClaim, KnowledgeNodeGap},
 				RelationKinds: []KnowledgeRelationKind{KnowledgeRelationRevealsGap},
 			},
-			Focus: &KnowledgeMapFocus{NodeID: "view-claim", Depth: 1}, ClusterLayout: true,
+			Focus:          &KnowledgeMapFocus{NodeID: "view-claim", Depth: 1},
+			ClusterLayout:  true,
+			Representation: KnowledgeMapRepresentationDocumentTree,
 		},
 	}); err != nil {
 		t.Fatal(err)
@@ -76,14 +78,23 @@ func TestKnowledgeMapHTMLContainsOfflineInteractiveProvenancePayload(t *testing.
 		`Автор правки`, `Комментарий к правке`, `latest_edits`,
 		`clusterFilters`, `buildTopology`, `clusterCenter`, `cluster_layout`,
 		`navigationAction`, `button.textContent='ФОКУС '+depth`, `СВЕРНУТЬ ВЕТВЬ`, `ПОКАЗАТЬ ВСЁ`,
-		`saveViewBtn`, `viewSelect`, `layoutURL`, `version:3`, `mem_map_last_view`,
+		`saveViewBtn`, `viewSelect`, `layoutURL`, `version:5`, `mem_map_last_view`,
 		`modalBackdrop`, `role="dialog"`, `showModal`, `Новое представление`,
 		`workspaceCreateAction`, `РАБОЧИЙ СЛОЙ`, `СОЗДАТЬ И ПРИВЯЗАТЬ`,
 		`/api/workspace/create`, `expected_parent_content_digest`, `workspace_creations`,
 		`section`, `definition`, `formula`, `procedure`, `comparison`, `dependency`,
 		`cause`, `effect`, `risk`, `constraint`, `depends_on`, `constrains`, `precedes`,
+		`hypothesis`, `decision`, `task`, `hypothesizes_about`, `based_on`, `acts_on`,
 		`слой источника`, `аналитический слой`, `Уверенность извлечения`,
-		`Покрытие источниками`, `(savedLayout?.version||0)<3`,
+		`Покрытие источниками`, `version<3`, `version<4`, `filterCatalogValues`,
+		`item.origin!=='manual'`,
+		`themeBtn`, `mem_map_theme`, `data-theme="light"`, `setTheme`,
+		`leftResizer`, `rightResizer`, `role="separator"`, `mem_map_panel_widths`,
+		`bindPanelResizer`, `applyPanelWidths`, `--left-panel`, `--right-panel`,
+		`ResizeObserver`, `aria-valuenow`, `dblclick`,
+		`representationSelect`, `document-tree`, `buildDocumentTree`, `sourceName`,
+		`updateDocumentTreeVisibility`, `nodeSearchText`, `ДЕРЕВО ДОКУМЕНТА`,
+		`физической странице`, `state:layoutState()`,
 	} {
 		if !strings.Contains(html, marker) {
 			t.Errorf("HTML is missing %q", marker)
@@ -124,7 +135,8 @@ func TestKnowledgeMapHTMLContainsOfflineInteractiveProvenancePayload(t *testing.
 	}
 	if len(decoded.Graph.Nodes) != 2 || decoded.Graph.Nodes[0].Label != attack || decoded.Review.Items[0].Evidence[0].Anchor.SourcePath == "" ||
 		decoded.Layout == nil || decoded.Layout.Nodes["view-claim"].Pinned != true || decoded.Layout.State == nil ||
-		decoded.Layout.State.Focus.NodeID != "view-claim" || !decoded.Layout.State.ClusterLayout || decoded.Workspace != nil {
+		decoded.Layout.State.Focus.NodeID != "view-claim" || !decoded.Layout.State.ClusterLayout ||
+		decoded.Layout.State.Representation != KnowledgeMapRepresentationDocumentTree || decoded.Workspace != nil {
 		t.Fatalf("embedded payload lost graph provenance: %#v", decoded)
 	}
 }

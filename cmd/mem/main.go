@@ -1758,6 +1758,7 @@ func cliKnowledgeNodeKind(kind mem.KnowledgeNodeKind) bool {
 		mem.KnowledgeNodeDefinition, mem.KnowledgeNodeClaim, mem.KnowledgeNodeFormula,
 		mem.KnowledgeNodeExample, mem.KnowledgeNodeProcedure, mem.KnowledgeNodeComparison,
 		mem.KnowledgeNodeNote, mem.KnowledgeNodeQuestion, mem.KnowledgeNodeCard,
+		mem.KnowledgeNodeHypothesis, mem.KnowledgeNodeDecision, mem.KnowledgeNodeTask,
 		mem.KnowledgeNodeContradiction, mem.KnowledgeNodeGap, mem.KnowledgeNodeDependency,
 		mem.KnowledgeNodeCause, mem.KnowledgeNodeEffect, mem.KnowledgeNodeRisk,
 		mem.KnowledgeNodeConstraint:

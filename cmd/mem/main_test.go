@@ -995,6 +995,7 @@ func TestCLIKnowledgeNodeKindAcceptsExpandedSemanticTypes(t *testing.T) {
 		mem.KnowledgeNodeDependency, mem.KnowledgeNodeCause, mem.KnowledgeNodeEffect,
 		mem.KnowledgeNodeRisk, mem.KnowledgeNodeConstraint, mem.KnowledgeNodeNote,
 		mem.KnowledgeNodeQuestion, mem.KnowledgeNodeCard, mem.KnowledgeNodeContradiction,
+		mem.KnowledgeNodeHypothesis, mem.KnowledgeNodeDecision, mem.KnowledgeNodeTask,
 		mem.KnowledgeNodeGap,
 	}
 	for _, kind := range kinds {

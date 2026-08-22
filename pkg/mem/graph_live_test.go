@@ -159,7 +159,9 @@ func TestKnowledgeMapWorkspaceSwitchesAndProtectsNamedViews(t *testing.T) {
 				Statuses: []KnowledgeStatus{KnowledgeStatusDraft}, Evidence: []EvidenceState{EvidenceCurrent},
 				NodeKinds: []KnowledgeNodeKind{KnowledgeNodeTopic}, RelationKinds: []KnowledgeRelationKind{},
 			},
-			Focus: &KnowledgeMapFocus{NodeID: "named-workspace-node", Depth: 2}, ClusterLayout: true,
+			Focus:          &KnowledgeMapFocus{NodeID: "named-workspace-node", Depth: 2},
+			ClusterLayout:  true,
+			Representation: KnowledgeMapRepresentationDocumentTree,
 		},
 	}
 	raw, err := json.Marshal(layout)
@@ -172,7 +174,7 @@ func TestKnowledgeMapWorkspaceSwitchesAndProtectsNamedViews(t *testing.T) {
 		t.Fatalf("named view was not saved: status=%d body=%q", saved.Code, saved.Body.String())
 	}
 	page := requestKnowledgeMap(t, handler, http.MethodGet, "/?view="+url.QueryEscape(viewName), host)
-	for _, marker := range []string{`"view_name":"Композиция кадра"`, `"name":"Композиция кадра"`, `"scale":1.7`, `"depth":2`, `saveViewBtn`, `navigationAction`, `КЛАСТЕРЫ`} {
+	for _, marker := range []string{`"view_name":"Композиция кадра"`, `"name":"Композиция кадра"`, `"scale":1.7`, `"depth":2`, `"representation":"document-tree"`, `saveViewBtn`, `navigationAction`, `КЛАСТЕРЫ`} {
 		if page.Code != http.StatusOK || !strings.Contains(page.Body.String(), marker) {
 			t.Fatalf("named workspace page is missing %q: status=%d", marker, page.Code)
 		}

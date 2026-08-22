@@ -162,7 +162,9 @@ func TestDecodeKnowledgeExtractionRejectsModelInventedAuthority(t *testing.T) {
 		{"invented persistent id", `{"nodes":[{"ref":"n1","id":"attacker-id","kind":"claim","label":"x","confidence":0.5,"citations":["` + citation + `"]}]}`, "unknown field"},
 		{"unknown edge ref", `{"nodes":[{"ref":"n1","kind":"claim","label":"x","confidence":0.5,"citations":["` + citation + `"]}],"edges":[{"from":"n1","to":"n2","kind":"supports","confidence":0.5,"citations":["` + citation + `"]}]}`, "unknown ref"},
 		{"workspace kind", `{"nodes":[{"ref":"n1","kind":"note","label":"x","confidence":0.5,"citations":["` + citation + `"]}]}`, "invalid kind"},
+		{"workspace hypothesis", `{"nodes":[{"ref":"n1","kind":"hypothesis","label":"x","confidence":0.5,"citations":["` + citation + `"]}]}`, "invalid kind"},
 		{"workspace relation", `{"nodes":[{"ref":"n1","kind":"claim","label":"x","confidence":0.5,"citations":["` + citation + `"]},{"ref":"n2","kind":"claim","label":"y","confidence":0.5,"citations":["` + citation + `"]}],"edges":[{"from":"n1","to":"n2","kind":"asks","confidence":0.5,"citations":["` + citation + `"]}]}`, "unsupported kind"},
+		{"workspace task relation", `{"nodes":[{"ref":"n1","kind":"claim","label":"x","confidence":0.5,"citations":["` + citation + `"]},{"ref":"n2","kind":"claim","label":"y","confidence":0.5,"citations":["` + citation + `"]}],"edges":[{"from":"n1","to":"n2","kind":"acts_on","confidence":0.5,"citations":["` + citation + `"]}]}`, "unsupported kind"},
 		{"free form", "claim [" + citation + "]", "strict JSON"},
 	}
 	for _, tt := range tests {

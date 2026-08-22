@@ -24,6 +24,9 @@ const (
 	KnowledgeNodeNote          KnowledgeNodeKind = "note"
 	KnowledgeNodeQuestion      KnowledgeNodeKind = "question"
 	KnowledgeNodeCard          KnowledgeNodeKind = "card"
+	KnowledgeNodeHypothesis    KnowledgeNodeKind = "hypothesis"
+	KnowledgeNodeDecision      KnowledgeNodeKind = "decision"
+	KnowledgeNodeTask          KnowledgeNodeKind = "task"
 	KnowledgeNodeContradiction KnowledgeNodeKind = "contradiction"
 	KnowledgeNodeGap           KnowledgeNodeKind = "gap"
 	KnowledgeNodeDependency    KnowledgeNodeKind = "dependency"
@@ -63,6 +66,9 @@ const (
 	KnowledgeRelationMitigates    KnowledgeRelationKind = "mitigates"
 	KnowledgeRelationConstrains   KnowledgeRelationKind = "constrains"
 	KnowledgeRelationPrecedes     KnowledgeRelationKind = "precedes"
+	KnowledgeRelationHypothesizes KnowledgeRelationKind = "hypothesizes_about"
+	KnowledgeRelationBasedOn      KnowledgeRelationKind = "based_on"
+	KnowledgeRelationActsOn       KnowledgeRelationKind = "acts_on"
 )
 
 type KnowledgeStatus string
@@ -531,7 +537,8 @@ func KnowledgeNodeLayerForKind(kind KnowledgeNodeKind) KnowledgeNodeLayer {
 		KnowledgeNodeDependency, KnowledgeNodeCause, KnowledgeNodeEffect,
 		KnowledgeNodeRisk, KnowledgeNodeConstraint:
 		return KnowledgeLayerAnalytics
-	case KnowledgeNodeNote, KnowledgeNodeQuestion, KnowledgeNodeCard:
+	case KnowledgeNodeNote, KnowledgeNodeQuestion, KnowledgeNodeCard,
+		KnowledgeNodeHypothesis, KnowledgeNodeDecision, KnowledgeNodeTask:
 		return KnowledgeLayerWorkspace
 	default:
 		return ""
@@ -551,7 +558,8 @@ func validKnowledgeRelationKind(kind KnowledgeRelationKind) bool {
 		KnowledgeRelationCompares, KnowledgeRelationRevealsGap, KnowledgeRelationResolves,
 		KnowledgeRelationDefines, KnowledgeRelationExemplifies, KnowledgeRelationDependsOn,
 		KnowledgeRelationCauses, KnowledgeRelationMitigates, KnowledgeRelationConstrains,
-		KnowledgeRelationPrecedes:
+		KnowledgeRelationPrecedes, KnowledgeRelationHypothesizes, KnowledgeRelationBasedOn,
+		KnowledgeRelationActsOn:
 		return true
 	default:
 		return false
@@ -562,9 +570,16 @@ func validKnowledgeExtractionRelationKind(kind KnowledgeRelationKind) bool {
 	if !validKnowledgeRelationKind(kind) {
 		return false
 	}
-	// asks/answers belong to the user workspace. Model extraction must not
-	// manufacture user questions or present generated answers as reviewed work.
-	return kind != KnowledgeRelationAsks && kind != KnowledgeRelationAnswers
+	// These relations belong to explicit user workspace actions. Model
+	// extraction must not manufacture questions, hypotheses, decisions, tasks,
+	// or present generated answers as reviewed user work.
+	switch kind {
+	case KnowledgeRelationAsks, KnowledgeRelationAnswers, KnowledgeRelationHypothesizes,
+		KnowledgeRelationBasedOn, KnowledgeRelationActsOn:
+		return false
+	default:
+		return true
+	}
 }
 
 func validKnowledgeStatus(status KnowledgeStatus) bool {

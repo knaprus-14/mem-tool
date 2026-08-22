@@ -54,10 +54,10 @@ func TestCreateKnowledgeWorkspaceNodeCopiesPinnedCurrentProvenance(t *testing.T)
 	}
 }
 
-func TestCreateKnowledgeWorkspaceQuestionUsesAsksRelation(t *testing.T) {
+func TestCreateKnowledgeWorkspaceNodeUsesKindSpecificRelation(t *testing.T) {
 	store, anchor := graphStoreAndAnchor(t)
 	defer store.Close()
-	const parentID = "question-parent"
+	const parentID = "workspace-relation-parent"
 	if err := store.UpsertKnowledgeGraph(KnowledgeGraph{Nodes: []KnowledgeNode{{
 		ID: parentID, Kind: KnowledgeNodeTopic, Label: "Тема", Status: KnowledgeStatusDraft,
 		Origin: KnowledgeOriginGenerated, Evidence: []EvidenceAnchor{anchor},
@@ -65,16 +65,28 @@ func TestCreateKnowledgeWorkspaceQuestionUsesAsksRelation(t *testing.T) {
 		t.Fatal(err)
 	}
 	parent := knowledgeReviewItemByID(t, store, KnowledgeObjectNode, parentID)
-	result, err := store.CreateKnowledgeWorkspaceNode(KnowledgeWorkspaceCreateRequest{
-		ParentNodeID: parentID, Kind: KnowledgeNodeQuestion, Label: "Почему это так?", Author: "Руслан",
-		ExpectedParentStatus: parent.Status, ExpectedParentContent: parent.ContentDigest,
-		ExpectedEvidence: parent.EvidenceDigest,
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if result.Edge.Kind != KnowledgeRelationAsks || result.Creation.RelationKind != KnowledgeRelationAsks {
-		t.Fatalf("question has the wrong semantic relation: %#v", result)
+	for kind, wantRelation := range map[KnowledgeNodeKind]KnowledgeRelationKind{
+		KnowledgeNodeNote:       KnowledgeRelationDerivedFrom,
+		KnowledgeNodeQuestion:   KnowledgeRelationAsks,
+		KnowledgeNodeCard:       KnowledgeRelationDerivedFrom,
+		KnowledgeNodeHypothesis: KnowledgeRelationHypothesizes,
+		KnowledgeNodeDecision:   KnowledgeRelationBasedOn,
+		KnowledgeNodeTask:       KnowledgeRelationActsOn,
+	} {
+		t.Run(string(kind), func(t *testing.T) {
+			result, err := store.CreateKnowledgeWorkspaceNode(KnowledgeWorkspaceCreateRequest{
+				ParentNodeID: parentID, Kind: kind, Label: "Ручной объект: " + string(kind), Author: "Руслан",
+				ExpectedParentStatus: parent.Status, ExpectedParentContent: parent.ContentDigest,
+				ExpectedEvidence: parent.EvidenceDigest,
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if result.Edge.Kind != wantRelation || result.Creation.RelationKind != wantRelation ||
+				result.Edge.From != result.Node.ID || result.Edge.To != parentID {
+				t.Fatalf("workspace kind %q has the wrong semantic relation: %#v", kind, result)
+			}
+		})
 	}
 }
 

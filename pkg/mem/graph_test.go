@@ -22,6 +22,7 @@ func TestKnowledgeNodeKindsHaveExplicitSemanticLayers(t *testing.T) {
 		},
 		KnowledgeLayerWorkspace: {
 			KnowledgeNodeNote, KnowledgeNodeQuestion, KnowledgeNodeCard,
+			KnowledgeNodeHypothesis, KnowledgeNodeDecision, KnowledgeNodeTask,
 		},
 	}
 	for layer, kinds := range want {

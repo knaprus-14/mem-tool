@@ -27,7 +27,7 @@ Return exactly one JSON object and no Markdown. Use one of these forms:
 Allowed node kinds by semantic layer:
 - source: document, section, topic, definition, claim, formula, example, procedure;
 - analytics: comparison, contradiction, gap, dependency, cause, effect, risk, constraint.
-Do not emit workspace kinds note, question, or card; those are created only by explicit user actions.
+Do not emit workspace kinds note, question, card, hypothesis, decision, or task; those are created only by explicit user actions.
 Allowed edge kinds: contains, about, supports, contradicts, derived_from, prerequisite,
 related, compares, reveals_gap, resolves, defines, exemplifies, depends_on, causes,
 mitigates, constrains, precedes.

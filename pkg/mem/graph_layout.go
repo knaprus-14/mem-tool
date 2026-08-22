@@ -13,13 +13,22 @@ import (
 )
 
 const (
-	KnowledgeMapLayoutVersion = 3
+	KnowledgeMapLayoutVersion = 5
 	knowledgeMapLayoutV1      = 1
 	knowledgeMapLayoutV2      = 2
+	knowledgeMapLayoutV3      = 3
+	knowledgeMapLayoutV4      = 4
 	DefaultKnowledgeMapView   = "default"
 	MaxKnowledgeMapViewNodes  = 10000
 	MaxKnowledgeMapLayoutJSON = 1 << 20
 	MaxKnowledgeMapViews      = 100
+)
+
+type KnowledgeMapRepresentation string
+
+const (
+	KnowledgeMapRepresentationGraph        KnowledgeMapRepresentation = "graph"
+	KnowledgeMapRepresentationDocumentTree KnowledgeMapRepresentation = "document-tree"
 )
 
 type KnowledgeMapNodePosition struct {
@@ -56,10 +65,11 @@ type KnowledgeMapFocus struct {
 // KnowledgeMapViewState is presentation state saved together with positions.
 // It contains no generated knowledge and never changes graph provenance.
 type KnowledgeMapViewState struct {
-	Filters       KnowledgeMapViewFilters `json:"filters"`
-	Focus         *KnowledgeMapFocus      `json:"focus,omitempty"`
-	Collapsed     []string                `json:"collapsed,omitempty"`
-	ClusterLayout bool                    `json:"cluster_layout,omitempty"`
+	Filters        KnowledgeMapViewFilters    `json:"filters"`
+	Focus          *KnowledgeMapFocus         `json:"focus,omitempty"`
+	Collapsed      []string                   `json:"collapsed,omitempty"`
+	ClusterLayout  bool                       `json:"cluster_layout,omitempty"`
+	Representation KnowledgeMapRepresentation `json:"representation,omitempty"`
 }
 
 type KnowledgeMapLayout struct {
@@ -71,12 +81,13 @@ type KnowledgeMapLayout struct {
 }
 
 type KnowledgeMapViewSummary struct {
-	Name          string `json:"name"`
-	Updated       string `json:"updated,omitempty"`
-	NodeCount     int    `json:"node_count"`
-	Focused       bool   `json:"focused"`
-	Collapsed     int    `json:"collapsed"`
-	ClusterLayout bool   `json:"cluster_layout"`
+	Name           string                     `json:"name"`
+	Updated        string                     `json:"updated,omitempty"`
+	NodeCount      int                        `json:"node_count"`
+	Focused        bool                       `json:"focused"`
+	Collapsed      int                        `json:"collapsed"`
+	ClusterLayout  bool                       `json:"cluster_layout"`
+	Representation KnowledgeMapRepresentation `json:"representation,omitempty"`
 }
 
 func (s *Store) LoadKnowledgeMapLayout(name string) (*KnowledgeMapLayout, error) {
@@ -204,6 +215,7 @@ func (s *Store) ListKnowledgeMapViews() ([]KnowledgeMapViewSummary, error) {
 			summary.Focused = layout.State.Focus != nil
 			summary.Collapsed = len(layout.State.Collapsed)
 			summary.ClusterLayout = layout.State.ClusterLayout
+			summary.Representation = layout.State.Representation
 		}
 		views = append(views, summary)
 		hasDefault = hasDefault || name == DefaultKnowledgeMapView
@@ -267,7 +279,9 @@ func decodeKnowledgeMapLayout(raw []byte) (KnowledgeMapLayout, error) {
 }
 
 func validateKnowledgeMapLayout(layout KnowledgeMapLayout) error {
-	if layout.Version != knowledgeMapLayoutV1 && layout.Version != knowledgeMapLayoutV2 && layout.Version != KnowledgeMapLayoutVersion {
+	if layout.Version != knowledgeMapLayoutV1 && layout.Version != knowledgeMapLayoutV2 &&
+		layout.Version != knowledgeMapLayoutV3 && layout.Version != knowledgeMapLayoutV4 &&
+		layout.Version != KnowledgeMapLayoutVersion {
 		return fmt.Errorf("unsupported knowledge map layout version %d", layout.Version)
 	}
 	if len(layout.Nodes) > MaxKnowledgeMapViewNodes {
@@ -290,14 +304,21 @@ func validateKnowledgeMapLayout(layout KnowledgeMapLayout) error {
 		if layout.Version < knowledgeMapLayoutV2 {
 			return errors.New("knowledge map layout state requires version 2")
 		}
-		if err := validateKnowledgeMapViewState(*layout.State); err != nil {
+		if err := validateKnowledgeMapViewState(layout.Version, *layout.State); err != nil {
 			return err
 		}
 	}
 	return nil
 }
 
-func validateKnowledgeMapViewState(state KnowledgeMapViewState) error {
+func validateKnowledgeMapViewState(version int, state KnowledgeMapViewState) error {
+	if version < KnowledgeMapLayoutVersion && state.Representation != "" {
+		return errors.New("knowledge map representation requires version 5")
+	}
+	if version >= KnowledgeMapLayoutVersion && state.Representation != KnowledgeMapRepresentationGraph &&
+		state.Representation != KnowledgeMapRepresentationDocumentTree {
+		return errors.New("knowledge map representation must be graph or document-tree")
+	}
 	if err := validateUniqueMapValues("status", len(state.Filters.Statuses), func(index int) string {
 		value := state.Filters.Statuses[index]
 		if !validKnowledgeStatus(value) {

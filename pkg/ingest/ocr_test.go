@@ -58,7 +58,7 @@ func TestMissingTesseractIsActionableBeforeRendering(t *testing.T) {
 	}
 }
 
-func TestOCRCleanupOnPartialFailure(t *testing.T) {
+func TestOCRContinuesAfterPageLocalFailureAndCleansUp(t *testing.T) {
 	e, tempParent := fakeOCREngine(t)
 	created := ""
 	e.mkdirTemp = func(root, pattern string) (string, error) {
@@ -77,9 +77,13 @@ func TestOCRCleanupOnPartialFailure(t *testing.T) {
 	render := func(_ context.Context, page int, output string) error {
 		return os.WriteFile(output, []byte(fmt.Sprint(page)), 0o600)
 	}
-	_, err := e.ocrRenderedPages(context.Background(), 1, 2, 2, ".png", render)
-	if err == nil || !strings.Contains(err.Error(), "page 2") {
-		t.Fatalf("partial OCR failure hidden: %v", err)
+	pages, err := e.ocrRenderedPages(context.Background(), 1, 2, 2, ".png", render)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(pages) != 2 || pages[0].failed || !pages[1].failed ||
+		len(pages[1].warnings) != 1 || !strings.Contains(pages[1].warnings[0], "page 2") {
+		t.Fatalf("page-local OCR failure was not preserved: %#v", pages)
 	}
 	if _, statErr := os.Stat(created); !os.IsNotExist(statErr) {
 		t.Fatalf("temporary directory was not cleaned: %v", statErr)

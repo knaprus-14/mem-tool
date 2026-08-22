@@ -2,6 +2,7 @@ package mem
 
 import (
 	"crypto/sha256"
+	"database/sql"
 	"encoding/hex"
 	"errors"
 	"fmt"
@@ -24,63 +25,78 @@ type KnowledgeCoverageOptions struct {
 }
 
 type KnowledgeCoverageSummary struct {
-	Documents              int     `json:"documents"`
-	ChunksWithText         int     `json:"chunks_with_text"`
-	PagesWithText          int     `json:"pages_with_text"`
-	ProcessedChunks        int     `json:"processed_chunks"`
-	UnprocessedChunks      int     `json:"unprocessed_chunks"`
-	ProcessingPercent      float64 `json:"processing_percent"`
-	CoveredChunks          int     `json:"covered_chunks"`
-	UncoveredChunks        int     `json:"uncovered_chunks"`
-	CoveragePercent        float64 `json:"coverage_percent"`
-	FullyCoveredPages      int     `json:"fully_covered_pages"`
-	PartiallyCoveredPages  int     `json:"partially_covered_pages"`
-	UncoveredPages         int     `json:"uncovered_pages"`
-	UnlocatedChunks        int     `json:"unlocated_chunks"`
-	LowConfidenceOCRChunks int     `json:"low_confidence_ocr_chunks"`
-	LowConfidenceOCRPages  int     `json:"low_confidence_ocr_pages"`
-	WarningChunks          int     `json:"warning_chunks"`
-	ExtractedNodes         int     `json:"extracted_nodes"`
-	ExtractedRelations     int     `json:"extracted_relations"`
-	DraftObjects           int     `json:"draft_objects"`
-	ActiveObjects          int     `json:"active_objects"`
-	RejectedObjects        int     `json:"rejected_objects"`
-	ResolvedObjects        int     `json:"resolved_objects"`
-	StaleEvidenceObjects   int     `json:"stale_evidence_objects"`
-	MissingEvidenceObjects int     `json:"missing_evidence_objects"`
+	Documents                int     `json:"documents"`
+	ManifestDocuments        int     `json:"manifest_documents"`
+	DocumentsWithoutManifest int     `json:"documents_without_manifest"`
+	PhysicalPagesInScope     int     `json:"physical_pages_in_scope"`
+	StoredPhysicalPages      int     `json:"stored_physical_pages"`
+	EmptyPhysicalPages       int     `json:"empty_physical_pages"`
+	FailedPhysicalPages      int     `json:"failed_physical_pages"`
+	ImportCoveragePercent    float64 `json:"import_coverage_percent"`
+	ChunksWithText           int     `json:"chunks_with_text"`
+	PagesWithText            int     `json:"pages_with_text"`
+	ProcessedChunks          int     `json:"processed_chunks"`
+	UnprocessedChunks        int     `json:"unprocessed_chunks"`
+	ProcessingPercent        float64 `json:"processing_percent"`
+	CoveredChunks            int     `json:"covered_chunks"`
+	UncoveredChunks          int     `json:"uncovered_chunks"`
+	CoveragePercent          float64 `json:"coverage_percent"`
+	FullyCoveredPages        int     `json:"fully_covered_pages"`
+	PartiallyCoveredPages    int     `json:"partially_covered_pages"`
+	UncoveredPages           int     `json:"uncovered_pages"`
+	UnlocatedChunks          int     `json:"unlocated_chunks"`
+	LowConfidenceOCRChunks   int     `json:"low_confidence_ocr_chunks"`
+	LowConfidenceOCRPages    int     `json:"low_confidence_ocr_pages"`
+	WarningChunks            int     `json:"warning_chunks"`
+	ExtractedNodes           int     `json:"extracted_nodes"`
+	ExtractedRelations       int     `json:"extracted_relations"`
+	DraftObjects             int     `json:"draft_objects"`
+	ActiveObjects            int     `json:"active_objects"`
+	RejectedObjects          int     `json:"rejected_objects"`
+	ResolvedObjects          int     `json:"resolved_objects"`
+	StaleEvidenceObjects     int     `json:"stale_evidence_objects"`
+	MissingEvidenceObjects   int     `json:"missing_evidence_objects"`
 }
 
 type KnowledgeDocumentCoverage struct {
-	DocumentID             string                     `json:"document_id"`
-	DocumentRevision       string                     `json:"document_revision"`
-	SourcePath             string                     `json:"source_path"`
-	Title                  string                     `json:"title"`
-	MediaType              string                     `json:"media_type,omitempty"`
-	Tags                   []string                   `json:"tags,omitempty"`
-	ChunksWithText         int                        `json:"chunks_with_text"`
-	PagesWithText          int                        `json:"pages_with_text"`
-	ProcessedChunks        int                        `json:"processed_chunks"`
-	UnprocessedChunks      int                        `json:"unprocessed_chunks"`
-	ProcessingPercent      float64                    `json:"processing_percent"`
-	CoveredChunks          int                        `json:"covered_chunks"`
-	UncoveredChunks        int                        `json:"uncovered_chunks"`
-	CoveragePercent        float64                    `json:"coverage_percent"`
-	FullyCoveredPages      int                        `json:"fully_covered_pages"`
-	PartiallyCoveredPages  int                        `json:"partially_covered_pages"`
-	UncoveredPages         []int                      `json:"uncovered_pages,omitempty"`
-	UnlocatedChunks        int                        `json:"unlocated_chunks"`
-	LowConfidenceOCRChunks int                        `json:"low_confidence_ocr_chunks"`
-	LowConfidenceOCRPages  []int                      `json:"low_confidence_ocr_pages,omitempty"`
-	WarningChunks          int                        `json:"warning_chunks"`
-	ExtractedNodes         int                        `json:"extracted_nodes"`
-	ExtractedRelations     int                        `json:"extracted_relations"`
-	DraftObjects           int                        `json:"draft_objects"`
-	ActiveObjects          int                        `json:"active_objects"`
-	RejectedObjects        int                        `json:"rejected_objects"`
-	ResolvedObjects        int                        `json:"resolved_objects"`
-	StaleEvidenceObjects   int                        `json:"stale_evidence_objects"`
-	MissingEvidenceObjects int                        `json:"missing_evidence_objects"`
-	Warnings               []KnowledgeCoverageWarning `json:"warnings,omitempty"`
+	DocumentID              string                     `json:"document_id"`
+	DocumentRevision        string                     `json:"document_revision"`
+	SourcePath              string                     `json:"source_path"`
+	Title                   string                     `json:"title"`
+	MediaType               string                     `json:"media_type,omitempty"`
+	Tags                    []string                   `json:"tags,omitempty"`
+	ImportManifestAvailable bool                       `json:"import_manifest_available"`
+	PhysicalPageCount       int                        `json:"physical_page_count"`
+	PhysicalPagesInScope    int                        `json:"physical_pages_in_scope"`
+	StoredPhysicalPages     int                        `json:"stored_physical_pages"`
+	EmptyPhysicalPages      []int                      `json:"empty_physical_pages,omitempty"`
+	FailedPhysicalPages     []int                      `json:"failed_physical_pages,omitempty"`
+	ImportCoveragePercent   float64                    `json:"import_coverage_percent"`
+	ImportPageIssues        []KnowledgeImportPageIssue `json:"import_page_issues,omitempty"`
+	ChunksWithText          int                        `json:"chunks_with_text"`
+	PagesWithText           int                        `json:"pages_with_text"`
+	ProcessedChunks         int                        `json:"processed_chunks"`
+	UnprocessedChunks       int                        `json:"unprocessed_chunks"`
+	ProcessingPercent       float64                    `json:"processing_percent"`
+	CoveredChunks           int                        `json:"covered_chunks"`
+	UncoveredChunks         int                        `json:"uncovered_chunks"`
+	CoveragePercent         float64                    `json:"coverage_percent"`
+	FullyCoveredPages       int                        `json:"fully_covered_pages"`
+	PartiallyCoveredPages   int                        `json:"partially_covered_pages"`
+	UncoveredPages          []int                      `json:"uncovered_pages,omitempty"`
+	UnlocatedChunks         int                        `json:"unlocated_chunks"`
+	LowConfidenceOCRChunks  int                        `json:"low_confidence_ocr_chunks"`
+	LowConfidenceOCRPages   []int                      `json:"low_confidence_ocr_pages,omitempty"`
+	WarningChunks           int                        `json:"warning_chunks"`
+	ExtractedNodes          int                        `json:"extracted_nodes"`
+	ExtractedRelations      int                        `json:"extracted_relations"`
+	DraftObjects            int                        `json:"draft_objects"`
+	ActiveObjects           int                        `json:"active_objects"`
+	RejectedObjects         int                        `json:"rejected_objects"`
+	ResolvedObjects         int                        `json:"resolved_objects"`
+	StaleEvidenceObjects    int                        `json:"stale_evidence_objects"`
+	MissingEvidenceObjects  int                        `json:"missing_evidence_objects"`
+	Warnings                []KnowledgeCoverageWarning `json:"warnings,omitempty"`
 }
 
 type KnowledgeCoverageWarning struct {
@@ -88,6 +104,13 @@ type KnowledgeCoverageWarning struct {
 	BlockIndex      int      `json:"block_index"`
 	BlockChunkIndex int      `json:"block_chunk_index"`
 	Messages        []string `json:"messages"`
+}
+
+type KnowledgeImportPageIssue struct {
+	Page             int      `json:"page"`
+	Status           string   `json:"status"`
+	ExtractionMethod string   `json:"extraction_method,omitempty"`
+	Warnings         []string `json:"warnings,omitempty"`
 }
 
 type KnowledgeCoverageReport struct {
@@ -148,16 +171,12 @@ func (s *Store) BuildKnowledgeCoverageReport(options KnowledgeCoverageOptions) (
 			continue
 		}
 		documentMatched = true
-		if !coverageEntryHasTag(entry, options.Tag) || !coverageEntryInPages(entry, options.PageFrom, options.PageTo) {
+		if !coverageEntryHasTag(entry, options.Tag) {
 			continue
 		}
 		if strings.TrimSpace(entry.Text) == "" || entry.DocumentID == "" || entry.DocumentRevision == "" ||
 			entry.ChunkHash == "" || entry.SourcePath == "" || !isSHA256ContentHash(entry.DocumentRevision) ||
 			entry.ChunkHash != ChunkContentHash(entry.Text) {
-			continue
-		}
-		citationID, _ := CitationForEntry(entry)
-		if citationID == "" {
 			continue
 		}
 		docKey := entry.DocumentID + "\x00" + entry.DocumentRevision
@@ -181,18 +200,25 @@ func (s *Store) BuildKnowledgeCoverageReport(options KnowledgeCoverageOptions) (
 			}
 			builders[docKey] = builder
 		}
-		if builder.chunkIDs[citationID] {
-			continue
-		}
-		builder.chunkIDs[citationID] = true
-		selected[citationID] = knowledgeCoverageChunk{entry: entry, docKey: docKey}
-		builder.report.ChunksWithText++
 		for _, tag := range entry.Tags {
 			trimmed := strings.TrimSpace(tag)
 			if trimmed != "" {
 				builder.tags[strings.ToLower(trimmed)] = trimmed
 			}
 		}
+		if !coverageEntryInPages(entry, options.PageFrom, options.PageTo) {
+			continue
+		}
+		citationID, _ := CitationForEntry(entry)
+		if citationID == "" {
+			continue
+		}
+		if builder.chunkIDs[citationID] {
+			continue
+		}
+		builder.chunkIDs[citationID] = true
+		selected[citationID] = knowledgeCoverageChunk{entry: entry, docKey: docKey}
+		builder.report.ChunksWithText++
 		if entry.Page > 0 {
 			if builder.pageChunks[entry.Page] == nil {
 				builder.pageChunks[entry.Page] = make(map[string]bool)
@@ -217,6 +243,18 @@ func (s *Store) BuildKnowledgeCoverageReport(options KnowledgeCoverageOptions) (
 	}
 	if !documentMatched {
 		return KnowledgeCoverageReport{}, fmt.Errorf("coverage document %q was not found in current entries", options.Document)
+	}
+	manifests := make(map[string]DocumentImportManifest)
+	for docKey, builder := range builders {
+		manifest, err := s.loadDocumentImportManifest(builder.report.DocumentID, builder.report.DocumentRevision)
+		if err == sql.ErrNoRows {
+			continue
+		}
+		if err != nil {
+			return KnowledgeCoverageReport{}, fmt.Errorf("load import manifest for %s: %w", builder.report.SourcePath, err)
+		}
+		manifests[docKey] = manifest
+		applyKnowledgeCoverageImportManifest(builder, manifest, options.PageFrom, options.PageTo)
 	}
 	selectedEntries := make([]Entry, 0, len(selected))
 	for _, chunk := range selected {
@@ -292,12 +330,12 @@ func (s *Store) BuildKnowledgeCoverageReport(options KnowledgeCoverageOptions) (
 		Scope:     options,
 		Documents: make([]KnowledgeDocumentCoverage, 0, len(builders)),
 		Limitations: []string{
-			"Coverage is measured only against current versioned chunks stored in the active database.",
-			"Blank, unextracted, or failed physical pages are not part of the denominator unless import preserved a chunk for them.",
+			"Graph coverage is measured against current versioned chunks stored in the active database.",
+			"Physical-page import coverage is available only for revisions imported with a page manifest; older revisions must be re-imported.",
 			"A covered chunk means at least one current map object cites it; it does not prove that every fact in the chunk was extracted.",
 		},
 	}
-	report.SnapshotDigest = knowledgeCoverageSnapshotDigest(options, selected)
+	report.SnapshotDigest = knowledgeCoverageSnapshotDigest(options, selected, manifests)
 	docKeys := make([]string, 0, len(builders))
 	for docKey := range builders {
 		docKeys = append(docKeys, docKey)
@@ -318,6 +356,15 @@ func (s *Store) BuildKnowledgeCoverageReport(options KnowledgeCoverageOptions) (
 		finalizeKnowledgeDocumentCoverage(builder)
 		report.Documents = append(report.Documents, builder.report)
 		report.Summary.Documents++
+		if builder.report.ImportManifestAvailable {
+			report.Summary.ManifestDocuments++
+		} else {
+			report.Summary.DocumentsWithoutManifest++
+		}
+		report.Summary.PhysicalPagesInScope += builder.report.PhysicalPagesInScope
+		report.Summary.StoredPhysicalPages += builder.report.StoredPhysicalPages
+		report.Summary.EmptyPhysicalPages += len(builder.report.EmptyPhysicalPages)
+		report.Summary.FailedPhysicalPages += len(builder.report.FailedPhysicalPages)
 		report.Summary.ChunksWithText += builder.report.ChunksWithText
 		report.Summary.PagesWithText += builder.report.PagesWithText
 		report.Summary.ProcessedChunks += builder.report.ProcessedChunks
@@ -360,7 +407,37 @@ func (s *Store) BuildKnowledgeCoverageReport(options KnowledgeCoverageOptions) (
 	}
 	report.Summary.CoveragePercent = coveragePercent(report.Summary.CoveredChunks, report.Summary.ChunksWithText)
 	report.Summary.ProcessingPercent = coveragePercent(report.Summary.ProcessedChunks, report.Summary.ChunksWithText)
+	report.Summary.ImportCoveragePercent = coveragePercent(report.Summary.StoredPhysicalPages, report.Summary.PhysicalPagesInScope)
 	return report, nil
+}
+
+func applyKnowledgeCoverageImportManifest(builder *knowledgeCoverageDocumentBuilder, manifest DocumentImportManifest, from, to int) {
+	report := &builder.report
+	report.ImportManifestAvailable = true
+	report.PhysicalPageCount = manifest.PhysicalPageCount
+	for _, page := range manifest.Pages {
+		if from > 0 && (page.Page < from || page.Page > to) {
+			continue
+		}
+		report.PhysicalPagesInScope++
+		switch page.Status {
+		case DocumentImportPageStored:
+			report.StoredPhysicalPages++
+		case DocumentImportPageEmpty:
+			report.EmptyPhysicalPages = append(report.EmptyPhysicalPages, page.Page)
+			report.ImportPageIssues = append(report.ImportPageIssues, KnowledgeImportPageIssue{
+				Page: page.Page, Status: page.Status, ExtractionMethod: page.ExtractionMethod,
+				Warnings: append([]string(nil), page.Warnings...),
+			})
+		case DocumentImportPageFailed:
+			report.FailedPhysicalPages = append(report.FailedPhysicalPages, page.Page)
+			report.ImportPageIssues = append(report.ImportPageIssues, KnowledgeImportPageIssue{
+				Page: page.Page, Status: page.Status, ExtractionMethod: page.ExtractionMethod,
+				Warnings: append([]string(nil), page.Warnings...),
+			})
+		}
+	}
+	report.ImportCoveragePercent = coveragePercent(report.StoredPhysicalPages, report.PhysicalPagesInScope)
 }
 
 func finalizeKnowledgeDocumentCoverage(builder *knowledgeCoverageDocumentBuilder) {
@@ -485,9 +562,9 @@ func coverageAnchorBelongsToDocument(anchor EvidenceAnchor, document KnowledgeDo
 	return true
 }
 
-func knowledgeCoverageSnapshotDigest(options KnowledgeCoverageOptions, selected map[string]knowledgeCoverageChunk) string {
+func knowledgeCoverageSnapshotDigest(options KnowledgeCoverageOptions, selected map[string]knowledgeCoverageChunk, manifests map[string]DocumentImportManifest) string {
 	h := sha256.New()
-	writeKnowledgeIDField(h, "knowledge-coverage-snapshot-v1")
+	writeKnowledgeIDField(h, "knowledge-coverage-snapshot-v2")
 	writeKnowledgeIDField(h, options.Document)
 	writeKnowledgeIDField(h, strings.ToLower(options.Tag))
 	writeKnowledgeIDField(h, strconv.Itoa(options.PageFrom))
@@ -503,6 +580,24 @@ func knowledgeCoverageSnapshotDigest(options KnowledgeCoverageOptions, selected 
 		writeKnowledgeIDField(h, citationID)
 		writeKnowledgeIDField(h, chunk.entry.DocumentRevision)
 		writeKnowledgeIDField(h, chunk.entry.ChunkHash)
+	}
+	manifestKeys := make([]string, 0, len(manifests))
+	for key := range manifests {
+		manifestKeys = append(manifestKeys, key)
+	}
+	sort.Strings(manifestKeys)
+	for _, key := range manifestKeys {
+		manifest := manifests[key]
+		writeKnowledgeIDField(h, manifest.DocumentID)
+		writeKnowledgeIDField(h, manifest.DocumentRevision)
+		writeKnowledgeIDField(h, strconv.Itoa(manifest.PhysicalPageCount))
+		for _, page := range manifest.Pages {
+			if options.PageFrom > 0 && (page.Page < options.PageFrom || page.Page > options.PageTo) {
+				continue
+			}
+			writeKnowledgeIDField(h, strconv.Itoa(page.Page))
+			writeKnowledgeIDField(h, page.Status)
+		}
 	}
 	return "sha256:" + hex.EncodeToString(h.Sum(nil))
 }

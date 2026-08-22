@@ -206,6 +206,10 @@ func NewStore(dir string) (*Store, error) {
 		db.Close()
 		return nil, fmt.Errorf("создание схемы: %w", err)
 	}
+	if err := recoverInterruptedImportRuns(db); err != nil {
+		db.Close()
+		return nil, err
+	}
 
 	s := &Store{db: db, path: dbPath, lexicalMode: initLexicalIndex(db), lexicalDirty: true}
 	if err := s.loadAll(); err != nil {
@@ -246,6 +250,14 @@ func initSchema(db *sql.DB) error {
 		_ = tx.Rollback()
 		return err
 	}
+	if _, err := tx.Exec(documentImportManifestSchema); err != nil {
+		_ = tx.Rollback()
+		return err
+	}
+	if _, err := tx.Exec(documentImportRunSchema); err != nil {
+		_ = tx.Rollback()
+		return err
+	}
 	if err := migrateEntrySchema(tx); err != nil {
 		_ = tx.Rollback()
 		return err
@@ -272,6 +284,12 @@ func initSchema(db *sql.DB) error {
 			return err
 		}
 		if _, err := db.Exec(knowledgeExtractionRunSchema); err != nil {
+			return err
+		}
+		if _, err := db.Exec(documentImportManifestSchema); err != nil {
+			return err
+		}
+		if _, err := db.Exec(documentImportRunSchema); err != nil {
 			return err
 		}
 		if err := migrateEntrySchemaDB(db); err != nil {
@@ -821,6 +839,22 @@ func validateDocumentChunk(chunk DocumentChunk, sourcePath string, position, tot
 // removes any stale tail left by an earlier, longer version. The in-memory
 // cache changes only after the SQLite transaction commits.
 func (s *Store) ReplaceDocumentChunks(sourcePath string, chunks []DocumentChunk) error {
+	return s.replaceDocumentChunks(sourcePath, chunks, nil, nil)
+}
+
+// ReplaceDocumentChunksWithManifest atomically replaces document chunks and
+// the exact physical-page extraction manifest used to produce them.
+func (s *Store) ReplaceDocumentChunksWithManifest(sourcePath string, chunks []DocumentChunk, manifest DocumentImportManifest) error {
+	return s.replaceDocumentChunks(sourcePath, chunks, &manifest, nil)
+}
+
+func (s *Store) replaceDocumentChunksForRun(sourcePath string, chunks []DocumentChunk,
+	manifest *DocumentImportManifest, completion *documentImportRunCompletion) error {
+	return s.replaceDocumentChunks(sourcePath, chunks, manifest, completion)
+}
+
+func (s *Store) replaceDocumentChunks(sourcePath string, chunks []DocumentChunk,
+	manifest *DocumentImportManifest, completion *documentImportRunCompletion) error {
 	if sourcePath == "" {
 		return fmt.Errorf("document replacement has an empty source path")
 	}
@@ -917,6 +951,11 @@ func (s *Store) ReplaceDocumentChunks(sourcePath string, chunks []DocumentChunk)
 	if expectedDocumentID != "" && chunks[len(chunks)-1].Provenance.BlockChunkIndex+1 != blockTotal {
 		return fmt.Errorf("source block %d ended after %d/%d chunks", previousBlock, chunks[len(chunks)-1].Provenance.BlockChunkIndex+1, blockTotal)
 	}
+	if manifest != nil {
+		if err := validateDocumentImportManifest(*manifest, sourcePath, chunks); err != nil {
+			return err
+		}
+	}
 
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -951,6 +990,16 @@ func (s *Store) ReplaceDocumentChunks(sourcePath string, chunks []DocumentChunk)
 	}
 	if _, err := tx.Exec(`DELETE FROM entries WHERE source_file = ? AND chunk_index >= ?`, sourcePath, len(prepared)); err != nil {
 		return rollback(fmt.Errorf("prune stale document chunks: %w", err))
+	}
+	if manifest != nil {
+		if err := writeDocumentImportManifestTx(tx, *manifest, now); err != nil {
+			return rollback(err)
+		}
+	}
+	if completion != nil {
+		if err := finishDocumentImportRunTx(tx, *completion, now); err != nil {
+			return rollback(err)
+		}
 	}
 	if err := tx.Commit(); err != nil {
 		return fmt.Errorf("commit document replacement: %w", err)

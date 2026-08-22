@@ -527,6 +527,12 @@ func executeTUICommand(cfg *Config, store *Store, cmd string, args []string) err
 		return handleAddFile(cfg, store, args)
 	case "import":
 		return handleImport(cfg, store, args)
+	case "import-status":
+		return handleImportStatus(store, args)
+	case "import-runs":
+		return handleImportRuns(store, args)
+	case "import-run":
+		return handleImportRun(store, args)
 	case "config":
 		return handleConfig(args)
 	case "stats":
@@ -654,6 +660,9 @@ func tuiCommandMenuItems() []commandMenuEntry {
 		{"add <текст> [флаги]", "сохранить новую запись"},
 		{"add-file <путь> [флаги]", "добавить UTF-8 файл; PDF/DjVu → import"},
 		{"import <путь> [флаги]", "импортировать Markdown/PDF/DjVu с provenance"},
+		{"import-status [флаги]", "показать качество импорта физических страниц"},
+		{"import-runs [флаги]", "журнал успешных, ошибочных и отменённых импортов"},
+		{"import-run <id> [флаги]", "подробности одной попытки импорта"},
 		{"index <путь>", "проиндексировать файл или каталог"},
 		{"recent [-limit N]", "последние записи"},
 		{"show <id> [--from-file путь]", "показать запись или chunks документа"},

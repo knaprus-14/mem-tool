@@ -168,6 +168,63 @@ func TestValidateGroundedAnswerRequiresEveryClaimAndExactIDs(t *testing.T) {
 	}
 }
 
+func TestGroundedAnswerSchemaCompatibilityIsCitationBounded(t *testing.T) {
+	evidence := []GroundedEvidence{{
+		EvidenceRef: "E1", CitationID: testCitation, CitationLabel: "book | page 7", Page: 7, Text: "fact",
+	}}
+	base := AnswerRequest{Model: "yandex/YandexGPT-5-Lite-8B-instruct-GGUF:latest", System: "old", Prompt: "question and evidence", MaxTokens: 777, Temperature: 0.2}
+	request, err := GroundedAnswerSchemaRequest(base, evidence)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if request.Model != base.Model || request.Prompt != base.Prompt || request.MaxTokens != 777 || request.Temperature != 0.2 ||
+		request.System == base.System || len(request.ResponseSchema) == 0 || !json.Valid(request.ResponseSchema) {
+		t.Fatalf("compatibility request changed user settings or missed schema: %#v", request)
+	}
+	if !strings.Contains(string(request.ResponseSchema), `"enum":["E1"]`) || strings.Contains(string(request.ResponseSchema), testCitation) {
+		t.Fatalf("schema is not bounded to short supplied refs: %s", request.ResponseSchema)
+	}
+	valid := ValidateGroundedSchemaAnswer(`{"claims":[{"text":"fact","citations":["E1"]}]}`, evidence)
+	if valid.Rejected || valid.Insufficient || !strings.Contains(valid.Answer, "[1, стр. 7]") {
+		t.Fatalf("schema answer did not use strict validation: %#v", valid)
+	}
+	empty := ValidateGroundedSchemaAnswer(`{"claims":[]}`, evidence)
+	if empty.Rejected || !empty.Insufficient || !strings.Contains(empty.Answer, "Недостаточно") {
+		t.Fatalf("empty schema answer was not handled honestly: %#v", empty)
+	}
+	for _, malformedEmpty := range []string{`{}`, `{"claims":null}`} {
+		got := ValidateGroundedSchemaAnswer(malformedEmpty, evidence)
+		if !got.Rejected || got.Insufficient {
+			t.Fatalf("non-array empty schema answer was accepted: input=%s result=%#v", malformedEmpty, got)
+		}
+	}
+	unknown := ValidateGroundedSchemaAnswer(`{"claims":[{"text":"fact","citations":["E2"]}]}`, evidence)
+	if !unknown.Rejected || len(unknown.UnknownIDs) != 1 {
+		t.Fatalf("schema answer bypassed citation validation: %#v", unknown)
+	}
+	if !UsesGroundedAnswerSchema(base.Model) || UsesGroundedAnswerSchema("gemma4:e2b") {
+		t.Fatal("model compatibility detection changed unrelated models")
+	}
+}
+
+func TestAnswerOnlyEnvelopeGetsNarrowSchemaRetry(t *testing.T) {
+	evidence := []GroundedEvidence{{EvidenceRef: "E1", CitationID: "entry-1", Text: "fact"}}
+	answerOnly := `{"answer":"fact"}`
+	validation := ValidateGroundedAnswer(answerOnly, evidence)
+	if !ShouldRetryGroundedAnswerWithSchema(answerOnly, validation) {
+		t.Fatal("observed answer-only envelope did not enable compatibility retry")
+	}
+	for _, raw := range []string{
+		`fact without citations`,
+		`{"answer":"fact","citations":["E1"]}`,
+		`{"claims":[{"text":"fact","citations":[]}]}`,
+	} {
+		if ShouldRetryGroundedAnswerWithSchema(raw, ValidateGroundedAnswer(raw, evidence)) {
+			t.Fatalf("unsafe broad compatibility retry enabled for %q", raw)
+		}
+	}
+}
+
 func TestOllamaAnswerProviderUsesChatAPIAndBoundsResponse(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var request ollamaChatRequest
@@ -206,7 +263,7 @@ func TestOllamaAnswerProviderOmitsUnsupportedFormatForCloudModel(t *testing.T) {
 			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
 		}
-		if request.Model != "gemma4:cloud" || request.Think == nil || *request.Think || request.Format != "" {
+		if request.Model != "gemma4:cloud" || request.Think == nil || *request.Think || request.Format != nil {
 			http.Error(w, fmt.Sprintf("bad cloud request: %#v", request), http.StatusBadRequest)
 			return
 		}
@@ -222,6 +279,35 @@ func TestOllamaAnswerProviderOmitsUnsupportedFormatForCloudModel(t *testing.T) {
 	answer, err := provider.Generate(context.Background(), AnswerRequest{System: "system", Prompt: "user"})
 	if err != nil || !strings.HasPrefix(answer, `{"insufficient_evidence"`) || strings.Contains(answer, "```") {
 		t.Fatalf("cloud compatibility request failed: answer=%q err=%v", answer, err)
+	}
+}
+
+func TestOllamaAnswerProviderSendsStructuredSchemaOnlyWhenRequested(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var request ollamaChatRequest
+		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		format, ok := request.Format.(map[string]any)
+		if !ok || format["type"] != "object" {
+			http.Error(w, fmt.Sprintf("schema format was not an object: %#v", request.Format), http.StatusBadRequest)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = fmt.Fprint(w, `{"message":{"role":"assistant","content":"{\"claims\":[]}"},"done":true,"done_reason":"stop"}`)
+	}))
+	defer server.Close()
+	provider, err := NewOllamaAnswerProvider(AnswerConfig{BaseURL: server.URL, Model: "local-chat"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	provider.HTTPClient = server.Client()
+	answer, err := provider.Generate(context.Background(), AnswerRequest{
+		System: "system", Prompt: "user", ResponseSchema: json.RawMessage(`{"type":"object"}`),
+	})
+	if err != nil || answer != `{"claims":[]}` {
+		t.Fatalf("structured schema request failed: answer=%q err=%v", answer, err)
 	}
 }
 

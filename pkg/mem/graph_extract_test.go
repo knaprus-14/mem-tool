@@ -93,6 +93,56 @@ func TestDecodeKnowledgeExtractionDerivesStableAnchoredGraph(t *testing.T) {
 	}
 }
 
+func TestDecodeKnowledgeExtractionAcceptsExpandedSemanticLayers(t *testing.T) {
+	store, _ := graphStoreAndAnchor(t)
+	defer store.Close()
+	entries := store.GetBySourceFile(validStructuredChunks()[0].Provenance.SourcePath)
+	prompt, err := BuildKnowledgeExtractionPrompt("semantic layers", entries[:1], 16000, 65)
+	if err != nil {
+		t.Fatal(err)
+	}
+	citation := prompt.Evidence[0].CitationID
+	raw := `{"nodes":[` +
+		`{"ref":"section","kind":"section","label":"Section","confidence":0.9,"citations":["` + citation + `"]},` +
+		`{"ref":"definition","kind":"definition","label":"Definition","confidence":0.9,"citations":["` + citation + `"]},` +
+		`{"ref":"formula","kind":"formula","label":"Formula","confidence":0.9,"citations":["` + citation + `"]},` +
+		`{"ref":"example","kind":"example","label":"Example","confidence":0.9,"citations":["` + citation + `"]},` +
+		`{"ref":"procedure","kind":"procedure","label":"Procedure","confidence":0.9,"citations":["` + citation + `"]},` +
+		`{"ref":"comparison","kind":"comparison","label":"Comparison","confidence":0.9,"citations":["` + citation + `"]},` +
+		`{"ref":"dependency","kind":"dependency","label":"Dependency","confidence":0.9,"citations":["` + citation + `"]},` +
+		`{"ref":"cause","kind":"cause","label":"Cause","confidence":0.9,"citations":["` + citation + `"]},` +
+		`{"ref":"effect","kind":"effect","label":"Effect","confidence":0.9,"citations":["` + citation + `"]},` +
+		`{"ref":"risk","kind":"risk","label":"Risk","confidence":0.9,"citations":["` + citation + `"]},` +
+		`{"ref":"constraint","kind":"constraint","label":"Constraint","confidence":0.9,"citations":["` + citation + `"]}` +
+		`],"edges":[` +
+		`{"from":"section","to":"definition","kind":"contains","confidence":0.8,"citations":["` + citation + `"]},` +
+		`{"from":"definition","to":"formula","kind":"defines","confidence":0.8,"citations":["` + citation + `"]},` +
+		`{"from":"example","to":"formula","kind":"exemplifies","confidence":0.8,"citations":["` + citation + `"]},` +
+		`{"from":"dependency","to":"definition","kind":"depends_on","confidence":0.8,"citations":["` + citation + `"]},` +
+		`{"from":"cause","to":"effect","kind":"causes","confidence":0.8,"citations":["` + citation + `"]},` +
+		`{"from":"procedure","to":"risk","kind":"mitigates","confidence":0.8,"citations":["` + citation + `"]},` +
+		`{"from":"constraint","to":"procedure","kind":"constrains","confidence":0.8,"citations":["` + citation + `"]},` +
+		`{"from":"formula","to":"example","kind":"precedes","confidence":0.8,"citations":["` + citation + `"]},` +
+		`{"from":"comparison","to":"formula","kind":"compares","confidence":0.8,"citations":["` + citation + `"]}` +
+		`]}`
+
+	decoded, err := DecodeKnowledgeExtraction(raw, prompt.Evidence)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(decoded.Graph.Nodes) != 11 || len(decoded.Graph.Edges) != 9 {
+		t.Fatalf("expanded semantic graph was truncated: %#v", decoded.Graph)
+	}
+	for _, node := range decoded.Graph.Nodes {
+		if layer := KnowledgeNodeLayerForKind(node.Kind); layer != KnowledgeLayerSource && layer != KnowledgeLayerAnalytics {
+			t.Fatalf("model extraction produced non-semantic layer %q for %q", layer, node.Kind)
+		}
+	}
+	if err := store.UpsertKnowledgeGraph(decoded.Graph); err != nil {
+		t.Fatalf("expanded semantic graph did not persist: %v", err)
+	}
+}
+
 func TestDecodeKnowledgeExtractionRejectsModelInventedAuthority(t *testing.T) {
 	store, _ := graphStoreAndAnchor(t)
 	defer store.Close()
@@ -111,6 +161,8 @@ func TestDecodeKnowledgeExtractionRejectsModelInventedAuthority(t *testing.T) {
 		{"missing citation", `{"nodes":[{"ref":"n1","kind":"claim","label":"x","confidence":0.5,"citations":[]}]}`, "citations are required"},
 		{"invented persistent id", `{"nodes":[{"ref":"n1","id":"attacker-id","kind":"claim","label":"x","confidence":0.5,"citations":["` + citation + `"]}]}`, "unknown field"},
 		{"unknown edge ref", `{"nodes":[{"ref":"n1","kind":"claim","label":"x","confidence":0.5,"citations":["` + citation + `"]}],"edges":[{"from":"n1","to":"n2","kind":"supports","confidence":0.5,"citations":["` + citation + `"]}]}`, "unknown ref"},
+		{"workspace kind", `{"nodes":[{"ref":"n1","kind":"note","label":"x","confidence":0.5,"citations":["` + citation + `"]}]}`, "invalid kind"},
+		{"workspace relation", `{"nodes":[{"ref":"n1","kind":"claim","label":"x","confidence":0.5,"citations":["` + citation + `"]},{"ref":"n2","kind":"claim","label":"y","confidence":0.5,"citations":["` + citation + `"]}],"edges":[{"from":"n1","to":"n2","kind":"asks","confidence":0.5,"citations":["` + citation + `"]}]}`, "unsupported kind"},
 		{"free form", "claim [" + citation + "]", "strict JSON"},
 	}
 	for _, tt := range tests {

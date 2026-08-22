@@ -64,7 +64,8 @@ const memDirName = mem.MemDirName
 
 // cmdRequiresDB — команды, для работы которых нужна локальная база .mem/
 var cmdRequiresDB = map[string]bool{
-	"add": true, "add-file": true, "import": true, "index": true,
+	"add": true, "add-file": true, "import": true, "import-status": true,
+	"import-runs": true, "import-run": true, "index": true,
 	"config": true,
 	"search": true, "ask": true, "map": true, "recent": true, "stats": true,
 	"source": true, "sources": true,
@@ -203,6 +204,21 @@ func run() int {
 		}
 	case "import":
 		if err := handleImport(cfg, store, args); err != nil {
+			fmt.Fprintf(os.Stderr, "Ошибка: %v\n", err)
+			return 1
+		}
+	case "import-status":
+		if err := handleImportStatus(store, args); err != nil {
+			fmt.Fprintf(os.Stderr, "Ошибка: %v\n", err)
+			return 1
+		}
+	case "import-runs":
+		if err := handleImportRuns(store, args); err != nil {
+			fmt.Fprintf(os.Stderr, "Ошибка: %v\n", err)
+			return 1
+		}
+	case "import-run":
+		if err := handleImportRun(store, args); err != nil {
 			fmt.Fprintf(os.Stderr, "Ошибка: %v\n", err)
 			return 1
 		}
@@ -700,14 +716,37 @@ func handleAsk(cfg *Config, store *Store, args []string) error {
 		}
 	}
 	fmt.Fprintf(os.Stderr, "[ASK] evidence: %d фрагм.; generation через %s...\n", len(prompt.Evidence), answerCfg.Model)
-	rawAnswer, err := provider.Generate(ctx, mem.AnswerRequest{
+	answerRequest := mem.AnswerRequest{
 		Model: answerCfg.Model, System: prompt.System, Prompt: prompt.User,
 		MaxTokens: answerCfg.MaxTokens, Temperature: answerCfg.Temperature,
-	})
+	}
+	schemaMode := mem.UsesGroundedAnswerSchema(answerCfg.Model)
+	if schemaMode {
+		answerRequest, err = mem.GroundedAnswerSchemaRequest(answerRequest, prompt.Evidence)
+		if err != nil {
+			return fmt.Errorf("ask structured response: %w", err)
+		}
+		fmt.Fprintln(os.Stderr, "[ASK] compatibility: модель использует citation-bounded JSON Schema")
+	}
+	rawAnswer, err := provider.Generate(ctx, answerRequest)
 	if err != nil {
 		return fmt.Errorf("ask generation: %w", err)
 	}
 	validated := mem.ValidateGroundedAnswer(rawAnswer, prompt.Evidence)
+	if schemaMode {
+		validated = mem.ValidateGroundedSchemaAnswer(rawAnswer, prompt.Evidence)
+	} else if mem.ShouldRetryGroundedAnswerWithSchema(rawAnswer, validated) {
+		fmt.Fprintln(os.Stderr, "[ASK] compatibility: повторяю generation со строгой схемой citations...")
+		retryRequest, schemaErr := mem.GroundedAnswerSchemaRequest(answerRequest, prompt.Evidence)
+		if schemaErr != nil {
+			return fmt.Errorf("ask compatibility schema: %w", schemaErr)
+		}
+		rawAnswer, err = provider.Generate(ctx, retryRequest)
+		if err != nil {
+			return fmt.Errorf("ask compatibility generation: %w", err)
+		}
+		validated = mem.ValidateGroundedSchemaAnswer(rawAnswer, prompt.Evidence)
+	}
 	if validated.Rejected {
 		if len(validated.UnknownIDs) > 0 {
 			return fmt.Errorf("grounded answer rejected: %s (%s)", validated.Reason, strings.Join(validated.UnknownIDs, ", "))
@@ -1209,6 +1248,15 @@ func printKnowledgeCoverageReport(report mem.KnowledgeCoverageReport) {
 	}
 	fmt.Fprintf(os.Stdout, "Область: %s\n", scope)
 	fmt.Fprintf(os.Stdout, "Документы: %d\n", summary.Documents)
+	if summary.ManifestDocuments > 0 {
+		fmt.Fprintf(os.Stdout, "Импорт физических страниц: сохранено %d из %d (%.1f%%), пусто %d, ошибок %d; манифесты %d/%d документов\n",
+			summary.StoredPhysicalPages, summary.PhysicalPagesInScope, summary.ImportCoveragePercent,
+			summary.EmptyPhysicalPages, summary.FailedPhysicalPages, summary.ManifestDocuments, summary.Documents)
+	}
+	if summary.DocumentsWithoutManifest > 0 {
+		fmt.Fprintf(os.Stdout, "Без манифеста импорта: %d документов — для учёта пустых страниц требуется повторный import\n",
+			summary.DocumentsWithoutManifest)
+	}
 	fmt.Fprintf(os.Stdout, "Обработка заданий: обработано %d из %d chunks (%.1f%%), ожидают обработки %d\n",
 		summary.ProcessedChunks, summary.ChunksWithText, summary.ProcessingPercent, summary.UnprocessedChunks)
 	fmt.Fprintf(os.Stdout, "Chunks с текстом: покрыто %d из %d (%.1f%%), не покрыто %d\n",
@@ -1227,6 +1275,21 @@ func printKnowledgeCoverageReport(report mem.KnowledgeCoverageReport) {
 	for _, document := range report.Documents {
 		fmt.Fprintf(os.Stdout, "\n- %s\n", document.Title)
 		fmt.Fprintf(os.Stdout, "  Источник: %s\n", document.SourcePath)
+		if document.ImportManifestAvailable {
+			fmt.Fprintf(os.Stdout, "  Импорт страниц: %d/%d в области (%.1f%%); всего в документе %d; пустые %s; ошибки %s\n",
+				document.StoredPhysicalPages, document.PhysicalPagesInScope, document.ImportCoveragePercent,
+				document.PhysicalPageCount, formatCoveragePages(document.EmptyPhysicalPages, 24),
+				formatCoveragePages(document.FailedPhysicalPages, 24))
+			for _, issue := range document.ImportPageIssues {
+				reason := strings.Join(strings.Fields(strings.Join(issue.Warnings, "; ")), " ")
+				if reason == "" {
+					reason = "причина не указана"
+				}
+				fmt.Fprintf(os.Stdout, "  Страница %d [%s]: %s\n", issue.Page, issue.Status, reason)
+			}
+		} else {
+			fmt.Fprintln(os.Stdout, "  Манифест физических страниц отсутствует: повторите import этой ревизии новой версией mem.")
+		}
 		fmt.Fprintf(os.Stdout, "  Chunks: %d/%d (%.1f%%); страницы: всего %d, полностью %d, частично %d, не покрыто %d\n",
 			document.CoveredChunks, document.ChunksWithText, document.CoveragePercent,
 			document.PagesWithText, document.FullyCoveredPages, document.PartiallyCoveredPages, len(document.UncoveredPages))
@@ -1253,7 +1316,7 @@ func printKnowledgeCoverageReport(report mem.KnowledgeCoverageReport) {
 				warning.BlockIndex, warning.BlockChunkIndex, strings.Join(strings.Fields(strings.Join(warning.Messages, "; ")), " "))
 		}
 	}
-	fmt.Fprintln(os.Stdout, "\nВажно: знаменатель включает только versioned chunks, уже сохранённые в активной базе. Пустые или не извлечённые при импорте физические страницы этот отчёт сам восстановить не может.")
+	fmt.Fprintln(os.Stdout, "\nВажно: graph coverage считается по versioned chunks; import coverage отдельно учитывает все физические страницы из сохранённого манифеста.")
 }
 
 func formatCoveragePages(pages []int, limit int) string {
@@ -1691,8 +1754,13 @@ func handleMapDuplicates(cfg *Config, store *Store, args []string) error {
 
 func cliKnowledgeNodeKind(kind mem.KnowledgeNodeKind) bool {
 	switch kind {
-	case mem.KnowledgeNodeDocument, mem.KnowledgeNodeTopic, mem.KnowledgeNodeClaim, mem.KnowledgeNodeNote,
-		mem.KnowledgeNodeQuestion, mem.KnowledgeNodeCard, mem.KnowledgeNodeContradiction, mem.KnowledgeNodeGap:
+	case mem.KnowledgeNodeDocument, mem.KnowledgeNodeSection, mem.KnowledgeNodeTopic,
+		mem.KnowledgeNodeDefinition, mem.KnowledgeNodeClaim, mem.KnowledgeNodeFormula,
+		mem.KnowledgeNodeExample, mem.KnowledgeNodeProcedure, mem.KnowledgeNodeComparison,
+		mem.KnowledgeNodeNote, mem.KnowledgeNodeQuestion, mem.KnowledgeNodeCard,
+		mem.KnowledgeNodeContradiction, mem.KnowledgeNodeGap, mem.KnowledgeNodeDependency,
+		mem.KnowledgeNodeCause, mem.KnowledgeNodeEffect, mem.KnowledgeNodeRisk,
+		mem.KnowledgeNodeConstraint:
 		return true
 	default:
 		return false
@@ -2462,6 +2530,10 @@ func handleImport(cfg *Config, store *Store, args []string) error {
 		},
 	})
 	if err != nil {
+		if result.RunID > 0 {
+			return fmt.Errorf("запуск импорта #%d завершён со статусом %s: %w; детали: mem import-run %d",
+				result.RunID, importRunStatusLabel(result.Status), err, result.RunID)
+		}
 		return err
 	}
 	pageSummary := "без известных страниц"
@@ -2469,13 +2541,309 @@ func handleImport(cfg *Config, store *Store, args []string) error {
 		pageSummary = fmt.Sprintf("%d страниц с текстом", len(result.Pages))
 	}
 	fmt.Printf("[OK] Документ импортирован: %s\n", result.SourcePath)
+	if result.RunID > 0 {
+		fmt.Printf("     запуск #%d · статус: %s\n", result.RunID, importRunStatusLabel(result.Status))
+	}
 	fmt.Printf("     document=%s | blocks=%d | chunks=%d | %s\n",
 		result.DocumentID, result.Blocks, result.Chunks, pageSummary)
+	if result.PhysicalPages > 0 {
+		fmt.Printf("     physical pages=%d | stored=%d | empty=%d | failed=%d\n",
+			result.PhysicalPages, result.StoredPages, result.EmptyPages, result.FailedPages)
+	}
 	fmt.Printf("     revision=%s\n", result.DocumentRevision)
 	for _, warning := range result.Warnings {
 		fmt.Printf("[WARN] %s\n", warning)
 	}
 	return nil
+}
+
+func handleImportStatus(store *Store, args []string) error {
+	selector := ""
+	jsonOutput := false
+	allPages := false
+	for index := 0; index < len(args); index++ {
+		switch args[index] {
+		case "--document":
+			if index+1 >= len(args) || strings.TrimSpace(args[index+1]) == "" {
+				return fmt.Errorf("import-status: --document требует путь или document-id")
+			}
+			selector = args[index+1]
+			index++
+		case "--json":
+			jsonOutput = true
+		case "--all-pages":
+			allPages = true
+		default:
+			return fmt.Errorf("использование: mem import-status [--document <путь|document-id>] [--all-pages] [--json]")
+		}
+	}
+	manifests, err := store.CurrentDocumentImportManifests(selector)
+	if err != nil {
+		return err
+	}
+	if jsonOutput {
+		encoder := json.NewEncoder(os.Stdout)
+		encoder.SetIndent("", "  ")
+		return encoder.Encode(manifests)
+	}
+	if len(manifests) == 0 {
+		fmt.Fprintln(os.Stdout, "В текущей базе нет импортированных versioned-документов.")
+		return nil
+	}
+	fmt.Fprintln(os.Stdout, "Манифесты импорта физических страниц")
+	fmt.Fprintln(os.Stdout, "-------------------------------------")
+	for _, manifest := range manifests {
+		fmt.Fprintf(os.Stdout, "\n%s\n", manifest.SourcePath)
+		if !manifest.Available {
+			fmt.Fprintln(os.Stdout, "  Манифест отсутствует: документ импортирован старой версией; для точного отчёта импортируйте его заново.")
+			continue
+		}
+		fmt.Fprintf(os.Stdout, "  Формат: %s · импорт: %s\n", manifest.Format, manifest.ImportedAt)
+		fmt.Fprintf(os.Stdout, "  Физические страницы: %d · сохранено: %d · пусто: %d · ошибок: %d\n",
+			manifest.PhysicalPageCount, manifest.StoredPages, manifest.EmptyPages, manifest.FailedPages)
+		fmt.Fprintf(os.Stdout, "  Блоки: %d · чанки: %d · диапазон: %d-%d\n",
+			manifest.Blocks, manifest.Chunks, manifest.SelectedPageFirst, manifest.SelectedPageLast)
+		shown := 0
+		for _, page := range manifest.Pages {
+			if !allPages && page.Status == mem.DocumentImportPageStored && len(page.Warnings) == 0 {
+				continue
+			}
+			method := page.ExtractionMethod
+			if method == "" {
+				method = "нет текста"
+			}
+			fmt.Fprintf(os.Stdout, "  - стр. %d: %s · метод: %s · символов: %d · чанков: %d\n",
+				page.Page, page.Status, method, page.TextRunes, page.ChunkCount)
+			for _, warning := range page.Warnings {
+				fmt.Fprintf(os.Stdout, "      причина: %s\n", warning)
+			}
+			shown++
+		}
+		if shown == 0 && !allPages {
+			fmt.Fprintln(os.Stdout, "  Проблемных страниц нет. Для полного списка используйте --all-pages.")
+		}
+	}
+	return nil
+}
+
+func handleImportRuns(store *Store, args []string) error {
+	selector := ""
+	status := ""
+	limit := 20
+	jsonOutput := false
+	for index := 0; index < len(args); index++ {
+		switch args[index] {
+		case "--document":
+			if index+1 >= len(args) || strings.TrimSpace(args[index+1]) == "" {
+				return fmt.Errorf("import-runs: --document требует путь или document-id")
+			}
+			selector = args[index+1]
+			index++
+		case "--status":
+			if index+1 >= len(args) {
+				return fmt.Errorf("import-runs: --status требует значение")
+			}
+			status = strings.ToLower(args[index+1])
+			index++
+		case "-limit", "--limit":
+			if index+1 >= len(args) {
+				return fmt.Errorf("import-runs: -limit требует число")
+			}
+			value, err := strconv.Atoi(args[index+1])
+			if err != nil || value <= 0 {
+				return fmt.Errorf("import-runs: limit должен быть положительным числом")
+			}
+			limit = value
+			index++
+		case "--json":
+			jsonOutput = true
+		default:
+			return fmt.Errorf("использование: mem import-runs [--document <путь|document-id>] [--status <статус>] [-limit N] [--json]")
+		}
+	}
+	runs, err := store.DocumentImportRuns(selector, status, limit)
+	if err != nil {
+		return err
+	}
+	if jsonOutput {
+		encoder := json.NewEncoder(os.Stdout)
+		encoder.SetIndent("", "  ")
+		return encoder.Encode(runs)
+	}
+	if len(runs) == 0 {
+		fmt.Fprintln(os.Stdout, "Запусков импорта по заданному фильтру нет.")
+		return nil
+	}
+	fmt.Fprintln(os.Stdout, "Журнал попыток импорта")
+	fmt.Fprintln(os.Stdout, "------------------------")
+	for _, run := range runs {
+		path := run.SourcePath
+		if path == "" {
+			path = run.RequestedPath
+		}
+		fmt.Fprintf(os.Stdout, "#%d · %s · %s\n", run.ID, importRunStatusLabel(run.Status), path)
+		fmt.Fprintf(os.Stdout, "  начало: %s · длительность: %s · этап: %s\n",
+			formatImportRunTime(run.StartedAt), importRunDuration(run), importRunStageLabel(run.FinalStage))
+		if run.Status == mem.DocumentImportRunRunning {
+			fmt.Fprintln(os.Stdout, "  база обновлена: ещё нет; импорт продолжается")
+		} else if run.DocumentUpdated {
+			fmt.Fprintf(os.Stdout, "  база обновлена: да · блоки: %d · чанки: %d\n", run.Blocks, run.Chunks)
+		} else {
+			fmt.Fprintln(os.Stdout, "  база обновлена: нет; предыдущая успешная версия сохранена")
+		}
+		if run.PhysicalPageCount > 0 {
+			fmt.Fprintf(os.Stdout, "  страницы: сохранено %d · пусто %d · ошибок %d\n",
+				run.StoredPages, run.EmptyPages, run.FailedPages)
+		}
+		if run.ErrorMessage != "" {
+			fmt.Fprintf(os.Stdout, "  причина: %s\n", run.ErrorMessage)
+		}
+	}
+	return nil
+}
+
+func handleImportRun(store *Store, args []string) error {
+	if len(args) == 0 {
+		return fmt.Errorf("использование: mem import-run <id> [--all-pages] [--json]")
+	}
+	id, err := strconv.ParseInt(args[0], 10, 64)
+	if err != nil || id <= 0 {
+		return fmt.Errorf("import-run: id должен быть положительным числом")
+	}
+	jsonOutput := false
+	allPages := false
+	for _, arg := range args[1:] {
+		switch arg {
+		case "--json":
+			jsonOutput = true
+		case "--all-pages":
+			allPages = true
+		default:
+			return fmt.Errorf("использование: mem import-run <id> [--all-pages] [--json]")
+		}
+	}
+	run, err := store.DocumentImportRun(id)
+	if err != nil {
+		return err
+	}
+	if jsonOutput {
+		encoder := json.NewEncoder(os.Stdout)
+		encoder.SetIndent("", "  ")
+		return encoder.Encode(run)
+	}
+	path := run.SourcePath
+	if path == "" {
+		path = run.RequestedPath
+	}
+	fmt.Fprintf(os.Stdout, "Запуск импорта #%d\n", run.ID)
+	fmt.Fprintln(os.Stdout, "-----------------")
+	fmt.Fprintf(os.Stdout, "Документ: %s\n", path)
+	fmt.Fprintf(os.Stdout, "Статус: %s · этап: %s\n", importRunStatusLabel(run.Status), importRunStageLabel(run.FinalStage))
+	fmt.Fprintf(os.Stdout, "Начало: %s · завершение: %s · длительность: %s\n",
+		formatImportRunTime(run.StartedAt), formatImportRunTime(run.CompletedAt), importRunDuration(run))
+	if run.Status == mem.DocumentImportRunRunning {
+		fmt.Fprintln(os.Stdout, "База обновлена: ещё нет; импорт продолжается.")
+	} else if run.DocumentUpdated {
+		fmt.Fprintf(os.Stdout, "База обновлена: да · блоки: %d · чанки: %d\n", run.Blocks, run.Chunks)
+	} else {
+		fmt.Fprintln(os.Stdout, "База обновлена: нет; предыдущая успешная версия документа не изменена.")
+	}
+	if run.PhysicalPageCount > 0 {
+		fmt.Fprintf(os.Stdout, "Физические страницы: %d · диапазон: %d-%d · сохранено: %d · пусто: %d · ошибок: %d\n",
+			run.PhysicalPageCount, run.SelectedPageFirst, run.SelectedPageLast,
+			run.StoredPages, run.EmptyPages, run.FailedPages)
+	}
+	if run.ErrorMessage != "" {
+		fmt.Fprintf(os.Stdout, "Причина: %s\n", run.ErrorMessage)
+	}
+	for _, warning := range run.Warnings {
+		fmt.Fprintf(os.Stdout, "Предупреждение: %s\n", warning)
+	}
+	shown := 0
+	for _, page := range run.Pages {
+		if !allPages && page.Status == mem.DocumentImportPageStored && len(page.Warnings) == 0 {
+			continue
+		}
+		method := page.ExtractionMethod
+		if method == "" {
+			method = "нет текста"
+		}
+		fmt.Fprintf(os.Stdout, "- стр. %d: %s · метод: %s · символов: %d · чанков: %d\n",
+			page.Page, page.Status, method, page.TextRunes, page.ChunkCount)
+		for _, warning := range page.Warnings {
+			fmt.Fprintf(os.Stdout, "    причина: %s\n", warning)
+		}
+		shown++
+	}
+	if len(run.Pages) > 0 && shown == 0 && !allPages {
+		fmt.Fprintln(os.Stdout, "Проблемных страниц нет. Для полного списка используйте --all-pages.")
+	}
+	return nil
+}
+
+func importRunStatusLabel(status string) string {
+	switch status {
+	case mem.DocumentImportRunRunning:
+		return "выполняется"
+	case mem.DocumentImportRunSucceeded:
+		return "успешно"
+	case mem.DocumentImportRunPartial:
+		return "частично: есть ошибки отдельных страниц"
+	case mem.DocumentImportRunFailed:
+		return "ошибка"
+	case mem.DocumentImportRunCancelled:
+		return "отменено"
+	case mem.DocumentImportRunInterrupted:
+		return "прервано аварийным завершением"
+	default:
+		return status
+	}
+}
+
+func importRunStageLabel(stage string) string {
+	switch stage {
+	case ingest.StageAnalyze:
+		return "анализ документа"
+	case ingest.StageText:
+		return "извлечение текстового слоя"
+	case ingest.StageRender:
+		return "рендеринг страницы"
+	case ingest.StageOCR:
+		return "OCR"
+	case ingest.StageEmbed:
+		return "создание embeddings"
+	case ingest.StageDone:
+		return "фиксация результата"
+	case "process":
+		return "процесс приложения"
+	case "":
+		return "не определён"
+	default:
+		return stage
+	}
+}
+
+func formatImportRunTime(value string) string {
+	if value == "" {
+		return "—"
+	}
+	parsed, err := time.Parse(time.RFC3339Nano, value)
+	if err != nil {
+		return value
+	}
+	return parsed.Local().Format("2006-01-02 15:04:05")
+}
+
+func importRunDuration(run mem.DocumentImportRun) string {
+	started, startErr := time.Parse(time.RFC3339Nano, run.StartedAt)
+	completed, completedErr := time.Parse(time.RFC3339Nano, run.CompletedAt)
+	if startErr != nil || completedErr != nil || completed.Before(started) {
+		if run.Status == mem.DocumentImportRunRunning {
+			return "выполняется"
+		}
+		return "—"
+	}
+	return completed.Sub(started).Round(time.Millisecond).String()
 }
 
 func shouldReportImportProgress(current, total int) bool {
@@ -2937,6 +3305,9 @@ func printUsage() {
 
   mem map build <фокус> [-limit N] [-tags "тег1,тег2"] [-tag "категория"] [-from 2026-01-01] [-to 2026-07-01] [-min-score 0.5] [-vector-only] [-context-chars N]
       Извлечь типизированные узлы и связи только из versioned document evidence.
+      Source-слой различает документ/раздел/тему/определение/утверждение/формулу/
+      пример/процедуру; analytics — сравнение/зависимость/причину/следствие/риск/
+      ограничение. Пользовательские заметки, вопросы и карточки модель не создаёт.
       Citation, координаты, ревизии, хеши и постоянные ID назначаются самим mem;
       невалидный ответ модели отклоняется целиком без частичной записи.
 
@@ -3038,11 +3409,22 @@ func printUsage() {
       PDF/DjVu автоматически перенаправляются в безопасный mem import;
       бинарные данные никогда не эмбеддятся как текст.
 
-	mem import <document.md|document.pdf|document.djvu> [-title "Название"] [-tags "тег1,тег2"] [-important]
-	  Импортировать Markdown, PDF или DjVu с постраничным provenance документа.
-	  Markdown-маркеры <!-- page: N --> сохраняются как номера страниц.
-	  Для сканов используется локальный Tesseract; инструменты не устанавливаются автоматически.
-	  Все chunks фиксируются атомарно только после успешного завершения embeddings.
+  mem import <document.md|document.pdf|document.djvu> [-title "Название"] [-tags "тег1,тег2"] [-important]
+      Импортировать Markdown, PDF или DjVu с постраничным provenance документа.
+      Для PDF/DjVu сохраняется манифест всех физических страниц, включая пустые.
+      Все chunks и манифест фиксируются атомарно после успешных embeddings.
+
+  mem import-status [--document <путь|document-id>] [--all-pages] [--json]
+      Показать манифест текущей ревизии: сохранённые, пустые и ошибочные страницы,
+      метод извлечения, OCR-предупреждения и число созданных chunks.
+
+  mem import-runs [--document <путь|document-id>] [--status <статус>] [-limit N] [--json]
+      Показать append-only журнал всех попыток импорта, включая ошибки, отмену и
+      аварийно прерванные процессы.
+
+  mem import-run <id> [--all-pages] [--json]
+      Показать одну попытку: путь, этап, факт обновления базы и причины по
+      физическим страницам.
 
   mem index <путь_к_папке_или_файлу>
       Проиндексировать все файлы в папке (.txt, .md, .pdf, .csv, .json)
@@ -3167,6 +3549,9 @@ func printUsage() {
   mem show --from-file docs/arch.md      # все чанки документа
   mem add-file ./документация.txt
   mem import ./book.md
+  mem import-status --document ./book.pdf
+  mem import-runs --status failed
+  mem import-run 12
   mem index ./проекты/
   mem edit 1 "Обновлённый текст сервера"
   mem retag 5 -tags "сервер,ubuntu,важно"
@@ -3178,7 +3563,8 @@ func printUsage() {
 Интерактивные режимы:
   mem без аргументов запускает TUI; mem repl запускает readline-REPL.
   TUI поддерживает все команды выше через /команда, включая ask, import,
-  index, map и config. Введите / для палитры; /help показывает полный список.
+  import-runs, import-run, index, map и config. Введите / для палитры;
+  /help показывает полный список.
   Esc возвращает на главный экран. Выход из TUI: /exit или Ctrl+C два раза.
   В REPL текст без / — сокращение для /search, Up/Down — история,
   Tab — дополнение, Ctrl-D или /exit — выход.

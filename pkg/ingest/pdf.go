@@ -26,6 +26,7 @@ type extractedPage struct {
 	method     string
 	confidence float64
 	warnings   []string
+	failed     bool
 }
 
 const pyMuPDFTextScript = `import sys,fitz;d=fitz.open(sys.argv[1]);a=max(1,int(sys.argv[2]));z=int(sys.argv[3]) or d.page_count;z=min(z,d.page_count);b=[d[i-1].get_text("text") for i in range(a,z+1)];sys.stdout.buffer.write(("\f".join(b)+"\f").encode("utf-8","replace"))`
@@ -48,7 +49,7 @@ func (e *engine) extractPDF(ctx context.Context, path string) (Document, error) 
 	}
 	ocrPageNumbers := pagesNeedingOCR(pages, e.options.Pages.First, pageCount, e.options.OCR.MinTextRunes)
 	if len(ocrPageNumbers) == 0 && len(pages) > 0 {
-		doc, buildErr := documentFromPages(canonical, FormatPDF, "application/pdf", pages)
+		doc, buildErr := e.documentFromPagesWithScope(canonical, FormatPDF, "application/pdf", pages, pageCount)
 		if buildErr == nil {
 			e.progress(StageDone, 0, len(pages), "PDF text layer extracted")
 		}
@@ -69,13 +70,6 @@ func (e *engine) extractPDF(ctx context.Context, path string) (Document, error) 
 		if ctxErr := ctx.Err(); ctxErr != nil {
 			return Document{}, fmt.Errorf("PDF OCR cancelled: %w", ctxErr)
 		}
-		if retained, ok := retainSparseTextPages(pages, ocrPageNumbers, ocrErr); ok {
-			doc, buildErr := documentFromPages(canonical, FormatPDF, "application/pdf", retained)
-			if buildErr == nil {
-				e.progress(StageDone, 0, len(retained), "PDF text layer extracted; sparse pages retained with OCR warnings")
-			}
-			return doc, buildErr
-		}
 		detail := strings.Join(attempts, "; ")
 		if detail == "" {
 			if len(pages) > 0 {
@@ -84,9 +78,17 @@ func (e *engine) extractPDF(ctx context.Context, path string) (Document, error) 
 				detail = "no usable text extractor"
 			}
 		}
-		return Document{}, fmt.Errorf("PDF requires OCR (%s), but OCR fallback is unavailable or failed: %w", detail, ocrErr)
+		cause := fmt.Errorf("PDF requires OCR (%s), but OCR fallback is unavailable or failed: %w", detail, ocrErr)
+		failedPages := failedOCRPages(ocrPageNumbers, cause)
+		doc, buildErr := e.documentFromPagesWithScope(canonical, FormatPDF, "application/pdf",
+			mergeExtractedPages(pages, failedPages), pageCount)
+		if buildErr == nil {
+			e.progress(StageDone, 0, len(pages), "PDF text retained; OCR failures recorded per physical page")
+			return doc, nil
+		}
+		return doc, cause
 	}
-	doc, err := documentFromPages(canonical, FormatPDF, "application/pdf", mergeExtractedPages(pages, ocrPages))
+	doc, err := e.documentFromPagesWithScope(canonical, FormatPDF, "application/pdf", mergeExtractedPages(pages, ocrPages), pageCount)
 	if err == nil {
 		e.progress(StageDone, 0, len(ocrPages), "PDF OCR complete")
 	}
@@ -243,10 +245,16 @@ func richEnough(pages []extractedPage, threshold int) bool {
 func extractedTextRunes(pages []extractedPage) int {
 	count := 0
 	for _, page := range pages {
-		for _, r := range page.text {
-			if unicode.IsLetter(r) || unicode.IsDigit(r) {
-				count++
-			}
+		count += meaningfulTextRunes(page.text)
+	}
+	return count
+}
+
+func meaningfulTextRunes(text string) int {
+	count := 0
+	for _, r := range text {
+		if unicode.IsLetter(r) || unicode.IsDigit(r) {
+			count++
 		}
 	}
 	return count
@@ -282,6 +290,13 @@ func mergeExtractedPages(textPages, ocrPages []extractedPage) []extractedPage {
 		merged[page.page] = page
 	}
 	for _, page := range ocrPages {
+		if page.failed {
+			if retained, ok := merged[page.page]; ok && meaningfulTextRunes(retained.text) > 0 {
+				retained.warnings = append(retained.warnings, page.warnings...)
+				merged[page.page] = retained
+				continue
+			}
+		}
 		merged[page.page] = page
 	}
 	pageNumbers := make([]int, 0, len(merged))
@@ -294,24 +309,6 @@ func mergeExtractedPages(textPages, ocrPages []extractedPage) []extractedPage {
 		result = append(result, merged[page])
 	}
 	return result
-}
-
-func retainSparseTextPages(pages []extractedPage, requestedOCR []int, cause error) ([]extractedPage, bool) {
-	byPage := make(map[int]int, len(pages))
-	retained := append([]extractedPage(nil), pages...)
-	for i := range retained {
-		retained[i].warnings = append([]string(nil), retained[i].warnings...)
-		byPage[retained[i].page] = i
-	}
-	for _, page := range requestedOCR {
-		index, ok := byPage[page]
-		if !ok || strings.TrimSpace(retained[index].text) == "" {
-			return nil, false
-		}
-		retained[index].warnings = append(retained[index].warnings,
-			fmt.Sprintf("page %d: extracted text is below the quality threshold; OCR unavailable: %v", page, cause))
-	}
-	return retained, len(requestedOCR) > 0
 }
 
 func formatPageNumbers(pages []int) string {
@@ -337,43 +334,96 @@ func validateSource(path, label string) (string, error) {
 	return canonical, nil
 }
 
+func (e *engine) documentFromPagesWithScope(source string, format Format, mediaType string, pages []extractedPage, pageCount int) (Document, error) {
+	first, last, _, err := e.selectedPages(pageCount)
+	if err != nil {
+		return Document{}, err
+	}
+	return buildDocumentFromPages(source, format, mediaType, pages, pageCount, first, last)
+}
+
 func documentFromPages(source string, format Format, mediaType string, pages []extractedPage) (Document, error) {
+	pageCount := 0
+	first := 0
+	for _, page := range pages {
+		if first == 0 || page.page < first {
+			first = page.page
+		}
+		if page.page > pageCount {
+			pageCount = page.page
+		}
+	}
+	if first == 0 {
+		first = 1
+	}
+	return buildDocumentFromPages(source, format, mediaType, pages, pageCount, first, pageCount)
+}
+
+func buildDocumentFromPages(source string, format Format, mediaType string, pages []extractedPage, pageCount, first, last int) (Document, error) {
+	if pageCount <= 0 || first <= 0 || last < first || last > pageCount {
+		return Document{}, fmt.Errorf("invalid physical page scope %d-%d of %d", first, last, pageCount)
+	}
+	doc := Document{
+		ID: documentID(source), SourcePath: source, Format: format, MediaType: mediaType,
+		Title: filepath.Base(source), PhysicalPageCount: pageCount,
+		SelectedPageFirst: first, SelectedPageLast: last,
+	}
 	var markdown strings.Builder
 	byPage := make(map[int]extractedPage)
-	var warnings []string
 	for _, page := range pages {
-		warnings = append(warnings, page.warnings...)
-		if strings.TrimSpace(page.text) == "" {
+		doc.Warnings = append(doc.Warnings, page.warnings...)
+		byPage[page.page] = page
+		if page.failed || strings.TrimSpace(page.text) == "" {
 			continue
 		}
 		if markdown.Len() > 0 {
 			markdown.WriteString("\n\n")
 		}
 		fmt.Fprintf(&markdown, "<!-- page: %d -->\n\n%s", page.page, strings.TrimSpace(page.text))
-		byPage[page.page] = page
+	}
+	doc.PageManifest = make([]PageRecord, 0, last-first+1)
+	for pageNumber := first; pageNumber <= last; pageNumber++ {
+		page, found := byPage[pageNumber]
+		record := PageRecord{Page: pageNumber, Status: PageStatusEmpty, OCRConfidence: -1}
+		if found {
+			record.Extraction = page.method
+			record.TextRunes = meaningfulTextRunes(page.text)
+			record.OCRConfidence = page.confidence
+			record.Warnings = append([]string(nil), page.warnings...)
+			if page.failed {
+				record.Status = PageStatusFailed
+			} else if record.TextRunes > 0 {
+				record.Status = PageStatusStored
+			}
+		} else {
+			warning := fmt.Sprintf("page %d: no text was extracted", pageNumber)
+			record.Warnings = []string{warning}
+			doc.Warnings = append(doc.Warnings, warning)
+		}
+		doc.PageManifest = append(doc.PageManifest, record)
 	}
 	if markdown.Len() == 0 {
-		return Document{}, fmt.Errorf("no non-empty pages were extracted from %s", source)
+		return doc, fmt.Errorf("no non-empty pages were extracted from %s", source)
 	}
-	doc, err := ParseMarkdown(source, markdown.String())
+	parsed, err := ParseMarkdown(source, markdown.String())
 	if err != nil {
-		return Document{}, err
+		return doc, err
 	}
-	doc.Format, doc.MediaType = format, mediaType
-	doc.Warnings = append(doc.Warnings, warnings...)
+	doc.Markdown = parsed.Markdown
+	doc.Blocks = parsed.Blocks
 	for i := range doc.Blocks {
 		page := byPage[doc.Blocks[i].Page]
 		doc.Blocks[i].Extraction = page.method
 		doc.Blocks[i].OCRConfidence = page.confidence
 		doc.Blocks[i].Warnings = append([]string(nil), page.warnings...)
 	}
-	doc.Title = filepath.Base(source)
+	doc.Revision = ContentRevision(doc)
 	return doc, nil
 }
 
 // parsePDFText is retained for tests and callers that already have pdftotext
 // output. Empty physical pages are skipped without renumbering later pages.
 func parsePDFText(sourcePath, text string) (Document, error) {
-	pages, _ := pagesFromFormFeed(text, 1, "text", -1)
-	return documentFromPages(sourcePath, FormatPDF, "application/pdf", pages)
+	pages, pageCount := pagesFromFormFeed(text, 1, "text", -1)
+	return buildDocumentFromPages(sourcePath, FormatPDF, "application/pdf", pages, pageCount, 1, pageCount)
 }

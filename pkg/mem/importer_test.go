@@ -40,6 +40,47 @@ func TestDocumentImportReportsAtomicEmbeddingProgress(t *testing.T) {
 	}
 }
 
+func TestPDFImportPersistsPageManifestWithEmptyPhysicalPage(t *testing.T) {
+	root := t.TempDir()
+	doc, err := ingest.ParseMarkdown(filepath.Join(root, "book.pdf"), "<!-- page: 1 -->\n\nStored page text")
+	if err != nil {
+		t.Fatal(err)
+	}
+	doc.Format, doc.MediaType = ingest.FormatPDF, "application/pdf"
+	doc.PhysicalPageCount, doc.SelectedPageFirst, doc.SelectedPageLast = 2, 1, 2
+	doc.PageManifest = []ingest.PageRecord{
+		{Page: 1, Status: ingest.PageStatusStored, Extraction: "text", TextRunes: 14, OCRConfidence: -1},
+		{Page: 2, Status: ingest.PageStatusEmpty, Extraction: "ocr", OCRConfidence: -1,
+			Warnings: []string{"page 2: OCR produced no text"}},
+	}
+	doc.Warnings = []string{"page 2: OCR produced no text"}
+	doc.Revision = ingest.ContentRevision(doc)
+	if err := ingest.ValidateDocument(doc); err != nil {
+		t.Fatal(err)
+	}
+	store, err := NewStore(filepath.Join(root, "db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	result, err := importExtractedDocumentWithEmbedder(testConfig(1000, "paragraph"), store, doc,
+		ImportOptions{}, func(*Config, string) ([]float32, error) { return []float32{1}, nil })
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.PhysicalPages != 2 || result.StoredPages != 1 || result.EmptyPages != 1 || result.FailedPages != 0 {
+		t.Fatalf("import result lost physical page summary: %#v", result)
+	}
+	manifests, err := store.CurrentDocumentImportManifests(doc.SourcePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(manifests) != 1 || !manifests[0].Available || len(manifests[0].Pages) != 2 ||
+		manifests[0].Pages[1].Status != DocumentImportPageEmpty {
+		t.Fatalf("stored manifest is incomplete: %#v", manifests)
+	}
+}
+
 func TestMarkdownImportStoresSearchablePageProvenance(t *testing.T) {
 	root := t.TempDir()
 	source := filepath.Join(root, "book.md")

@@ -74,7 +74,7 @@ func TestTUICommandMenuCoversCLICommandsAndSubcommands(t *testing.T) {
 	// such as get/view/rm/imp/current remain accepted without cluttering help.
 	for _, command := range []string{
 		"init", "version", "help", "open", "add", "search", "ask", "map",
-		"recent", "add-file", "import", "config", "stats", "index", "source",
+		"recent", "add-file", "import", "import-status", "import-runs", "import-run", "config", "stats", "index", "source",
 		"sources", "show", "delete", "edit", "retag", "important", "repl", "where",
 	} {
 		if !roots[command] {

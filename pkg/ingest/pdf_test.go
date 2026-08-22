@@ -47,6 +47,13 @@ func TestPDFTextLayerKeepsPhysicalPageNumbers(t *testing.T) {
 	if len(doc.Warnings) != 1 || !strings.Contains(doc.Warnings[0], "page 2") {
 		t.Fatalf("blank physical page warning was lost: %#v", doc.Warnings)
 	}
+	if doc.PhysicalPageCount != 3 || doc.SelectedPageFirst != 1 || doc.SelectedPageLast != 3 || len(doc.PageManifest) != 3 {
+		t.Fatalf("physical page manifest is incomplete: %#v", doc.PageManifest)
+	}
+	if doc.PageManifest[1].Status != PageStatusEmpty || doc.PageManifest[1].Extraction != "ocr" ||
+		len(doc.PageManifest[1].Warnings) != 1 {
+		t.Fatalf("blank OCR page was not classified: %#v", doc.PageManifest[1])
+	}
 }
 
 func TestPDFHybridTextLayerOCRsOnlyMissingPage(t *testing.T) {
@@ -82,6 +89,10 @@ func TestPDFHybridTextLayerOCRsOnlyMissingPage(t *testing.T) {
 	if len(renderedPages) != 1 || renderedPages[0] != "2" {
 		t.Fatalf("rendered pages = %#v, want only page 2", renderedPages)
 	}
+	if len(doc.PageManifest) != 2 || doc.PageManifest[0].Status != PageStatusStored ||
+		doc.PageManifest[1].Status != PageStatusStored || doc.PageManifest[1].Extraction != "ocr" {
+		t.Fatalf("hybrid page manifest is wrong: %#v", doc.PageManifest)
+	}
 	foundSparseProgress := false
 	for _, event := range progress {
 		if event.Stage == StageRender && event.Page == 2 && event.Current == 1 && event.Total == 1 {
@@ -90,6 +101,66 @@ func TestPDFHybridTextLayerOCRsOnlyMissingPage(t *testing.T) {
 	}
 	if !foundSparseProgress {
 		t.Fatalf("sparse OCR progress is misleading: %#v", progress)
+	}
+}
+
+func TestPDFKeepsSuccessfulPagesWhenAnotherOCRPageFails(t *testing.T) {
+	path := fixtureFile(t, "partial-scan.pdf")
+	tessdata := t.TempDir()
+	if err := os.WriteFile(filepath.Join(tessdata, "eng.traineddata"), []byte("x"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	e := newEngine(Options{
+		Pages: PageRange{First: 1, Last: 2},
+		OCR:   OCRConfig{Languages: "eng", TessdataDir: tessdata, MinTextRunes: 5},
+	})
+	e.resolve = func(name, explicit string) (string, error) { return name, nil }
+	tesseractCalls := 0
+	e.run = func(_ context.Context, name string, args ...string) (commandOutput, error) {
+		switch name {
+		case "pdftotext":
+			return commandOutput{stdout: []byte("\f\f")}, nil
+		case "pdftoppm":
+			return commandOutput{}, os.WriteFile(args[len(args)-1]+".png", []byte("image"), 0o600)
+		case "tesseract":
+			tesseractCalls++
+			if tesseractCalls == 2 {
+				return commandOutput{stderr: []byte("damaged page image")}, errors.New("exit 1")
+			}
+			return commandOutput{stdout: []byte(fakeTSV)}, nil
+		default:
+			return commandOutput{}, errors.New("unexpected tool")
+		}
+	}
+	doc, err := e.extractPDF(context.Background(), path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(doc.Blocks) != 1 || doc.Blocks[0].Page != 1 || len(doc.PageManifest) != 2 {
+		t.Fatalf("partial OCR document is incomplete: %#v", doc)
+	}
+	failed := doc.PageManifest[1]
+	if failed.Status != PageStatusFailed || failed.Extraction != "ocr" ||
+		len(failed.Warnings) != 1 || !strings.Contains(failed.Warnings[0], "damaged page image") {
+		t.Fatalf("failed physical page was not preserved: %#v", failed)
+	}
+	if err := ValidateDocument(doc); err != nil {
+		t.Fatalf("partial OCR document is invalid: %v", err)
+	}
+}
+
+func TestFailedOnlyPhysicalPagesRemainAvailableWithExtractionError(t *testing.T) {
+	source := filepath.Join(t.TempDir(), "broken.pdf")
+	doc, err := buildDocumentFromPages(source, FormatPDF, "application/pdf", []extractedPage{
+		failedOCRPage(1, errors.New("render page 1: damaged PDF")),
+		failedOCRPage(2, errors.New("OCR page 2: unreadable image")),
+	}, 2, 1, 2)
+	if err == nil || !strings.Contains(err.Error(), "no non-empty pages") {
+		t.Fatalf("all-failed extraction did not fail: %v", err)
+	}
+	if doc.SourcePath != source || len(doc.PageManifest) != 2 ||
+		doc.PageManifest[0].Status != PageStatusFailed || doc.PageManifest[1].Status != PageStatusFailed {
+		t.Fatalf("all-failed extraction lost page diagnostics: %#v", doc)
 	}
 }
 
@@ -105,9 +176,13 @@ func TestPDFEmptyTextIsClassifiedAsOCRRequired(t *testing.T) {
 	e.run = func(context.Context, string, ...string) (commandOutput, error) {
 		return commandOutput{stdout: []byte("\f")}, nil
 	}
-	_, err := e.extractPDF(context.Background(), path)
+	doc, err := e.extractPDF(context.Background(), path)
 	if err == nil || !strings.Contains(err.Error(), "requires OCR") || !strings.Contains(err.Error(), "renderer") {
 		t.Fatalf("poor text was not reported as actionable OCR-required: %v", err)
+	}
+	if len(doc.PageManifest) != 1 || doc.PageManifest[0].Status != PageStatusFailed ||
+		!strings.Contains(doc.PageManifest[0].Warnings[0], "renderer") {
+		t.Fatalf("failed OCR setup lost physical-page diagnostics: %#v", doc)
 	}
 }
 

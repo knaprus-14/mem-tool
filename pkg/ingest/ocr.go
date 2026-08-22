@@ -122,13 +122,21 @@ func (e *engine) ocrRenderedPageNumbers(ctx context.Context, pageNumbers []int, 
 		image := filepath.Join(tempDir, fmt.Sprintf("page-%06d%s", page, extension))
 		e.progressAt(StageRender, page, current+1, len(pageNumbers), fmt.Sprintf("rendering page %d", page))
 		if err := render(ctx, page, image); err != nil {
-			return nil, fmt.Errorf("render page %d: %w", page, err)
+			if ctxErr := ctx.Err(); ctxErr != nil {
+				return nil, fmt.Errorf("render cancelled on page %d: %w", page, ctxErr)
+			}
+			pages = append(pages, failedOCRPage(page, fmt.Errorf("render page %d: %w", page, err)))
+			continue
 		}
 		e.progressAt(StageOCR, page, current+1, len(pageNumbers), fmt.Sprintf("OCR page %d", page))
 		result, err := e.runTesseract(ctx, tesseract, tessdata, image)
 		_ = e.remove(image)
 		if err != nil {
-			return nil, fmt.Errorf("OCR page %d: %w", page, err)
+			if ctxErr := ctx.Err(); ctxErr != nil {
+				return nil, fmt.Errorf("OCR cancelled on page %d: %w", page, ctxErr)
+			}
+			pages = append(pages, failedOCRPage(page, fmt.Errorf("OCR page %d: %w", page, err)))
+			continue
 		}
 		result.page = page
 		for i := range result.warnings {
@@ -140,6 +148,22 @@ func (e *engine) ocrRenderedPageNumbers(ctx context.Context, pageNumbers []int, 
 		pages = append(pages, result)
 	}
 	return pages, nil
+}
+
+func failedOCRPage(page int, cause error) extractedPage {
+	return extractedPage{
+		page: page, method: "ocr", confidence: -1, failed: true,
+		warnings: []string{cause.Error()},
+	}
+}
+
+func failedOCRPages(pageNumbers []int, cause error) []extractedPage {
+	pages := make([]extractedPage, 0, len(pageNumbers))
+	for _, page := range pageNumbers {
+		pages = append(pages, failedOCRPage(page,
+			fmt.Errorf("page %d: OCR unavailable or failed: %w", page, cause)))
+	}
+	return pages
 }
 
 func (e *engine) runTesseract(ctx context.Context, executable, tessdata, image string) (extractedPage, error) {

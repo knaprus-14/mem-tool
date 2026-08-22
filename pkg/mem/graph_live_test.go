@@ -137,6 +137,61 @@ func TestKnowledgeMapWorkspacePersistsAndProtectsLayout(t *testing.T) {
 	}
 }
 
+func TestKnowledgeMapWorkspaceSwitchesAndProtectsNamedViews(t *testing.T) {
+	store, anchor := graphStoreAndAnchor(t)
+	defer store.Close()
+	if err := store.UpsertKnowledgeGraph(KnowledgeGraph{Nodes: []KnowledgeNode{{
+		ID: "named-workspace-node", Kind: KnowledgeNodeTopic, Label: "Равновесие",
+		Status: KnowledgeStatusDraft, Origin: KnowledgeOriginGenerated,
+		Evidence: []EvidenceAnchor{anchor},
+	}}}); err != nil {
+		t.Fatal(err)
+	}
+	const token = "named-view-session-capability-with-enough-entropy"
+	const host = "127.0.0.1:8765"
+	handler := NewKnowledgeMapWorkspaceHandler(store, "", token, DefaultKnowledgeMapView)
+	layout := KnowledgeMapLayout{
+		Version:  KnowledgeMapLayoutVersion,
+		Nodes:    map[string]KnowledgeMapNodePosition{"named-workspace-node": {X: 77, Y: 33, Pinned: true}},
+		Viewport: KnowledgeMapViewport{Scale: 1.7, X: 8, Y: 9},
+		State: &KnowledgeMapViewState{
+			Filters: KnowledgeMapViewFilters{
+				Statuses: []KnowledgeStatus{KnowledgeStatusDraft}, Evidence: []EvidenceState{EvidenceCurrent},
+				NodeKinds: []KnowledgeNodeKind{KnowledgeNodeTopic}, RelationKinds: []KnowledgeRelationKind{},
+			},
+			Focus: &KnowledgeMapFocus{NodeID: "named-workspace-node", Depth: 2}, ClusterLayout: true,
+		},
+	}
+	raw, err := json.Marshal(layout)
+	if err != nil {
+		t.Fatal(err)
+	}
+	viewName := "Композиция кадра"
+	saved := requestKnowledgeMapLayoutView(t, handler, http.MethodPut, host, "http://"+host, token, viewName, raw)
+	if saved.Code != http.StatusOK {
+		t.Fatalf("named view was not saved: status=%d body=%q", saved.Code, saved.Body.String())
+	}
+	page := requestKnowledgeMap(t, handler, http.MethodGet, "/?view="+url.QueryEscape(viewName), host)
+	for _, marker := range []string{`"view_name":"Композиция кадра"`, `"name":"Композиция кадра"`, `"scale":1.7`, `"depth":2`, `saveViewBtn`, `navigationAction`, `КЛАСТЕРЫ`} {
+		if page.Code != http.StatusOK || !strings.Contains(page.Body.String(), marker) {
+			t.Fatalf("named workspace page is missing %q: status=%d", marker, page.Code)
+		}
+	}
+	if got := requestKnowledgeMap(t, handler, http.MethodGet, "/?view=a&view=b", host); got.Code != http.StatusBadRequest {
+		t.Fatalf("ambiguous view selection returned %d", got.Code)
+	}
+	if got := requestKnowledgeMapLayoutView(t, handler, http.MethodPut, host, "http://"+host, "wrong", "Чужой вид", raw); got.Code != http.StatusForbidden {
+		t.Fatalf("unauthorized named view write returned %d", got.Code)
+	}
+	deleted := requestKnowledgeMapLayoutView(t, handler, http.MethodDelete, host, "http://"+host, token, viewName, nil)
+	if deleted.Code != http.StatusNoContent {
+		t.Fatalf("named view was not deleted: status=%d body=%q", deleted.Code, deleted.Body.String())
+	}
+	if loaded, err := store.LoadKnowledgeMapLayout(viewName); err != nil || loaded != nil {
+		t.Fatalf("deleted named view still exists: layout=%#v err=%v", loaded, err)
+	}
+}
+
 func TestKnowledgeMapWorkspaceServesOnlyAuthorizedCurrentPDFEvidence(t *testing.T) {
 	store, anchor, source := knowledgeMapPDFSourceFixture(t)
 	defer store.Close()
@@ -432,6 +487,73 @@ func TestKnowledgeMapWorkspaceEditsAndUndoesPinnedContent(t *testing.T) {
 	}
 }
 
+func TestKnowledgeMapWorkspaceCreatesPinnedManualBranch(t *testing.T) {
+	store, anchor := graphStoreAndAnchor(t)
+	defer store.Close()
+	const parentID = "workspace-create-parent"
+	if err := store.UpsertKnowledgeGraph(KnowledgeGraph{Nodes: []KnowledgeNode{{
+		ID: parentID, Kind: KnowledgeNodeClaim, Label: "Исходное утверждение", Body: "Текст источника",
+		Status: KnowledgeStatusActive, Origin: KnowledgeOriginGenerated, Evidence: []EvidenceAnchor{anchor},
+	}}}); err != nil {
+		t.Fatal(err)
+	}
+	parent := knowledgeReviewItemByID(t, store, KnowledgeObjectNode, parentID)
+	const token = "workspace-create-session-capability-with-enough-entropy"
+	const host = "127.0.0.1:8765"
+	handler := NewKnowledgeMapWorkspaceHandler(store, "", token, DefaultKnowledgeMapView)
+	page := requestKnowledgeMap(t, handler, http.MethodGet, "/", host)
+	for _, marker := range []string{"РАБОЧИЙ СЛОЙ", "СОЗДАТЬ И ПРИВЯЗАТЬ", "workspaceCreateAction", "/api/workspace/create", "expected_parent_content_digest", "workspace_creations"} {
+		if page.Code != http.StatusOK || !strings.Contains(page.Body.String(), marker) {
+			t.Fatalf("workspace page is missing %q: status=%d", marker, page.Code)
+		}
+	}
+	request := KnowledgeWorkspaceCreateRequest{
+		ParentNodeID: parentID, Kind: KnowledgeNodeQuestion, Label: "Что проверить дальше?",
+		Body: "Уточнить условия применимости", Author: "Руслан", Comment: "Рабочий вопрос",
+		ExpectedParentStatus: parent.Status, ExpectedParentContent: parent.ContentDigest,
+		ExpectedEvidence: parent.EvidenceDigest,
+	}
+	raw, err := json.Marshal(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := requestKnowledgeMapMutation(t, handler, "/api/workspace/create", host, "http://"+host, "wrong", "same-origin", raw); got.Code != http.StatusForbidden {
+		t.Fatalf("workspace creation with wrong session returned %d", got.Code)
+	}
+	stale := request
+	stale.ExpectedParentContent = "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+	staleRaw, _ := json.Marshal(stale)
+	if got := requestKnowledgeMapMutation(t, handler, "/api/workspace/create", host, "http://"+host, token, "same-origin", staleRaw); got.Code != http.StatusConflict {
+		t.Fatalf("workspace creation with stale parent pin returned %d: %s", got.Code, got.Body.String())
+	}
+	invalid := append(append([]byte{}, raw...), []byte(` {}`)...)
+	if got := requestKnowledgeMapMutation(t, handler, "/api/workspace/create", host, "http://"+host, token, "same-origin", invalid); got.Code != http.StatusBadRequest {
+		t.Fatalf("multi-object workspace request returned %d", got.Code)
+	}
+	createdResponse := requestKnowledgeMapMutation(t, handler, "/api/workspace/create", host, "http://"+host, token, "same-origin", raw)
+	if createdResponse.Code != http.StatusOK {
+		t.Fatalf("valid workspace creation failed: status=%d body=%q", createdResponse.Code, createdResponse.Body.String())
+	}
+	var created KnowledgeWorkspaceCreateResult
+	if err := json.Unmarshal(createdResponse.Body.Bytes(), &created); err != nil ||
+		created.Node.Kind != KnowledgeNodeQuestion || created.Edge.Kind != KnowledgeRelationAsks ||
+		created.Creation.Author != request.Author {
+		t.Fatalf("workspace creation response is invalid: result=%#v err=%v", created, err)
+	}
+	refreshed := requestKnowledgeMap(t, handler, http.MethodGet, "/", host)
+	if refreshed.Code != http.StatusOK || !strings.Contains(refreshed.Body.String(), "Что проверить дальше?") ||
+		!strings.Contains(refreshed.Body.String(), `"author":"Руслан"`) {
+		t.Fatalf("created workspace object is absent from refreshed map: status=%d", refreshed.Code)
+	}
+	if got := requestKnowledgeMap(t, handler, http.MethodGet, "/api/workspace/create", host); got.Code != http.StatusMethodNotAllowed || got.Header().Get("Allow") != "POST" {
+		t.Fatalf("workspace creation accepted a read method: status=%d allow=%q", got.Code, got.Header().Get("Allow"))
+	}
+	readOnly := NewKnowledgeMapLiveHandler(store, "")
+	if got := requestKnowledgeMapMutation(t, readOnly, "/api/workspace/create", host, "http://"+host, token, "same-origin", raw); got.Code != http.StatusNotFound {
+		t.Fatalf("read-only handler exposed workspace creation: %d", got.Code)
+	}
+}
+
 func requestKnowledgeMap(t *testing.T, handler http.Handler, method, path, host string) *httptest.ResponseRecorder {
 	t.Helper()
 	req := httptest.NewRequest(method, "http://127.0.0.1"+path, nil)
@@ -442,8 +564,16 @@ func requestKnowledgeMap(t *testing.T, handler http.Handler, method, path, host 
 }
 
 func requestKnowledgeMapLayout(t *testing.T, handler http.Handler, method, host, origin, token string, body []byte) *httptest.ResponseRecorder {
+	return requestKnowledgeMapLayoutView(t, handler, method, host, origin, token, "", body)
+}
+
+func requestKnowledgeMapLayoutView(t *testing.T, handler http.Handler, method, host, origin, token, viewName string, body []byte) *httptest.ResponseRecorder {
 	t.Helper()
-	req := httptest.NewRequest(method, "http://127.0.0.1/api/layout", bytes.NewReader(body))
+	path := "http://127.0.0.1/api/layout"
+	if viewName != "" {
+		path += "?view=" + url.QueryEscape(viewName)
+	}
+	req := httptest.NewRequest(method, path, bytes.NewReader(body))
 	req.Host = host
 	req.Header.Set("Origin", origin)
 	req.Header.Set("X-Mem-Session", token)

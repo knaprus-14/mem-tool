@@ -2,6 +2,7 @@ package mem
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sort"
 
@@ -16,17 +17,46 @@ type ImportOptions struct {
 }
 
 type ImportResult struct {
+	RunID            int64
+	Status           string
 	DocumentID       string
 	DocumentRevision string
 	SourcePath       string
 	Blocks           int
 	Chunks           int
 	Pages            []int
+	PhysicalPages    int
+	StoredPages      int
+	EmptyPages       int
+	FailedPages      int
 	Warnings         []string
 }
 
 // ImportDocument runs staged extraction and then indexes the resulting blocks.
 func ImportDocument(ctx context.Context, cfg *Config, store *Store, path string, options ImportOptions) (ImportResult, error) {
+	if ctx == nil {
+		return ImportResult{}, fmt.Errorf("import context is nil")
+	}
+	if cfg == nil {
+		return ImportResult{}, fmt.Errorf("import config is nil")
+	}
+	if store == nil {
+		return ImportResult{}, fmt.Errorf("import store is nil")
+	}
+	runID, err := store.startDocumentImportRun(path)
+	if err != nil {
+		return ImportResult{}, err
+	}
+	latestStage := ingest.StageAnalyze
+	progress := options.Progress
+	options.Progress = func(event ingest.ProgressEvent) {
+		if event.Stage != "" {
+			latestStage = event.Stage
+		}
+		if progress != nil {
+			progress(event)
+		}
+	}
 	ocr := ingest.DefaultOptions().OCR
 	if cfg.Ingest.OCRLanguages != "" {
 		ocr.Languages = cfg.Ingest.OCRLanguages
@@ -50,9 +80,18 @@ func ImportDocument(ctx context.Context, cfg *Config, store *Store, path string,
 		OCR: ocr, Progress: options.Progress,
 	})
 	if err != nil {
-		return ImportResult{}, err
+		result := importResultFromDocument(doc)
+		result.RunID = runID
+		result.Status = failedImportRunStatus(ctx, err)
+		return result, finishFailedImportRun(store, runID, doc, result.Status, latestStage, err)
 	}
-	return importExtractedDocumentWithContextEmbedder(ctx, cfg, store, doc, options, GetEmbeddingContext)
+	result, err := importExtractedDocumentWithContextEmbedderForRun(ctx, cfg, store, doc, options, GetEmbeddingContext, runID)
+	if err != nil {
+		result.RunID = runID
+		result.Status = failedImportRunStatus(ctx, err)
+		return result, finishFailedImportRun(store, runID, doc, result.Status, latestStage, err)
+	}
+	return result, nil
 }
 
 type importPiece struct {
@@ -80,6 +119,11 @@ type contextEmbeddingFunc func(context.Context, *Config, string) ([]float32, err
 
 func importExtractedDocumentWithContextEmbedder(ctx context.Context, cfg *Config, store *Store, doc ingest.Document,
 	options ImportOptions, embed contextEmbeddingFunc) (ImportResult, error) {
+	return importExtractedDocumentWithContextEmbedderForRun(ctx, cfg, store, doc, options, embed, 0)
+}
+
+func importExtractedDocumentWithContextEmbedderForRun(ctx context.Context, cfg *Config, store *Store, doc ingest.Document,
+	options ImportOptions, embed contextEmbeddingFunc, runID int64) (ImportResult, error) {
 	result := ImportResult{
 		DocumentID: doc.ID, DocumentRevision: doc.Revision, SourcePath: doc.SourcePath,
 		Blocks: len(doc.Blocks), Warnings: append([]string(nil), doc.Warnings...),
@@ -172,9 +216,32 @@ func importExtractedDocumentWithContextEmbedder(ctx context.Context, cfg *Config
 			},
 		}
 	}
-	if err := store.ReplaceDocumentChunks(doc.SourcePath, storedChunks); err != nil {
+	var manifest *DocumentImportManifest
+	if len(doc.PageManifest) > 0 {
+		value := buildDocumentImportManifest(doc, pieces, storedChunks)
+		manifest = &value
+		result.PhysicalPages = value.PhysicalPageCount
+		result.StoredPages = value.StoredPages
+		result.EmptyPages = value.EmptyPages
+		result.FailedPages = value.FailedPages
+	}
+	result.Status = DocumentImportRunSucceeded
+	if result.FailedPages > 0 {
+		result.Status = DocumentImportRunPartial
+	}
+	completion := successfulImportRunCompletion(runID, doc, result, len(storedChunks), manifest)
+	if runID > 0 {
+		if err := store.replaceDocumentChunksForRun(doc.SourcePath, storedChunks, manifest, &completion); err != nil {
+			return result, fmt.Errorf("document not updated: %w", err)
+		}
+	} else if manifest != nil {
+		if err := store.ReplaceDocumentChunksWithManifest(doc.SourcePath, storedChunks, *manifest); err != nil {
+			return result, fmt.Errorf("document not updated: %w", err)
+		}
+	} else if err := store.ReplaceDocumentChunks(doc.SourcePath, storedChunks); err != nil {
 		return result, fmt.Errorf("document not updated: %w", err)
 	}
+	result.RunID = runID
 	result.Chunks = len(storedChunks)
 
 	for page := range pageSet {
@@ -182,4 +249,132 @@ func importExtractedDocumentWithContextEmbedder(ctx context.Context, cfg *Config
 	}
 	sort.Ints(result.Pages)
 	return result, nil
+}
+
+func importResultFromDocument(doc ingest.Document) ImportResult {
+	result := ImportResult{
+		DocumentID: doc.ID, DocumentRevision: doc.Revision, SourcePath: doc.SourcePath,
+		Blocks: len(doc.Blocks), Warnings: append([]string(nil), doc.Warnings...),
+		PhysicalPages: doc.PhysicalPageCount,
+	}
+	for _, page := range doc.PageManifest {
+		switch page.Status {
+		case ingest.PageStatusStored:
+			result.StoredPages++
+		case ingest.PageStatusEmpty:
+			result.EmptyPages++
+		case ingest.PageStatusFailed:
+			result.FailedPages++
+		}
+	}
+	return result
+}
+
+func failedImportRunStatus(ctx context.Context, cause error) string {
+	if errors.Is(cause, context.Canceled) || errors.Is(cause, context.DeadlineExceeded) || ctx.Err() != nil {
+		return DocumentImportRunCancelled
+	}
+	return DocumentImportRunFailed
+}
+
+func finishFailedImportRun(store *Store, runID int64, doc ingest.Document, status, stage string, cause error) error {
+	completion := failedImportRunCompletion(runID, doc, status, stage, cause)
+	if err := store.finishDocumentImportRun(completion); err != nil {
+		return fmt.Errorf("%w; журнал попытки импорта #%d не завершён: %v", cause, runID, err)
+	}
+	return cause
+}
+
+func failedImportRunCompletion(runID int64, doc ingest.Document, status, stage string, cause error) documentImportRunCompletion {
+	completion := documentImportRunCompletion{
+		RunID: runID, SourcePath: doc.SourcePath, DocumentID: doc.ID,
+		DocumentRevision: doc.Revision, Format: string(doc.Format), MediaType: doc.MediaType,
+		Status: status, FinalStage: stage, PhysicalPageCount: doc.PhysicalPageCount,
+		SelectedPageFirst: doc.SelectedPageFirst, SelectedPageLast: doc.SelectedPageLast,
+		Blocks: len(doc.Blocks), Warnings: append([]string(nil), doc.Warnings...),
+		ErrorMessage: cause.Error(),
+	}
+	blockCounts := make(map[int]int)
+	for _, block := range doc.Blocks {
+		if block.Page > 0 {
+			blockCounts[block.Page]++
+		}
+	}
+	for _, sourcePage := range doc.PageManifest {
+		page := DocumentImportPage{
+			Page: sourcePage.Page, Status: string(sourcePage.Status), ExtractionMethod: sourcePage.Extraction,
+			TextRunes: sourcePage.TextRunes, OCRConfidence: sourcePage.OCRConfidence,
+			BlockCount: blockCounts[sourcePage.Page], Warnings: append([]string(nil), sourcePage.Warnings...),
+		}
+		switch page.Status {
+		case DocumentImportPageStored:
+			completion.StoredPages++
+		case DocumentImportPageEmpty:
+			completion.EmptyPages++
+		case DocumentImportPageFailed:
+			completion.FailedPages++
+		}
+		completion.Pages = append(completion.Pages, page)
+	}
+	return completion
+}
+
+func successfulImportRunCompletion(runID int64, doc ingest.Document, result ImportResult, chunks int,
+	manifest *DocumentImportManifest) documentImportRunCompletion {
+	completion := documentImportRunCompletion{
+		RunID: runID, SourcePath: doc.SourcePath, DocumentID: doc.ID,
+		DocumentRevision: doc.Revision, Format: string(doc.Format), MediaType: doc.MediaType,
+		Status: result.Status, FinalStage: ingest.StageDone, DocumentUpdated: true,
+		Blocks: result.Blocks, Chunks: chunks, Warnings: append([]string(nil), result.Warnings...),
+	}
+	if manifest != nil {
+		completion.PhysicalPageCount = manifest.PhysicalPageCount
+		completion.SelectedPageFirst = manifest.SelectedPageFirst
+		completion.SelectedPageLast = manifest.SelectedPageLast
+		completion.StoredPages = manifest.StoredPages
+		completion.EmptyPages = manifest.EmptyPages
+		completion.FailedPages = manifest.FailedPages
+		completion.Pages = append([]DocumentImportPage(nil), manifest.Pages...)
+	}
+	return completion
+}
+
+func buildDocumentImportManifest(doc ingest.Document, pieces []importPiece, chunks []DocumentChunk) DocumentImportManifest {
+	blockCounts := make(map[int]int)
+	chunkCounts := make(map[int]int)
+	for _, block := range doc.Blocks {
+		if block.Page > 0 {
+			blockCounts[block.Page]++
+		}
+	}
+	for _, piece := range pieces {
+		if piece.page > 0 {
+			chunkCounts[piece.page]++
+		}
+	}
+	manifest := DocumentImportManifest{
+		Available: true, DocumentID: doc.ID, DocumentRevision: doc.Revision,
+		SourcePath: doc.SourcePath, MediaType: doc.MediaType, Format: string(doc.Format),
+		PhysicalPageCount: doc.PhysicalPageCount, SelectedPageFirst: doc.SelectedPageFirst,
+		SelectedPageLast: doc.SelectedPageLast, Blocks: len(doc.Blocks), Chunks: len(chunks),
+		Warnings: append([]string(nil), doc.Warnings...),
+	}
+	for _, sourcePage := range doc.PageManifest {
+		page := DocumentImportPage{
+			Page: sourcePage.Page, Status: string(sourcePage.Status), ExtractionMethod: sourcePage.Extraction,
+			TextRunes: sourcePage.TextRunes, OCRConfidence: sourcePage.OCRConfidence,
+			BlockCount: blockCounts[sourcePage.Page], ChunkCount: chunkCounts[sourcePage.Page],
+			Warnings: append([]string(nil), sourcePage.Warnings...),
+		}
+		switch page.Status {
+		case DocumentImportPageStored:
+			manifest.StoredPages++
+		case DocumentImportPageEmpty:
+			manifest.EmptyPages++
+		case DocumentImportPageFailed:
+			manifest.FailedPages++
+		}
+		manifest.Pages = append(manifest.Pages, page)
+	}
+	return manifest
 }

@@ -118,10 +118,93 @@ func TestShouldReportImportProgressBoundsLargeOutput(t *testing.T) {
 	}
 }
 
+func TestHandleImportStatusShowsReadablePhysicalPageIssue(t *testing.T) {
+	root := t.TempDir()
+	store, err := mem.NewStore(filepath.Join(root, "db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	source := filepath.Join(root, "book.pdf")
+	revision := mem.ChunkContentHash("import status revision")
+	chunk := mem.DocumentChunk{
+		Text: "stored page text", Title: "Book", Backend: "test", Embedding: []float32{1},
+		ChunkIndex: 0, TotalChunks: 1,
+		Provenance: mem.Provenance{
+			DocumentID: "doc-import-status", DocumentRevision: revision,
+			ChunkHash: mem.ChunkContentHash("stored page text"), SourcePath: source,
+			MediaType: "application/pdf", Page: 1, BlockIndex: 0, BlockChunkIndex: 0,
+			BlockTotalChunks: 1, ExtractionMethod: "text", OCRConfidence: -1,
+		},
+	}
+	manifest := mem.DocumentImportManifest{
+		Available: true, DocumentID: chunk.Provenance.DocumentID, DocumentRevision: revision,
+		SourcePath: source, MediaType: "application/pdf", Format: "pdf",
+		PhysicalPageCount: 2, SelectedPageFirst: 1, SelectedPageLast: 2,
+		StoredPages: 1, EmptyPages: 1, Blocks: 1, Chunks: 1,
+		Pages: []mem.DocumentImportPage{
+			{Page: 1, Status: mem.DocumentImportPageStored, ExtractionMethod: "text", TextRunes: 14,
+				OCRConfidence: -1, BlockCount: 1, ChunkCount: 1},
+			{Page: 2, Status: mem.DocumentImportPageEmpty, ExtractionMethod: "ocr", OCRConfidence: -1,
+				Warnings: []string{"page 2: OCR produced no text"}},
+		},
+	}
+	if err := store.ReplaceDocumentChunksWithManifest(source, []mem.DocumentChunk{chunk}, manifest); err != nil {
+		t.Fatal(err)
+	}
+	stdout, _, err := captureCLIStreams(func() error {
+		return handleImportStatus(store, []string{"--document", source})
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(stdout, source) || !strings.Contains(stdout, "стр. 2: empty") ||
+		!strings.Contains(stdout, "OCR produced no text") || strings.Contains(stdout, "sha256:") {
+		t.Fatalf("import-status output is not user-readable: %q", stdout)
+	}
+}
+
+func TestImportRunCommandsExplainFailureWithoutInternalHashes(t *testing.T) {
+	root := t.TempDir()
+	store, err := mem.NewStore(filepath.Join(root, mem.MemDirName))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	requested := filepath.Join(root, "unsupported.xyz")
+	result, importErr := mem.ImportDocument(context.Background(), mem.DefaultLocalConfig(), store, requested, mem.ImportOptions{})
+	if importErr == nil || result.RunID <= 0 {
+		t.Fatalf("test setup did not create a failed import run: result=%#v err=%v", result, importErr)
+	}
+
+	listOutput, _, err := captureCLIStreams(func() error {
+		return handleImportRuns(store, []string{"--status", mem.DocumentImportRunFailed})
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(listOutput, "unsupported.xyz") || !strings.Contains(listOutput, "предыдущая успешная версия") || strings.Contains(listOutput, "sha256:") {
+		t.Fatalf("import-runs output is not user-readable: %q", listOutput)
+	}
+
+	detailOutput, _, err := captureCLIStreams(func() error {
+		return handleImportRun(store, []string{strconv.FormatInt(result.RunID, 10)})
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(detailOutput, "Статус: ошибка") || !strings.Contains(detailOutput, "unsupported document format") ||
+		!strings.Contains(detailOutput, "База обновлена: нет") || strings.Contains(detailOutput, "sha256:") {
+		t.Fatalf("import-run detail is incomplete or exposes internal identity: %q", detailOutput)
+	}
+}
+
 type fakeAnswerProvider struct {
-	answer  string
-	calls   int
-	request mem.AnswerRequest
+	answer   string
+	answers  []string
+	calls    int
+	request  mem.AnswerRequest
+	requests []mem.AnswerRequest
 }
 
 type corpusBatchAnswerProvider struct {
@@ -165,6 +248,10 @@ func (p *corpusBatchAnswerProvider) Generate(_ context.Context, request mem.Answ
 func (p *fakeAnswerProvider) Generate(_ context.Context, request mem.AnswerRequest) (string, error) {
 	p.calls++
 	p.request = request
+	p.requests = append(p.requests, request)
+	if len(p.answers) >= p.calls {
+		return p.answers[p.calls-1], nil
+	}
 	return p.answer, nil
 }
 
@@ -212,6 +299,101 @@ func TestHandleAskPrintsHumanReadableSourcesAndKeepsStatusOnStderr(t *testing.T)
 	if strings.Contains(stdout, "evidence=sha256:") || !strings.Contains(stderr, "[ASK] retrieval") || !strings.Contains(stderr, "[ASK] evidence") || fake.calls != 1 {
 		t.Fatalf("status/provider/version contract failed: stdout=%q stderr=%q calls=%d", stdout, stderr, fake.calls)
 	}
+	if len(fake.request.ResponseSchema) != 0 {
+		t.Fatal("existing compatible model was unexpectedly switched to schema mode")
+	}
+}
+
+func TestHandleAskUsesSchemaForYandexGPTWithoutChangingAnswerSettings(t *testing.T) {
+	store, cfg, citationID := setupGroundedAskTest(t)
+	defer store.Close()
+	cfg.Answer.Model = "yandex/YandexGPT-5-Lite-8B-instruct-GGUF:latest"
+	originalAnswer := cfg.Answer
+	fake := &fakeAnswerProvider{answer: `{"claims":[{"text":"Совместимый ответ","citations":["E1"]}]}`}
+	originalEmbedding, originalProvider := getEmbeddingContext, newAnswerProvider
+	defer func() { getEmbeddingContext, newAnswerProvider = originalEmbedding, originalProvider }()
+	getEmbeddingContext = func(context.Context, *Config, string) ([]float32, error) { return []float32{1, 0}, nil }
+	newAnswerProvider = func(mem.AnswerConfig) (mem.AnswerProvider, error) { return fake, nil }
+
+	stdout, stderr, err := captureCLIStreams(func() error { return handleAsk(cfg, store, []string{"смысл", "фотографии"}) })
+	if err != nil {
+		t.Fatal(err)
+	}
+	if fake.calls != 1 || len(fake.request.ResponseSchema) == 0 || !strings.Contains(fake.request.System, `{"claims":[]}`) ||
+		!strings.Contains(stdout, "Совместимый ответ [1, стр. 3]") || !strings.Contains(stderr, "citation-bounded JSON Schema") {
+		t.Fatalf("YandexGPT compatibility mode failed: stdout=%q stderr=%q request=%#v calls=%d", stdout, stderr, fake.request, fake.calls)
+	}
+	if cfg.Answer != originalAnswer || strings.Contains(stdout, citationID) {
+		t.Fatalf("compatibility mode changed settings or exposed internal citation: before=%#v after=%#v stdout=%q", originalAnswer, cfg.Answer, stdout)
+	}
+}
+
+func TestHandleAskRetriesOnlyObservedAnswerEnvelope(t *testing.T) {
+	store, cfg, _ := setupGroundedAskTest(t)
+	defer store.Close()
+	fake := &fakeAnswerProvider{answers: []string{
+		`{"answer":"Ответ без ссылок"}`,
+		`{"claims":[{"text":"Исправленный ответ","citations":["E1"]}]}`,
+	}}
+	originalEmbedding, originalProvider := getEmbeddingContext, newAnswerProvider
+	defer func() { getEmbeddingContext, newAnswerProvider = originalEmbedding, originalProvider }()
+	getEmbeddingContext = func(context.Context, *Config, string) ([]float32, error) { return []float32{1, 0}, nil }
+	newAnswerProvider = func(mem.AnswerConfig) (mem.AnswerProvider, error) { return fake, nil }
+
+	stdout, stderr, err := captureCLIStreams(func() error { return handleAsk(cfg, store, []string{"вопрос"}) })
+	if err != nil {
+		t.Fatal(err)
+	}
+	if fake.calls != 2 || len(fake.requests) != 2 || len(fake.requests[0].ResponseSchema) != 0 ||
+		len(fake.requests[1].ResponseSchema) == 0 || !strings.Contains(stdout, "Исправленный ответ [1, стр. 3]") ||
+		!strings.Contains(stderr, "повторяю generation") {
+		t.Fatalf("narrow schema retry failed: stdout=%q stderr=%q requests=%#v", stdout, stderr, fake.requests)
+	}
+}
+
+func TestHandleAskDoesNotRetryArbitraryUngroundedProse(t *testing.T) {
+	store, cfg, _ := setupGroundedAskTest(t)
+	defer store.Close()
+	fake := &fakeAnswerProvider{answer: "произвольный ответ без JSON и citations"}
+	originalEmbedding, originalProvider := getEmbeddingContext, newAnswerProvider
+	defer func() { getEmbeddingContext, newAnswerProvider = originalEmbedding, originalProvider }()
+	getEmbeddingContext = func(context.Context, *Config, string) ([]float32, error) { return []float32{1, 0}, nil }
+	newAnswerProvider = func(mem.AnswerConfig) (mem.AnswerProvider, error) { return fake, nil }
+
+	_, _, err := captureCLIStreams(func() error { return handleAsk(cfg, store, []string{"вопрос"}) })
+	if err == nil || !strings.Contains(err.Error(), "not valid grounded JSON") || fake.calls != 1 {
+		t.Fatalf("arbitrary prose received unsafe retry: err=%v calls=%d", err, fake.calls)
+	}
+}
+
+func setupGroundedAskTest(t *testing.T) (*mem.Store, *Config, string) {
+	t.Helper()
+	store, err := mem.NewStore(filepath.Join(t.TempDir(), "db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := "Фотография помогает увидеть городскую жизнь."
+	cfg := testCLIConfig(1500, "paragraph")
+	cfg.Answer.Model = "fake-chat"
+	cfg.Answer.ContextChars = 5000
+	embeddingIdentity, err := mem.EmbeddingIdentityForConfig(cfg)
+	if err != nil {
+		store.Close()
+		t.Fatal(err)
+	}
+	entry, err := store.AddDocumentChunkWithEmbeddingIdentity(text, "Book", nil, embeddingIdentity, []float32{1, 0},
+		"section", 0, 1, false, mem.Provenance{
+			DocumentID: "doc-ask-compat", DocumentRevision: mem.ChunkContentHash("compat revision"),
+			ChunkHash: mem.ChunkContentHash(text), SourcePath: "C:/docs/book.pdf", MediaType: "application/pdf",
+			Page: 3, BlockIndex: 0, BlockChunkIndex: 0, BlockTotalChunks: 1,
+			ExtractionMethod: "text", OCRConfidence: -1,
+		})
+	if err != nil {
+		store.Close()
+		t.Fatal(err)
+	}
+	citationID, _ := mem.CitationForEntry(*entry)
+	return store, cfg, citationID
 }
 
 func TestHandleConfigRejectsRemoteAnswerURLBeforeSave(t *testing.T) {
@@ -802,6 +984,26 @@ func TestHandleMapDuplicateDetectionMergeAndHistory(t *testing.T) {
 	var history []mem.KnowledgeNodeMergeRecord
 	if err := json.Unmarshal([]byte(historyJSON), &history); err != nil || len(history) != 1 || !history[0].Current || history[0].Reviewer != "Руслан" {
 		t.Fatalf("merge history is incomplete: history=%#v err=%v output=%q", history, err, historyJSON)
+	}
+}
+
+func TestCLIKnowledgeNodeKindAcceptsExpandedSemanticTypes(t *testing.T) {
+	kinds := []mem.KnowledgeNodeKind{
+		mem.KnowledgeNodeDocument, mem.KnowledgeNodeSection, mem.KnowledgeNodeTopic,
+		mem.KnowledgeNodeDefinition, mem.KnowledgeNodeClaim, mem.KnowledgeNodeFormula,
+		mem.KnowledgeNodeExample, mem.KnowledgeNodeProcedure, mem.KnowledgeNodeComparison,
+		mem.KnowledgeNodeDependency, mem.KnowledgeNodeCause, mem.KnowledgeNodeEffect,
+		mem.KnowledgeNodeRisk, mem.KnowledgeNodeConstraint, mem.KnowledgeNodeNote,
+		mem.KnowledgeNodeQuestion, mem.KnowledgeNodeCard, mem.KnowledgeNodeContradiction,
+		mem.KnowledgeNodeGap,
+	}
+	for _, kind := range kinds {
+		if !cliKnowledgeNodeKind(kind) {
+			t.Errorf("CLI rejected supported knowledge node kind %q", kind)
+		}
+	}
+	if cliKnowledgeNodeKind(mem.KnowledgeNodeKind("unknown")) {
+		t.Fatal("CLI accepted unknown knowledge node kind")
 	}
 }
 

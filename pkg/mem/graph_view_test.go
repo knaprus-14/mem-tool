@@ -30,6 +30,15 @@ func TestKnowledgeMapHTMLContainsOfflineInteractiveProvenancePayload(t *testing.
 			"view-claim": {X: 120, Y: 80, Pinned: true},
 		},
 		Viewport: KnowledgeMapViewport{Scale: 1.2, X: 4, Y: -3},
+		State: &KnowledgeMapViewState{
+			Filters: KnowledgeMapViewFilters{
+				Statuses:      []KnowledgeStatus{KnowledgeStatusActive, KnowledgeStatusDraft},
+				Evidence:      []EvidenceState{EvidenceCurrent},
+				NodeKinds:     []KnowledgeNodeKind{KnowledgeNodeClaim, KnowledgeNodeGap},
+				RelationKinds: []KnowledgeRelationKind{KnowledgeRelationRevealsGap},
+			},
+			Focus: &KnowledgeMapFocus{NodeID: "view-claim", Depth: 1}, ClusterLayout: true,
+		},
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -65,6 +74,16 @@ func TestKnowledgeMapHTMLContainsOfflineInteractiveProvenancePayload(t *testing.
 		`editAction`, `РЕДАКТИРОВАНИЕ`, `СОХРАНИТЬ ПРАВКУ`, `ОТМЕНИТЬ ПОСЛЕДНЮЮ ПРАВКУ`,
 		`/api/edit`, `/api/edit/undo`, `expected_content_digest`, `expected_edit_id`,
 		`Автор правки`, `Комментарий к правке`, `latest_edits`,
+		`clusterFilters`, `buildTopology`, `clusterCenter`, `cluster_layout`,
+		`navigationAction`, `button.textContent='ФОКУС '+depth`, `СВЕРНУТЬ ВЕТВЬ`, `ПОКАЗАТЬ ВСЁ`,
+		`saveViewBtn`, `viewSelect`, `layoutURL`, `version:3`, `mem_map_last_view`,
+		`modalBackdrop`, `role="dialog"`, `showModal`, `Новое представление`,
+		`workspaceCreateAction`, `РАБОЧИЙ СЛОЙ`, `СОЗДАТЬ И ПРИВЯЗАТЬ`,
+		`/api/workspace/create`, `expected_parent_content_digest`, `workspace_creations`,
+		`section`, `definition`, `formula`, `procedure`, `comparison`, `dependency`,
+		`cause`, `effect`, `risk`, `constraint`, `depends_on`, `constrains`, `precedes`,
+		`слой источника`, `аналитический слой`, `Уверенность извлечения`,
+		`Покрытие источниками`, `(savedLayout?.version||0)<3`,
 	} {
 		if !strings.Contains(html, marker) {
 			t.Errorf("HTML is missing %q", marker)
@@ -74,6 +93,11 @@ func TestKnowledgeMapHTMLContainsOfflineInteractiveProvenancePayload(t *testing.
 		strings.Contains(html, `details.append(field('Evidence digest'`) ||
 		strings.Contains(html, `title.textContent=item.label||item.id`) {
 		t.Fatal("technical identifiers are still rendered in the primary details view")
+	}
+	for _, unsupported := range []string{`prompt(`, `confirm(`, `alert('`} {
+		if strings.Contains(html, unsupported) {
+			t.Fatalf("map still depends on unsupported blocking browser dialog %q", unsupported)
+		}
 	}
 	if strings.Contains(html, attack) || strings.Contains(html, `</title><script>alert(1)</script>`) {
 		t.Fatal("untrusted title or graph text escaped its data/title context")
@@ -99,7 +123,8 @@ func TestKnowledgeMapHTMLContainsOfflineInteractiveProvenancePayload(t *testing.
 		t.Fatalf("embedded payload is not valid JSON: %v", err)
 	}
 	if len(decoded.Graph.Nodes) != 2 || decoded.Graph.Nodes[0].Label != attack || decoded.Review.Items[0].Evidence[0].Anchor.SourcePath == "" ||
-		decoded.Layout == nil || decoded.Layout.Nodes["view-claim"].Pinned != true || decoded.Workspace != nil {
+		decoded.Layout == nil || decoded.Layout.Nodes["view-claim"].Pinned != true || decoded.Layout.State == nil ||
+		decoded.Layout.State.Focus.NodeID != "view-claim" || !decoded.Layout.State.ClusterLayout || decoded.Workspace != nil {
 		t.Fatalf("embedded payload lost graph provenance: %#v", decoded)
 	}
 }

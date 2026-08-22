@@ -62,6 +62,9 @@ func TestDjVuOCRRangeHasPhysicalPages(t *testing.T) {
 	if doc.Blocks[0].OCRConfidence != 86 || doc.Blocks[0].Extraction != "ocr" {
 		t.Fatalf("OCR provenance lost: %#v", doc.Blocks[0])
 	}
+	if doc.PhysicalPageCount != 3 || doc.SelectedPageFirst != 2 || doc.SelectedPageLast != 3 || len(doc.PageManifest) != 2 {
+		t.Fatalf("selected DjVu page manifest is wrong: %#v", doc)
+	}
 }
 
 func TestDjVuHybridEmbeddedTextOCRsOnlyMissingPage(t *testing.T) {

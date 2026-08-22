@@ -63,7 +63,7 @@ func (e *engine) extractDjVu(ctx context.Context, path string) (Document, error)
 	}
 	ocrPageNumbers := pagesNeedingOCR(textPages, first, pageCount, e.options.OCR.MinTextRunes)
 	if len(ocrPageNumbers) == 0 && len(textPages) > 0 {
-		doc, buildErr := documentFromPages(canonical, FormatDjVu, "image/vnd.djvu", textPages)
+		doc, buildErr := e.documentFromPagesWithScope(canonical, FormatDjVu, "image/vnd.djvu", textPages, pageCount)
 		if buildErr == nil {
 			e.progress(StageDone, 0, len(textPages), "DjVu embedded text extracted")
 		}
@@ -81,12 +81,24 @@ func (e *engine) extractDjVu(ctx context.Context, path string) (Document, error)
 	e.progress(StageOCR, 0, len(ocrPageNumbers), fmt.Sprintf("DjVu pages require OCR: %s", formatPageNumbers(ocrPageNumbers)))
 	pages, err := e.ocrDjVuPages(ctx, canonical, ocrPageNumbers)
 	if err != nil {
-		if textAttempt != "" {
-			return Document{}, fmt.Errorf("DjVu requires OCR after %s, but fallback is unavailable or failed: %w", textAttempt, err)
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return Document{}, fmt.Errorf("DjVu OCR cancelled: %w", ctxErr)
 		}
-		return Document{}, fmt.Errorf("DjVu requires OCR, but fallback is unavailable or failed: %w", err)
+		var cause error
+		if textAttempt != "" {
+			cause = fmt.Errorf("DjVu requires OCR after %s, but fallback is unavailable or failed: %w", textAttempt, err)
+		} else {
+			cause = fmt.Errorf("DjVu requires OCR, but fallback is unavailable or failed: %w", err)
+		}
+		doc, buildErr := e.documentFromPagesWithScope(canonical, FormatDjVu, "image/vnd.djvu",
+			mergeExtractedPages(textPages, failedOCRPages(ocrPageNumbers, cause)), pageCount)
+		if buildErr == nil {
+			e.progress(StageDone, 0, len(textPages), "DjVu text retained; OCR failures recorded per physical page")
+			return doc, nil
+		}
+		return doc, cause
 	}
-	doc, err := documentFromPages(canonical, FormatDjVu, "image/vnd.djvu", mergeExtractedPages(textPages, pages))
+	doc, err := e.documentFromPagesWithScope(canonical, FormatDjVu, "image/vnd.djvu", mergeExtractedPages(textPages, pages), pageCount)
 	if err == nil {
 		e.progress(StageDone, 0, len(pages), "DjVu OCR complete")
 	}

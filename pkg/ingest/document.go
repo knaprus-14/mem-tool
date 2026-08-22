@@ -26,15 +26,39 @@ const (
 
 // Document is the staged representation passed to the indexing layer.
 type Document struct {
-	ID         string
-	Revision   string
-	SourcePath string
-	Format     Format
-	MediaType  string
-	Title      string
-	Markdown   string
-	Blocks     []Block
-	Warnings   []string
+	ID                string
+	Revision          string
+	SourcePath        string
+	Format            Format
+	MediaType         string
+	Title             string
+	Markdown          string
+	Blocks            []Block
+	Warnings          []string
+	PhysicalPageCount int
+	SelectedPageFirst int
+	SelectedPageLast  int
+	PageManifest      []PageRecord
+}
+
+type PageStatus string
+
+const (
+	PageStatusStored PageStatus = "stored"
+	PageStatusEmpty  PageStatus = "empty"
+	PageStatusFailed PageStatus = "failed"
+)
+
+// PageRecord records the extraction outcome for one selected physical page,
+// including pages that produced no chunk. Failed is reserved for extractors
+// that can continue after a page-local failure.
+type PageRecord struct {
+	Page          int
+	Status        PageStatus
+	Extraction    string
+	TextRunes     int
+	OCRConfidence float64
+	Warnings      []string
 }
 
 // Block is a source-local unit. Page is zero when the source provides no page
@@ -87,7 +111,7 @@ func (r *Registry) Extract(ctx context.Context, path string) (Document, error) {
 	}
 	doc, err := extractor.Extract(ctx, path)
 	if err != nil {
-		return Document{}, err
+		return doc, err
 	}
 	if err := ValidateDocument(doc); err != nil {
 		return Document{}, fmt.Errorf("invalid extracted document %s: %w", path, err)
@@ -118,7 +142,7 @@ func ExtractWithOptions(ctx context.Context, path string, options Options) (Docu
 		return Document{}, fmt.Errorf("unsupported document format %q: mem import accepts Markdown, PDF, and DjVu", ext)
 	}
 	if err != nil {
-		return Document{}, err
+		return doc, err
 	}
 	if err := ValidateDocument(doc); err != nil {
 		return Document{}, fmt.Errorf("invalid extracted document %s: %w", path, err)
@@ -148,6 +172,9 @@ func ValidateDocument(doc Document) error {
 	if len(doc.Blocks) == 0 {
 		return fmt.Errorf("no non-empty text blocks")
 	}
+	if err := validatePageManifest(doc); err != nil {
+		return err
+	}
 
 	previousPage := 0
 	for i, block := range doc.Blocks {
@@ -175,6 +202,16 @@ func ValidateDocument(doc Document) error {
 		if block.Extraction != "ocr" && block.OCRConfidence != -1 {
 			return fmt.Errorf("block %d has OCR confidence for %q extraction", i, block.Extraction)
 		}
+		if len(doc.PageManifest) > 0 && block.Page > 0 {
+			offset := block.Page - doc.SelectedPageFirst
+			if offset < 0 || offset >= len(doc.PageManifest) {
+				return fmt.Errorf("block %d page %d is outside selected page scope", i, block.Page)
+			}
+			page := doc.PageManifest[offset]
+			if page.Status != PageStatusStored || page.Extraction != block.Extraction {
+				return fmt.Errorf("block %d page %d contradicts page manifest", i, block.Page)
+			}
+		}
 	}
 	if strings.TrimSpace(doc.Revision) == "" {
 		return fmt.Errorf("missing document content revision")
@@ -185,17 +222,80 @@ func ValidateDocument(doc Document) error {
 	return nil
 }
 
+func validatePageManifest(doc Document) error {
+	if len(doc.PageManifest) == 0 {
+		if doc.PhysicalPageCount != 0 || doc.SelectedPageFirst != 0 || doc.SelectedPageLast != 0 {
+			return fmt.Errorf("page scope is present without a page manifest")
+		}
+		return nil
+	}
+	if doc.PhysicalPageCount <= 0 {
+		return fmt.Errorf("page manifest has no physical page count")
+	}
+	if doc.SelectedPageFirst <= 0 || doc.SelectedPageLast < doc.SelectedPageFirst || doc.SelectedPageLast > doc.PhysicalPageCount {
+		return fmt.Errorf("invalid selected page scope %d-%d of %d", doc.SelectedPageFirst, doc.SelectedPageLast, doc.PhysicalPageCount)
+	}
+	if len(doc.PageManifest) != doc.SelectedPageLast-doc.SelectedPageFirst+1 {
+		return fmt.Errorf("page manifest has %d records for selected range %d-%d", len(doc.PageManifest), doc.SelectedPageFirst, doc.SelectedPageLast)
+	}
+	for index, page := range doc.PageManifest {
+		expectedPage := doc.SelectedPageFirst + index
+		if page.Page != expectedPage {
+			return fmt.Errorf("page manifest record %d has page %d, want %d", index, page.Page, expectedPage)
+		}
+		if page.TextRunes < 0 {
+			return fmt.Errorf("page %d has negative text rune count", page.Page)
+		}
+		if math.IsNaN(page.OCRConfidence) || math.IsInf(page.OCRConfidence, 0) || page.OCRConfidence < -1 || page.OCRConfidence > 100 {
+			return fmt.Errorf("page %d has invalid OCR confidence %v", page.Page, page.OCRConfidence)
+		}
+		switch page.Status {
+		case PageStatusStored:
+			if page.TextRunes == 0 || (page.Extraction != "text" && page.Extraction != "ocr") {
+				return fmt.Errorf("stored page %d has no usable extraction metadata", page.Page)
+			}
+		case PageStatusEmpty:
+			if page.TextRunes != 0 {
+				return fmt.Errorf("empty page %d reports extracted text", page.Page)
+			}
+		case PageStatusFailed:
+			if page.TextRunes != 0 || len(page.Warnings) == 0 {
+				return fmt.Errorf("failed page %d has no failure reason", page.Page)
+			}
+		default:
+			return fmt.Errorf("page %d has unsupported status %q", page.Page, page.Status)
+		}
+		if page.Extraction != "ocr" && page.OCRConfidence != -1 {
+			return fmt.Errorf("page %d has OCR confidence for %q extraction", page.Page, page.Extraction)
+		}
+	}
+	return nil
+}
+
 // ContentRevision returns a deterministic SHA-256 revision for the extracted
 // source content and its source-local coordinates. It deliberately excludes
 // SourcePath: the path identifies the document, while this value identifies
 // the content currently found at that path.
 func ContentRevision(doc Document) string {
 	h := sha256.New()
-	writeRevisionField(h, "mem-tool-document-content-v1")
+	version := "mem-tool-document-content-v1"
+	if len(doc.PageManifest) > 0 {
+		version = "mem-tool-document-content-v2"
+	}
+	writeRevisionField(h, version)
 	for _, block := range doc.Blocks {
 		writeRevisionField(h, strconv.Itoa(block.Page))
 		writeRevisionField(h, block.Marker)
 		writeRevisionField(h, block.Text)
+	}
+	if len(doc.PageManifest) > 0 {
+		writeRevisionField(h, strconv.Itoa(doc.PhysicalPageCount))
+		writeRevisionField(h, strconv.Itoa(doc.SelectedPageFirst))
+		writeRevisionField(h, strconv.Itoa(doc.SelectedPageLast))
+		for _, page := range doc.PageManifest {
+			writeRevisionField(h, strconv.Itoa(page.Page))
+			writeRevisionField(h, string(page.Status))
+		}
 	}
 	return "sha256:" + hex.EncodeToString(h.Sum(nil))
 }

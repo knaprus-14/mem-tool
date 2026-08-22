@@ -63,10 +63,73 @@ func newKnowledgeMapHandler(store *Store, title string, workspace *KnowledgeMapW
 			serveKnowledgeMapEditMutation(w, r, store, workspace, KnowledgeEditActionEdit)
 		case "/api/edit/undo":
 			serveKnowledgeMapEditMutation(w, r, store, workspace, KnowledgeEditActionUndo)
+		case "/api/workspace/create":
+			serveKnowledgeMapWorkspaceCreate(w, r, store, workspace)
 		default:
 			http.NotFound(w, r)
 		}
 	})
+}
+
+const MaxKnowledgeMapWorkspaceCreateJSON = 128 << 10
+
+func serveKnowledgeMapWorkspaceCreate(w http.ResponseWriter, r *http.Request, store *Store, workspace *KnowledgeMapWorkspace) {
+	if workspace == nil {
+		http.NotFound(w, r)
+		return
+	}
+	if r.Method != http.MethodPost {
+		w.Header().Set("Allow", "POST")
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	if store == nil {
+		http.Error(w, "knowledge map store is unavailable", http.StatusServiceUnavailable)
+		return
+	}
+	if !knowledgeMapWorkspaceAuthorized(r, workspace.SessionToken) {
+		http.Error(w, "forbidden workspace creation request", http.StatusForbidden)
+		return
+	}
+	mediaType, _, err := mime.ParseMediaType(r.Header.Get("Content-Type"))
+	if err != nil || mediaType != "application/json" {
+		http.Error(w, "content type must be application/json", http.StatusUnsupportedMediaType)
+		return
+	}
+	if r.ContentLength > MaxKnowledgeMapWorkspaceCreateJSON {
+		http.Error(w, "workspace creation request is too large", http.StatusRequestEntityTooLarge)
+		return
+	}
+	r.Body = http.MaxBytesReader(w, r.Body, MaxKnowledgeMapWorkspaceCreateJSON)
+	decoder := json.NewDecoder(r.Body)
+	decoder.DisallowUnknownFields()
+	var request KnowledgeWorkspaceCreateRequest
+	if err := decoder.Decode(&request); err != nil {
+		var tooLarge *http.MaxBytesError
+		if errors.As(err, &tooLarge) {
+			http.Error(w, "workspace creation request is too large", http.StatusRequestEntityTooLarge)
+			return
+		}
+		http.Error(w, "invalid workspace creation request", http.StatusBadRequest)
+		return
+	}
+	if err := decoder.Decode(&struct{}{}); err != io.EOF {
+		http.Error(w, "workspace creation request must contain one JSON object", http.StatusBadRequest)
+		return
+	}
+	result, err := store.CreateKnowledgeWorkspaceNode(request)
+	if err != nil {
+		switch {
+		case errors.Is(err, ErrKnowledgeContentChanged), errors.Is(err, ErrKnowledgeEvidenceChanged),
+			errors.Is(err, ErrKnowledgeEvidenceNotCurrent):
+			http.Error(w, "parent state changed; refresh the map before retrying", http.StatusConflict)
+		default:
+			http.Error(w, "workspace creation request was rejected", http.StatusBadRequest)
+		}
+		return
+	}
+	w.Header().Set("Content-Type", "application/json; charset=utf-8")
+	_ = json.NewEncoder(w).Encode(result)
 }
 
 func serveKnowledgeMapEditMutation(w http.ResponseWriter, r *http.Request, store *Store, workspace *KnowledgeMapWorkspace, action string) {
@@ -300,21 +363,29 @@ func serveKnowledgeMapPage(w http.ResponseWriter, r *http.Request, store *Store,
 		http.Error(w, "knowledge map store is unavailable", http.StatusServiceUnavailable)
 		return
 	}
-	data, err := store.BuildKnowledgeMapViewData()
+	viewName := DefaultKnowledgeMapView
+	if workspace != nil {
+		requestedView, err := knowledgeMapRequestedView(r, workspace.ViewName)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		viewName = requestedView
+	}
+	data, err := store.BuildKnowledgeMapViewDataForView(viewName)
 	if err != nil {
 		http.Error(w, fmt.Sprintf("build knowledge map: %v", err), http.StatusInternalServerError)
 		return
 	}
 	if workspace != nil {
 		copy := *workspace
-		data.Workspace = &copy
-		if copy.ViewName != DefaultKnowledgeMapView {
-			data.Layout, err = store.LoadKnowledgeMapLayout(copy.ViewName)
-			if err != nil {
-				http.Error(w, fmt.Sprintf("load knowledge map layout: %v", err), http.StatusInternalServerError)
-				return
-			}
+		copy.ViewName = viewName
+		copy.Views, err = store.ListKnowledgeMapViews()
+		if err != nil {
+			http.Error(w, fmt.Sprintf("list knowledge map views: %v", err), http.StatusInternalServerError)
+			return
 		}
+		data.Workspace = &copy
 		if copy.SessionToken != "" {
 			http.SetCookie(w, knowledgeMapSourceCookie(copy.SessionToken))
 		}
@@ -436,8 +507,13 @@ func serveKnowledgeMapLayout(w http.ResponseWriter, r *http.Request, store *Stor
 		http.Error(w, "forbidden workspace request", http.StatusForbidden)
 		return
 	}
+	viewName, err := knowledgeMapRequestedView(r, workspace.ViewName)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
 	if r.Method == http.MethodDelete {
-		if err := store.DeleteKnowledgeMapLayout(workspace.ViewName); err != nil {
+		if err := store.DeleteKnowledgeMapLayout(viewName); err != nil {
 			http.Error(w, fmt.Sprintf("delete knowledge map layout: %v", err), http.StatusBadRequest)
 			return
 		}
@@ -469,7 +545,7 @@ func serveKnowledgeMapLayout(w http.ResponseWriter, r *http.Request, store *Stor
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
-	saved, err := store.SaveKnowledgeMapLayout(workspace.ViewName, layout)
+	saved, err := store.SaveKnowledgeMapLayout(viewName, layout)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
@@ -478,6 +554,17 @@ func serveKnowledgeMapLayout(w http.ResponseWriter, r *http.Request, store *Stor
 	if err := json.NewEncoder(w).Encode(saved); err != nil {
 		return
 	}
+}
+
+func knowledgeMapRequestedView(r *http.Request, fallback string) (string, error) {
+	values, present := r.URL.Query()["view"]
+	if !present {
+		return validateKnowledgeMapViewName(fallback)
+	}
+	if len(values) != 1 {
+		return "", errors.New("knowledge map request must contain one view")
+	}
+	return validateKnowledgeMapViewName(values[0])
 }
 
 func knowledgeMapWorkspaceAuthorized(r *http.Request, expectedToken string) bool {

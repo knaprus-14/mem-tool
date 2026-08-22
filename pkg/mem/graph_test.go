@@ -8,6 +8,34 @@ import (
 	"github.com/knaprus-14/mem-tool/pkg/ingest"
 )
 
+func TestKnowledgeNodeKindsHaveExplicitSemanticLayers(t *testing.T) {
+	want := map[KnowledgeNodeLayer][]KnowledgeNodeKind{
+		KnowledgeLayerSource: {
+			KnowledgeNodeDocument, KnowledgeNodeSection, KnowledgeNodeTopic,
+			KnowledgeNodeDefinition, KnowledgeNodeClaim, KnowledgeNodeFormula,
+			KnowledgeNodeExample, KnowledgeNodeProcedure,
+		},
+		KnowledgeLayerAnalytics: {
+			KnowledgeNodeComparison, KnowledgeNodeContradiction, KnowledgeNodeGap,
+			KnowledgeNodeDependency, KnowledgeNodeCause, KnowledgeNodeEffect,
+			KnowledgeNodeRisk, KnowledgeNodeConstraint,
+		},
+		KnowledgeLayerWorkspace: {
+			KnowledgeNodeNote, KnowledgeNodeQuestion, KnowledgeNodeCard,
+		},
+	}
+	for layer, kinds := range want {
+		for _, kind := range kinds {
+			if got := KnowledgeNodeLayerForKind(kind); got != layer || !validKnowledgeNodeKind(kind) {
+				t.Errorf("kind %q: layer=%q valid=%v, want layer=%q", kind, got, validKnowledgeNodeKind(kind), layer)
+			}
+		}
+	}
+	if got := KnowledgeNodeLayerForKind("unknown"); got != "" || validKnowledgeNodeKind("unknown") {
+		t.Fatalf("unknown kind received layer=%q", got)
+	}
+}
+
 func TestKnowledgeGraphPersistsTypedNonTreeRelationsAcrossReopen(t *testing.T) {
 	dir := filepath.Join(t.TempDir(), "db")
 	store, err := NewStore(dir)

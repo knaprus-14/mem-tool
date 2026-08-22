@@ -14,9 +14,11 @@ const MaxKnowledgeExtractionJobBatches = 128
 
 const knowledgeExtractionJobSystemPrompt = knowledgeExtractionSystemPrompt + `
 This is a controlled coverage batch, not a retrieval sample. Inspect every supplied evidence item.
-Extract every distinct, directly supported definition, claim, procedure, example, formula, constraint,
-comparison, and topic that is useful for later navigation. Do not omit an evidence item merely because
-another item is more relevant to the focus. Concision means avoiding duplicates, not skipping supported facts.`
+Extract every distinct, directly supported section, topic, definition, claim, formula, example,
+procedure, comparison, dependency, cause, effect, risk, and constraint that is useful for later
+navigation. Use typed relations whenever the evidence supports them. Do not omit an evidence item
+merely because another item is more relevant to the focus. Concision means avoiding duplicates, not
+skipping supported facts.`
 
 // KnowledgeExtractionJobBatch is one complete, context-bounded model request.
 // Entries are retained only in the in-memory deterministic plan; durable runs

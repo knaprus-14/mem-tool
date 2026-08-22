@@ -13,10 +13,13 @@ import (
 )
 
 const (
-	KnowledgeMapLayoutVersion = 1
+	KnowledgeMapLayoutVersion = 3
+	knowledgeMapLayoutV1      = 1
+	knowledgeMapLayoutV2      = 2
 	DefaultKnowledgeMapView   = "default"
 	MaxKnowledgeMapViewNodes  = 10000
 	MaxKnowledgeMapLayoutJSON = 1 << 20
+	MaxKnowledgeMapViews      = 100
 )
 
 type KnowledgeMapNodePosition struct {
@@ -31,11 +34,49 @@ type KnowledgeMapViewport struct {
 	Y     float64 `json:"y"`
 }
 
+// KnowledgeMapViewFilters stores the user's visual filters. A nil State means
+// that every filter is enabled; non-nil empty slices intentionally mean that
+// the corresponding group is fully hidden.
+type KnowledgeMapViewFilters struct {
+	Statuses      []KnowledgeStatus       `json:"statuses"`
+	Evidence      []EvidenceState         `json:"evidence"`
+	NodeKinds     []KnowledgeNodeKind     `json:"node_kinds"`
+	RelationKinds []KnowledgeRelationKind `json:"relation_kinds"`
+}
+
+// KnowledgeMapFocus describes one reproducible visual scope. NodeID and
+// ClusterID are mutually exclusive. Cluster IDs are deterministic seed-node
+// IDs computed by the standalone client from the current graph.
+type KnowledgeMapFocus struct {
+	NodeID    string `json:"node_id,omitempty"`
+	ClusterID string `json:"cluster_id,omitempty"`
+	Depth     int    `json:"depth,omitempty"`
+}
+
+// KnowledgeMapViewState is presentation state saved together with positions.
+// It contains no generated knowledge and never changes graph provenance.
+type KnowledgeMapViewState struct {
+	Filters       KnowledgeMapViewFilters `json:"filters"`
+	Focus         *KnowledgeMapFocus      `json:"focus,omitempty"`
+	Collapsed     []string                `json:"collapsed,omitempty"`
+	ClusterLayout bool                    `json:"cluster_layout,omitempty"`
+}
+
 type KnowledgeMapLayout struct {
 	Version  int                                 `json:"version"`
 	Nodes    map[string]KnowledgeMapNodePosition `json:"nodes"`
 	Viewport KnowledgeMapViewport                `json:"viewport"`
+	State    *KnowledgeMapViewState              `json:"state,omitempty"`
 	Updated  string                              `json:"updated,omitempty"`
+}
+
+type KnowledgeMapViewSummary struct {
+	Name          string `json:"name"`
+	Updated       string `json:"updated,omitempty"`
+	NodeCount     int    `json:"node_count"`
+	Focused       bool   `json:"focused"`
+	Collapsed     int    `json:"collapsed"`
+	ClusterLayout bool   `json:"cluster_layout"`
 }
 
 func (s *Store) LoadKnowledgeMapLayout(name string) (*KnowledgeMapLayout, error) {
@@ -94,6 +135,29 @@ func (s *Store) SaveKnowledgeMapLayout(name string, layout KnowledgeMapLayout) (
 			return KnowledgeMapLayout{}, fmt.Errorf("knowledge map view references unknown node %q", id)
 		}
 	}
+	if layout.State != nil {
+		for _, id := range layout.State.Collapsed {
+			if !known[id] {
+				return KnowledgeMapLayout{}, fmt.Errorf("knowledge map view collapses unknown node %q", id)
+			}
+		}
+		if focus := layout.State.Focus; focus != nil {
+			id := focus.NodeID
+			if id == "" {
+				id = focus.ClusterID
+			}
+			if !known[id] {
+				return KnowledgeMapLayout{}, fmt.Errorf("knowledge map view focuses unknown node %q", id)
+			}
+		}
+	}
+	var viewCount, existing int
+	if err := s.db.QueryRow(`SELECT COUNT(*), COUNT(CASE WHEN name = ? THEN 1 END) FROM knowledge_map_views`, name).Scan(&viewCount, &existing); err != nil {
+		return KnowledgeMapLayout{}, fmt.Errorf("count knowledge map views: %w", err)
+	}
+	if existing == 0 && viewCount >= MaxKnowledgeMapViews {
+		return KnowledgeMapLayout{}, fmt.Errorf("knowledge map view count exceeds %d", MaxKnowledgeMapViews)
+	}
 	layout.Updated = time.Now().UTC().Format(time.RFC3339Nano)
 	raw, err := json.Marshal(layout)
 	if err != nil {
@@ -109,6 +173,48 @@ ON CONFLICT(name) DO UPDATE SET layout_json = excluded.layout_json, updated = ex
 		return KnowledgeMapLayout{}, fmt.Errorf("save knowledge map view %q: %w", name, err)
 	}
 	return layout, nil
+}
+
+// ListKnowledgeMapViews returns lightweight, user-facing saved-view metadata.
+// The default view is always present even before its first layout save.
+func (s *Store) ListKnowledgeMapViews() ([]KnowledgeMapViewSummary, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	rows, err := s.db.Query(`SELECT name, layout_json, updated FROM knowledge_map_views ORDER BY name LIMIT ?`, MaxKnowledgeMapViews+1)
+	if err != nil {
+		return nil, fmt.Errorf("list knowledge map views: %w", err)
+	}
+	defer rows.Close()
+	views := make([]KnowledgeMapViewSummary, 0)
+	hasDefault := false
+	for rows.Next() {
+		var name, raw, updated string
+		if err := rows.Scan(&name, &raw, &updated); err != nil {
+			return nil, fmt.Errorf("read knowledge map view: %w", err)
+		}
+		if len(views) >= MaxKnowledgeMapViews {
+			return nil, fmt.Errorf("knowledge map view count exceeds %d", MaxKnowledgeMapViews)
+		}
+		layout, err := decodeKnowledgeMapLayout([]byte(raw))
+		if err != nil {
+			return nil, fmt.Errorf("read knowledge map view %q: %w", name, err)
+		}
+		summary := KnowledgeMapViewSummary{Name: name, Updated: updated, NodeCount: len(layout.Nodes)}
+		if layout.State != nil {
+			summary.Focused = layout.State.Focus != nil
+			summary.Collapsed = len(layout.State.Collapsed)
+			summary.ClusterLayout = layout.State.ClusterLayout
+		}
+		views = append(views, summary)
+		hasDefault = hasDefault || name == DefaultKnowledgeMapView
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("list knowledge map views: %w", err)
+	}
+	if !hasDefault {
+		views = append([]KnowledgeMapViewSummary{{Name: DefaultKnowledgeMapView}}, views...)
+	}
+	return views, nil
 }
 
 func (s *Store) DeleteKnowledgeMapLayout(name string) error {
@@ -161,7 +267,7 @@ func decodeKnowledgeMapLayout(raw []byte) (KnowledgeMapLayout, error) {
 }
 
 func validateKnowledgeMapLayout(layout KnowledgeMapLayout) error {
-	if layout.Version != KnowledgeMapLayoutVersion {
+	if layout.Version != knowledgeMapLayoutV1 && layout.Version != knowledgeMapLayoutV2 && layout.Version != KnowledgeMapLayoutVersion {
 		return fmt.Errorf("unsupported knowledge map layout version %d", layout.Version)
 	}
 	if len(layout.Nodes) > MaxKnowledgeMapViewNodes {
@@ -180,7 +286,96 @@ func validateKnowledgeMapLayout(layout KnowledgeMapLayout) error {
 		layout.Viewport.Scale < 0.05 || layout.Viewport.Scale > 10 {
 		return errors.New("knowledge map layout has invalid viewport")
 	}
+	if layout.State != nil {
+		if layout.Version < knowledgeMapLayoutV2 {
+			return errors.New("knowledge map layout state requires version 2")
+		}
+		if err := validateKnowledgeMapViewState(*layout.State); err != nil {
+			return err
+		}
+	}
 	return nil
+}
+
+func validateKnowledgeMapViewState(state KnowledgeMapViewState) error {
+	if err := validateUniqueMapValues("status", len(state.Filters.Statuses), func(index int) string {
+		value := state.Filters.Statuses[index]
+		if !validKnowledgeStatus(value) {
+			return ""
+		}
+		return string(value)
+	}); err != nil {
+		return err
+	}
+	if err := validateUniqueMapValues("evidence", len(state.Filters.Evidence), func(index int) string {
+		value := state.Filters.Evidence[index]
+		if value != EvidenceCurrent && value != EvidenceStale && value != EvidenceMissing {
+			return ""
+		}
+		return string(value)
+	}); err != nil {
+		return err
+	}
+	if err := validateUniqueMapValues("node kind", len(state.Filters.NodeKinds), func(index int) string {
+		value := state.Filters.NodeKinds[index]
+		if !validKnowledgeNodeKind(value) {
+			return ""
+		}
+		return string(value)
+	}); err != nil {
+		return err
+	}
+	if err := validateUniqueMapValues("relation kind", len(state.Filters.RelationKinds), func(index int) string {
+		value := state.Filters.RelationKinds[index]
+		if !validKnowledgeRelationKind(value) {
+			return ""
+		}
+		return string(value)
+	}); err != nil {
+		return err
+	}
+	if len(state.Collapsed) > MaxKnowledgeMapViewNodes {
+		return fmt.Errorf("knowledge map view collapses more than %d nodes", MaxKnowledgeMapViewNodes)
+	}
+	seenCollapsed := make(map[string]bool, len(state.Collapsed))
+	for _, id := range state.Collapsed {
+		if !validKnowledgeMapStateID(id) || seenCollapsed[id] {
+			return fmt.Errorf("knowledge map view contains invalid or duplicate collapsed node %q", id)
+		}
+		seenCollapsed[id] = true
+	}
+	if focus := state.Focus; focus != nil {
+		if (focus.NodeID == "") == (focus.ClusterID == "") {
+			return errors.New("knowledge map focus must contain exactly one node_id or cluster_id")
+		}
+		if focus.NodeID != "" {
+			if !validKnowledgeMapStateID(focus.NodeID) || focus.Depth < 1 || focus.Depth > 3 {
+				return errors.New("knowledge map node focus must use a known ID and depth 1..3")
+			}
+		} else if !validKnowledgeMapStateID(focus.ClusterID) || focus.Depth != 0 {
+			return errors.New("knowledge map cluster focus must use a known seed ID without depth")
+		}
+	}
+	return nil
+}
+
+func validateUniqueMapValues(kind string, count int, value func(int) string) error {
+	if count > 64 {
+		return fmt.Errorf("knowledge map view contains too many %s filters", kind)
+	}
+	seen := make(map[string]bool, count)
+	for i := 0; i < count; i++ {
+		item := value(i)
+		if item == "" || seen[item] {
+			return fmt.Errorf("knowledge map view contains invalid or duplicate %s filter", kind)
+		}
+		seen[item] = true
+	}
+	return nil
+}
+
+func validKnowledgeMapStateID(id string) bool {
+	return strings.TrimSpace(id) == id && id != "" && len(id) <= MaxKnowledgeIDBytes
 }
 
 func finiteMapCoordinate(value float64) bool {

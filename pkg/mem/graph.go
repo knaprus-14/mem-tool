@@ -13,13 +13,32 @@ type KnowledgeNodeKind string
 
 const (
 	KnowledgeNodeDocument      KnowledgeNodeKind = "document"
+	KnowledgeNodeSection       KnowledgeNodeKind = "section"
 	KnowledgeNodeTopic         KnowledgeNodeKind = "topic"
+	KnowledgeNodeDefinition    KnowledgeNodeKind = "definition"
 	KnowledgeNodeClaim         KnowledgeNodeKind = "claim"
+	KnowledgeNodeFormula       KnowledgeNodeKind = "formula"
+	KnowledgeNodeExample       KnowledgeNodeKind = "example"
+	KnowledgeNodeProcedure     KnowledgeNodeKind = "procedure"
+	KnowledgeNodeComparison    KnowledgeNodeKind = "comparison"
 	KnowledgeNodeNote          KnowledgeNodeKind = "note"
 	KnowledgeNodeQuestion      KnowledgeNodeKind = "question"
 	KnowledgeNodeCard          KnowledgeNodeKind = "card"
 	KnowledgeNodeContradiction KnowledgeNodeKind = "contradiction"
 	KnowledgeNodeGap           KnowledgeNodeKind = "gap"
+	KnowledgeNodeDependency    KnowledgeNodeKind = "dependency"
+	KnowledgeNodeCause         KnowledgeNodeKind = "cause"
+	KnowledgeNodeEffect        KnowledgeNodeKind = "effect"
+	KnowledgeNodeRisk          KnowledgeNodeKind = "risk"
+	KnowledgeNodeConstraint    KnowledgeNodeKind = "constraint"
+)
+
+type KnowledgeNodeLayer string
+
+const (
+	KnowledgeLayerSource    KnowledgeNodeLayer = "source"
+	KnowledgeLayerAnalytics KnowledgeNodeLayer = "analytics"
+	KnowledgeLayerWorkspace KnowledgeNodeLayer = "workspace"
 )
 
 type KnowledgeRelationKind string
@@ -37,6 +56,13 @@ const (
 	KnowledgeRelationCompares     KnowledgeRelationKind = "compares"
 	KnowledgeRelationRevealsGap   KnowledgeRelationKind = "reveals_gap"
 	KnowledgeRelationResolves     KnowledgeRelationKind = "resolves"
+	KnowledgeRelationDefines      KnowledgeRelationKind = "defines"
+	KnowledgeRelationExemplifies  KnowledgeRelationKind = "exemplifies"
+	KnowledgeRelationDependsOn    KnowledgeRelationKind = "depends_on"
+	KnowledgeRelationCauses       KnowledgeRelationKind = "causes"
+	KnowledgeRelationMitigates    KnowledgeRelationKind = "mitigates"
+	KnowledgeRelationConstrains   KnowledgeRelationKind = "constrains"
+	KnowledgeRelationPrecedes     KnowledgeRelationKind = "precedes"
 )
 
 type KnowledgeStatus string
@@ -239,6 +265,21 @@ CREATE TABLE IF NOT EXISTS knowledge_map_views (
     updated TEXT NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS knowledge_workspace_creations (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    node_id TEXT NOT NULL UNIQUE,
+    edge_id TEXT NOT NULL UNIQUE,
+    parent_node_id TEXT NOT NULL,
+    kind TEXT NOT NULL,
+    relation_kind TEXT NOT NULL,
+    author TEXT NOT NULL,
+    comment TEXT NOT NULL DEFAULT '',
+    content_digest TEXT NOT NULL,
+    parent_content_digest TEXT NOT NULL,
+    evidence_digest TEXT NOT NULL,
+    created TEXT NOT NULL
+);
+
 CREATE INDEX IF NOT EXISTS idx_knowledge_edges_from ON knowledge_edges(from_node);
 CREATE INDEX IF NOT EXISTS idx_knowledge_edges_to ON knowledge_edges(to_node);
 CREATE INDEX IF NOT EXISTS idx_knowledge_node_evidence_citation ON knowledge_node_evidence(citation_id);
@@ -247,6 +288,7 @@ CREATE INDEX IF NOT EXISTS idx_knowledge_reviews_object ON knowledge_reviews(obj
 CREATE INDEX IF NOT EXISTS idx_knowledge_edits_object ON knowledge_edits(object_type, object_id, id);
 CREATE INDEX IF NOT EXISTS idx_knowledge_node_merges_source ON knowledge_node_merges(source_node, id);
 CREATE INDEX IF NOT EXISTS idx_knowledge_node_merges_target ON knowledge_node_merges(target_node, id);
+CREATE INDEX IF NOT EXISTS idx_knowledge_workspace_creations_parent ON knowledge_workspace_creations(parent_node_id, id);
 
 CREATE TRIGGER IF NOT EXISTS knowledge_reviews_no_update
 BEFORE UPDATE ON knowledge_reviews
@@ -282,6 +324,18 @@ CREATE TRIGGER IF NOT EXISTS knowledge_node_merges_no_delete
 BEFORE DELETE ON knowledge_node_merges
 BEGIN
     SELECT RAISE(ABORT, 'knowledge node merge history is append-only');
+END;
+
+CREATE TRIGGER IF NOT EXISTS knowledge_workspace_creations_no_update
+BEFORE UPDATE ON knowledge_workspace_creations
+BEGIN
+    SELECT RAISE(ABORT, 'knowledge workspace creation history is append-only');
+END;
+
+CREATE TRIGGER IF NOT EXISTS knowledge_workspace_creations_no_delete
+BEFORE DELETE ON knowledge_workspace_creations
+BEGIN
+    SELECT RAISE(ABORT, 'knowledge workspace creation history is append-only');
 END;
 `
 
@@ -461,13 +515,32 @@ func validateKnowledgeID(id string) error {
 }
 
 func validKnowledgeNodeKind(kind KnowledgeNodeKind) bool {
+	return KnowledgeNodeLayerForKind(kind) != ""
+}
+
+// KnowledgeNodeLayerForKind classifies every supported kind without changing
+// the persisted graph format. The layer is semantic metadata, not an authority
+// decision: generated source-layer objects remain drafts until review.
+func KnowledgeNodeLayerForKind(kind KnowledgeNodeKind) KnowledgeNodeLayer {
 	switch kind {
-	case KnowledgeNodeDocument, KnowledgeNodeTopic, KnowledgeNodeClaim, KnowledgeNodeNote,
-		KnowledgeNodeQuestion, KnowledgeNodeCard, KnowledgeNodeContradiction, KnowledgeNodeGap:
-		return true
+	case KnowledgeNodeDocument, KnowledgeNodeSection, KnowledgeNodeTopic,
+		KnowledgeNodeDefinition, KnowledgeNodeClaim, KnowledgeNodeFormula,
+		KnowledgeNodeExample, KnowledgeNodeProcedure:
+		return KnowledgeLayerSource
+	case KnowledgeNodeComparison, KnowledgeNodeContradiction, KnowledgeNodeGap,
+		KnowledgeNodeDependency, KnowledgeNodeCause, KnowledgeNodeEffect,
+		KnowledgeNodeRisk, KnowledgeNodeConstraint:
+		return KnowledgeLayerAnalytics
+	case KnowledgeNodeNote, KnowledgeNodeQuestion, KnowledgeNodeCard:
+		return KnowledgeLayerWorkspace
 	default:
-		return false
+		return ""
 	}
+}
+
+func validKnowledgeExtractionNodeKind(kind KnowledgeNodeKind) bool {
+	layer := KnowledgeNodeLayerForKind(kind)
+	return layer == KnowledgeLayerSource || layer == KnowledgeLayerAnalytics
 }
 
 func validKnowledgeRelationKind(kind KnowledgeRelationKind) bool {
@@ -475,11 +548,23 @@ func validKnowledgeRelationKind(kind KnowledgeRelationKind) bool {
 	case KnowledgeRelationContains, KnowledgeRelationAbout, KnowledgeRelationSupports,
 		KnowledgeRelationContradicts, KnowledgeRelationDerivedFrom, KnowledgeRelationAsks,
 		KnowledgeRelationAnswers, KnowledgeRelationPrerequisite, KnowledgeRelationRelated,
-		KnowledgeRelationCompares, KnowledgeRelationRevealsGap, KnowledgeRelationResolves:
+		KnowledgeRelationCompares, KnowledgeRelationRevealsGap, KnowledgeRelationResolves,
+		KnowledgeRelationDefines, KnowledgeRelationExemplifies, KnowledgeRelationDependsOn,
+		KnowledgeRelationCauses, KnowledgeRelationMitigates, KnowledgeRelationConstrains,
+		KnowledgeRelationPrecedes:
 		return true
 	default:
 		return false
 	}
+}
+
+func validKnowledgeExtractionRelationKind(kind KnowledgeRelationKind) bool {
+	if !validKnowledgeRelationKind(kind) {
+		return false
+	}
+	// asks/answers belong to the user workspace. Model extraction must not
+	// manufacture user questions or present generated answers as reviewed work.
+	return kind != KnowledgeRelationAsks && kind != KnowledgeRelationAnswers
 }
 
 func validKnowledgeStatus(status KnowledgeStatus) bool {

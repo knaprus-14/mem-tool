@@ -68,7 +68,7 @@ func TestKnowledgeMapHTMLContainsOfflineInteractiveProvenancePayload(t *testing.
 		`Технические данные источника`, `Внутренний ID`, `источник актуален`,
 		`страница `, `фрагмент `, `refreshBtn`, `liveMode`,
 		`resetLayoutBtn`, `scheduleLayoutSave`, `X-Mem-Session`, `savedLayout`,
-		`двойной щелчок — освободить`, `connect-src 'self'`,
+		`Один щелчок открывает сведения`, `connect-src 'self'`,
 		`sourceAction`, `ОТКРЫТЬ PDF`, `/api/source?citation=`,
 		`Открытие физической страницы доступно через mem map open`,
 		`reviewAction`, `ПОДТВЕРДИТЬ`, `/api/review/approve`,
@@ -128,6 +128,21 @@ func TestKnowledgeMapHTMLContainsOfflineInteractiveProvenancePayload(t *testing.
 		`СОЗДАТЬ УЧЕБНЫЕ КАНДИДАТЫ`, `СОХРАНИТЬ ВЫБРАННЫЕ КАК DRAFT`, `learning-preview`,
 		`/api/selection/learning/route`, `runKnowledgeLearningRoute`, `ПОСТРОИТЬ УЧЕБНЫЙ МАРШРУТ`,
 		`learning-route`, `НЕ ДОПУЩЕНО В МАРШРУТ`, `prerequisite/depends_on`,
+		`/api/selection/learning/session/start`, `/api/selection/learning/session/grade`,
+		`/api/selection/learning/history`, `startKnowledgeLearningSession`, `gradeKnowledgeLearningItem`,
+		`НАЧАТЬ ПОВТОРЕНИЕ`, `ПОКАЗАТЬ ОТВЕТ`, `УЧЕБНЫЙ ПРОГРЕСС`, `learning-grade-grid`,
+		`data-workspace-mode="map"`, `data-workspace-mode="review"`, `data-workspace-mode="analysis"`,
+		`data-workspace-mode="learning"`, `setWorkspaceMode`, `reviewWorkspace`, `selectionWorkbench`,
+		`selectionTray`, `clearWorkingSelection`, `inspector-tabs`, `ДОБАВИТЬ В ВЫБРАННУЮ ОБЛАСТЬ`,
+		`clusterSearch`, `clusterMoreBtn`, `filterClusterCatalog`, `nth-child(n+7)`,
+		`selection.size&&selectionPanel.classList.contains('hidden')`,
+		`.app:not([data-workspace="map"]) #representationSelect`,
+		`class:'edge-group'`, `.edge-group.excluded{display:none}`, `.edge-group.dim{opacity:.08}`,
+		`updateGraphDensity`, `labels-compact`, `labels-hidden`, `updateGraphContext`,
+		`связей '+visibleEdges+' из '+edges.length`,
+		`arrangeBtn`, `arrangeClusterFocus`, `restoreClusterFocusLayout`, `clusterFocusSnapshot`,
+		`clusterLaneHeaders`, `ТЕМА И ИСТОЧНИК`, `ОПОРНЫЕ ЗНАНИЯ`, `АНАЛИТИКА И РЕШЕНИЯ`,
+		`const original=clusterFocusSnapshot.get(n.id)`, `const viewportState=clusterFocusViewport`,
 	} {
 		if !strings.Contains(html, marker) {
 			t.Errorf("HTML is missing %q", marker)
@@ -135,7 +150,8 @@ func TestKnowledgeMapHTMLContainsOfflineInteractiveProvenancePayload(t *testing.
 	}
 	if strings.Contains(html, `details.append(title,badges,field('ID',item.id))`) ||
 		strings.Contains(html, `details.append(field('Evidence digest'`) ||
-		strings.Contains(html, `title.textContent=item.label||item.id`) {
+		strings.Contains(html, `title.textContent=item.label||item.id`) ||
+		strings.Contains(html, `<aside id="details" class="details"><section id="selectionPanel"`) {
 		t.Fatal("technical identifiers are still rendered in the primary details view")
 	}
 	for _, unsupported := range []string{`prompt(`, `confirm(`, `alert('`} {

@@ -91,6 +91,12 @@ func newKnowledgeMapHandler(store *Store, title string, workspace *KnowledgeMapW
 			serveKnowledgeMapLearningSave(w, r, store, workspace)
 		case "/api/selection/learning/route":
 			serveKnowledgeMapLearningRoute(w, r, store, workspace)
+		case "/api/selection/learning/session/start":
+			serveKnowledgeMapLearningSessionStart(w, r, store, workspace)
+		case "/api/selection/learning/session/grade":
+			serveKnowledgeMapLearningSessionGrade(w, r, store, workspace)
+		case "/api/selection/learning/history":
+			serveKnowledgeMapLearningHistory(w, r, store, workspace)
 		default:
 			http.NotFound(w, r)
 		}
@@ -427,6 +433,115 @@ func serveKnowledgeMapLearningRoute(w http.ResponseWriter, r *http.Request, stor
 			return
 		}
 		http.Error(w, "knowledge learning route request was rejected", http.StatusBadRequest)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json; charset=utf-8")
+	_ = json.NewEncoder(w).Encode(result)
+}
+
+func serveKnowledgeMapLearningSessionStart(w http.ResponseWriter, r *http.Request, store *Store, workspace *KnowledgeMapWorkspace) {
+	if workspace == nil {
+		http.NotFound(w, r)
+		return
+	}
+	if r.Method != http.MethodPost {
+		w.Header().Set("Allow", "POST")
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	if store == nil {
+		http.Error(w, "knowledge map store is unavailable", http.StatusServiceUnavailable)
+		return
+	}
+	if !knowledgeMapWorkspaceAuthorized(r, workspace.SessionToken) {
+		http.Error(w, "forbidden knowledge learning session request", http.StatusForbidden)
+		return
+	}
+	var request KnowledgeLearningSessionStartRequest
+	if !decodeKnowledgeMapSelectionJSON(w, r, &request) {
+		return
+	}
+	result, err := store.StartKnowledgeLearningSession(request)
+	if err != nil {
+		switch {
+		case errors.Is(err, ErrKnowledgeSelectionChanged), errors.Is(err, ErrKnowledgeLearningItemChanged), errors.Is(err, ErrKnowledgeSelectionNotCurrent):
+			http.Error(w, "learning route, item, or evidence changed; rebuild the route", http.StatusConflict)
+		default:
+			http.Error(w, "knowledge learning session request was rejected", http.StatusBadRequest)
+		}
+		return
+	}
+	w.Header().Set("Content-Type", "application/json; charset=utf-8")
+	_ = json.NewEncoder(w).Encode(result)
+}
+
+func serveKnowledgeMapLearningSessionGrade(w http.ResponseWriter, r *http.Request, store *Store, workspace *KnowledgeMapWorkspace) {
+	if workspace == nil {
+		http.NotFound(w, r)
+		return
+	}
+	if r.Method != http.MethodPost {
+		w.Header().Set("Allow", "POST")
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	if store == nil {
+		http.Error(w, "knowledge map store is unavailable", http.StatusServiceUnavailable)
+		return
+	}
+	if !knowledgeMapWorkspaceAuthorized(r, workspace.SessionToken) {
+		http.Error(w, "forbidden knowledge learning grade request", http.StatusForbidden)
+		return
+	}
+	var request KnowledgeLearningGradeRequest
+	if !decodeKnowledgeMapSelectionJSON(w, r, &request) {
+		return
+	}
+	result, err := store.GradeKnowledgeLearningItem(request)
+	if err != nil {
+		switch {
+		case errors.Is(err, ErrKnowledgeLearningItemChanged), errors.Is(err, ErrKnowledgeLearningAlreadyGraded):
+			http.Error(w, "learning item changed or was already graded; start a new session", http.StatusConflict)
+		case errors.Is(err, ErrKnowledgeLearningSessionNotFound):
+			http.Error(w, "learning session or item was not found", http.StatusNotFound)
+		default:
+			http.Error(w, "knowledge learning grade was rejected", http.StatusBadRequest)
+		}
+		return
+	}
+	w.Header().Set("Content-Type", "application/json; charset=utf-8")
+	_ = json.NewEncoder(w).Encode(result)
+}
+
+func serveKnowledgeMapLearningHistory(w http.ResponseWriter, r *http.Request, store *Store, workspace *KnowledgeMapWorkspace) {
+	if workspace == nil {
+		http.NotFound(w, r)
+		return
+	}
+	if r.Method != http.MethodPost {
+		w.Header().Set("Allow", "POST")
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	if store == nil {
+		http.Error(w, "knowledge map store is unavailable", http.StatusServiceUnavailable)
+		return
+	}
+	if !knowledgeMapWorkspaceAuthorized(r, workspace.SessionToken) {
+		http.Error(w, "forbidden knowledge learning history request", http.StatusForbidden)
+		return
+	}
+	var request KnowledgeLearningHistoryRequest
+	if !decodeKnowledgeMapSelectionJSON(w, r, &request) {
+		return
+	}
+	result, err := store.BuildKnowledgeLearningHistory(request)
+	if err != nil {
+		if errors.Is(err, ErrKnowledgeSelectionChanged) {
+			http.Error(w, "learning route changed; rebuild it before loading progress", http.StatusConflict)
+			return
+		}
+		http.Error(w, "knowledge learning history request was rejected", http.StatusBadRequest)
 		return
 	}
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")

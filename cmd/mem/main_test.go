@@ -202,6 +202,7 @@ func TestImportRunCommandsExplainFailureWithoutInternalHashes(t *testing.T) {
 type fakeAnswerProvider struct {
 	answer   string
 	answers  []string
+	errors   []error
 	calls    int
 	request  mem.AnswerRequest
 	requests []mem.AnswerRequest
@@ -249,6 +250,9 @@ func (p *fakeAnswerProvider) Generate(_ context.Context, request mem.AnswerReque
 	p.calls++
 	p.request = request
 	p.requests = append(p.requests, request)
+	if len(p.errors) >= p.calls && p.errors[p.calls-1] != nil {
+		return "", p.errors[p.calls-1]
+	}
 	if len(p.answers) >= p.calls {
 		return p.answers[p.calls-1], nil
 	}
@@ -702,7 +706,12 @@ func TestHandleMapExtractRunsControlledBatchesAndUpdatesProcessingCoverage(t *te
 		t.Fatalf("unexpected CLI extraction fixture plan=%#v err=%v", plan, err)
 	}
 	citation := plan.Batches[0].Prompt.Evidence[0].CitationID
-	fake := &fakeAnswerProvider{answer: `{"nodes":[{"ref":"n1","kind":"claim","label":"Extracted CLI claim","confidence":0.9,"citations":["` + citation + `"]}]}`}
+	fake := &fakeAnswerProvider{
+		answers: []string{
+			`{"nodes":[{"ref":"n1","kind":"claim","label":"Broken CLI claim","confidence":0.9,"citations":["` + citation + `"]}],"edges":[{"from":"n1","to":"n2","kind":"supports","confidence":0.8,"citations":["` + citation + `"]}]}`,
+			`{"nodes":[{"ref":"n1","kind":"claim","label":"Extracted CLI claim","confidence":0.9,"citations":["` + citation + `"]}]}`,
+		},
+	}
 	originalProvider := newAnswerProvider
 	defer func() { newAnswerProvider = originalProvider }()
 	newAnswerProvider = func(mem.AnswerConfig) (mem.AnswerProvider, error) { return fake, nil }
@@ -724,7 +733,11 @@ func TestHandleMapExtractRunsControlledBatchesAndUpdatesProcessingCoverage(t *te
 			"extract", focus, "--document", source, "-context-chars", strconv.Itoa(mem.MaxAnswerContextChars), "-batches", "1",
 		})
 	})
-	if err != nil || fake.calls != 1 || !strings.Contains(stdout, "processed=2") || !strings.Contains(stderr, "checkpoints") {
+	if err != nil || fake.calls != 2 || !strings.Contains(stdout, "processed=2") || !strings.Contains(stderr, "checkpoints") ||
+		!strings.Contains(stderr, "исправляющий повтор 1/2") || len(fake.requests) != 2 ||
+		fake.requests[0].MaxTokens != mem.DefaultMapGenerationTokens || fake.requests[1].MaxTokens != mem.DefaultMapGenerationTokens ||
+		!strings.Contains(fake.requests[1].System, "CORRECTION RETRY") ||
+		!strings.Contains(fake.requests[1].System, "Every edge from/to must exactly match") {
 		t.Fatalf("extraction CLI failed: stdout=%q stderr=%q calls=%d err=%v", stdout, stderr, fake.calls, err)
 	}
 	report, err := store.BuildKnowledgeCoverageReport(mem.KnowledgeCoverageOptions{Document: source})
@@ -742,8 +755,99 @@ func TestHandleMapExtractRunsControlledBatchesAndUpdatesProcessingCoverage(t *te
 			"extract", focus, "--document", source, "-context-chars", strconv.Itoa(mem.MaxAnswerContextChars), "-batches", "1",
 		})
 	})
-	if err != nil || !strings.Contains(secondOut, "Задание не требуется") || fake.calls != 1 {
+	if err != nil || !strings.Contains(secondOut, "Задание не требуется") || fake.calls != 2 {
 		t.Fatalf("processed chunks were generated again: output=%q calls=%d err=%v", secondOut, fake.calls, err)
+	}
+}
+
+func TestGenerateKnowledgeExtractionBatchBoundsAutomaticTokenRetries(t *testing.T) {
+	provider := &fakeAnswerProvider{errors: []error{
+		&mem.AnswerTokenLimitError{MaxTokens: mem.DefaultMapGenerationTokens},
+		&mem.AnswerTokenLimitError{MaxTokens: mem.DefaultMapGenerationTokens * 2},
+		&mem.AnswerTokenLimitError{MaxTokens: maxAutomaticKnowledgeExtractionTokens},
+	}}
+	answerCfg := mem.AnswerConfig{
+		Model: "test-chat", MaxTokens: mem.DefaultMapGenerationTokens,
+		TimeoutSeconds: 1, Temperature: 0.1,
+	}
+	batch := mem.KnowledgeExtractionJobBatch{Prompt: mem.KnowledgeExtractionPrompt{
+		System: "strict system", User: "evidence", Evidence: []mem.GroundedEvidence{{CitationID: "cite-test"}},
+	}}
+	_, stderr, err := captureCLIStreams(func() error {
+		_, generateErr := generateKnowledgeExtractionBatch(context.Background(), provider, answerCfg, batch, 3, 8)
+		return generateErr
+	})
+	if err == nil || provider.calls != 3 || len(provider.requests) != 3 ||
+		provider.requests[0].MaxTokens != 4096 || provider.requests[1].MaxTokens != 8192 || provider.requests[2].MaxTokens != 16384 ||
+		!strings.Contains(stderr, "бюджетом 8192 tokens") || !strings.Contains(stderr, "бюджетом 16384 tokens") {
+		t.Fatalf("automatic retry bounds changed: calls=%d requests=%#v stderr=%q err=%v", provider.calls, provider.requests, stderr, err)
+	}
+}
+
+func TestExtractKnowledgeExtractionBatchBoundsCorrectionRetries(t *testing.T) {
+	provider := &fakeAnswerProvider{answers: []string{`{"nodes":`, `{"nodes":`, `{"nodes":`}}
+	answerCfg := mem.AnswerConfig{
+		Model: "test-chat", MaxTokens: mem.DefaultMapGenerationTokens,
+		TimeoutSeconds: 1, Temperature: 0.1,
+	}
+	batch := mem.KnowledgeExtractionJobBatch{Prompt: mem.KnowledgeExtractionPrompt{
+		System: "strict system", User: "evidence", Evidence: []mem.GroundedEvidence{{CitationID: "cite-test"}},
+	}}
+	var rejected bool
+	_, stderr, err := captureCLIStreams(func() error {
+		_, rejectedResult, extractErr := extractKnowledgeExtractionBatch(context.Background(), provider, answerCfg, batch, 6, 8)
+		rejected = rejectedResult
+		return extractErr
+	})
+	if err == nil || !rejected || provider.calls != 3 ||
+		!strings.Contains(stderr, "исправляющий повтор 1/2") || !strings.Contains(stderr, "исправляющий повтор 2/2") {
+		t.Fatalf("correction retry bounds changed: rejected=%v calls=%d stderr=%q err=%v", rejected, provider.calls, stderr, err)
+	}
+}
+
+func TestExtractKnowledgeExtractionBatchSplitsRejectedMultiEvidenceBatch(t *testing.T) {
+	store, err := mem.NewStore(filepath.Join(t.TempDir(), "db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	const source = "C:/docs/split-recovery.pdf"
+	for i, value := range []string{"alpha evidence", "beta evidence"} {
+		if _, err := store.AddDocumentChunk(value, "Split", nil, "test", []float32{1, 0}, "split", i, 2, false, mem.Provenance{
+			DocumentID: "doc-split", DocumentRevision: mem.ChunkContentHash("split revision"),
+			ChunkHash: mem.ChunkContentHash(value), SourcePath: source, MediaType: "application/pdf",
+			Page: i + 1, BlockIndex: i, BlockChunkIndex: 0, BlockTotalChunks: 1,
+			ExtractionMethod: "text", OCRConfidence: -1,
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	plan, err := store.BuildKnowledgeExtractionJobPlan("split recovery", mem.KnowledgeCoverageOptions{Document: source}, mem.MaxAnswerContextChars, 1)
+	if err != nil || len(plan.Batches) != 1 || len(plan.Batches[0].Prompt.Evidence) != 2 {
+		t.Fatalf("unexpected split fixture: plan=%#v err=%v", plan, err)
+	}
+	first := plan.Batches[0].Prompt.Evidence[0].CitationID
+	second := plan.Batches[0].Prompt.Evidence[1].CitationID
+	provider := &fakeAnswerProvider{answers: []string{
+		`{"nodes":[{"ref":"n1","kind":"unsupported","label":"bad","confidence":0.5,"citations":["` + first + `"]}]}`,
+		`{"nodes":[{"ref":"n1","kind":"unsupported","label":"bad","confidence":0.5,"citations":["` + first + `"]}]}`,
+		`{"nodes":[{"ref":"n1","kind":"unsupported","label":"bad","confidence":0.5,"citations":["` + first + `"]}]}`,
+		`{"nodes":[{"ref":"n1","kind":"claim","label":"Alpha","confidence":0.8,"citations":["` + first + `"]}]}`,
+		`{"nodes":[{"ref":"n1","kind":"claim","label":"Beta","confidence":0.8,"citations":["` + second + `"]}]}`,
+	}}
+	answerCfg := mem.AnswerConfig{Model: "test-chat", MaxTokens: mem.DefaultMapGenerationTokens, TimeoutSeconds: 1, Temperature: 0.1}
+	result, stderr, err := captureCLIStreams(func() error {
+		extracted, rejected, extractErr := extractKnowledgeExtractionBatch(context.Background(), provider, answerCfg, plan.Batches[0], 6, 8)
+		if extractErr == nil && (rejected || extracted.Insufficient || len(extracted.Graph.Nodes) != 2) {
+			return fmt.Errorf("unexpected split result: rejected=%v result=%#v", rejected, extracted)
+		}
+		return extractErr
+	})
+	_ = result
+	if err != nil || provider.calls != 5 || !strings.Contains(stderr, "делю на подпакеты 1+1") ||
+		!strings.Contains(stderr, "подпакеты объединены, nodes=2 edges=0") || len(provider.requests) != 5 ||
+		strings.Contains(provider.requests[3].Prompt, second) || strings.Contains(provider.requests[4].Prompt, first) {
+		t.Fatalf("split recovery failed: calls=%d stderr=%q err=%v", provider.calls, stderr, err)
 	}
 }
 

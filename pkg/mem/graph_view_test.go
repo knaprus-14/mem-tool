@@ -78,7 +78,7 @@ func TestKnowledgeMapHTMLContainsOfflineInteractiveProvenancePayload(t *testing.
 		`Автор правки`, `Комментарий к правке`, `latest_edits`,
 		`clusterFilters`, `buildTopology`, `clusterCenter`, `cluster_layout`,
 		`navigationAction`, `button.textContent='ФОКУС '+depth`, `СВЕРНУТЬ ВЕТВЬ`, `ПОКАЗАТЬ ВСЁ`,
-		`saveViewBtn`, `viewSelect`, `layoutURL`, `version:7`, `mem_map_last_view`,
+		`saveViewBtn`, `viewSelect`, `layoutURL`, `version:8`, `mem_map_last_view`,
 		`modalBackdrop`, `role="dialog"`, `showModal`, `Новое представление`,
 		`workspaceCreateAction`, `РАБОЧИЙ СЛОЙ`, `СОЗДАТЬ И ПРИВЯЗАТЬ`,
 		`/api/workspace/create`, `expected_parent_content_digest`, `workspace_creations`,
@@ -106,6 +106,10 @@ func TestKnowledgeMapHTMLContainsOfflineInteractiveProvenancePayload(t *testing.
 		`СРАВНЕНИЕ ДОКУМЕНТОВ`, `comparison-matrix`, `comparisonMatrix`,
 		`buildComparisonMatrix`, `updateComparisonVisibility`, `comparison-cell`,
 		`Нет evidence для документа`, `междокументный вывод неполон`,
+		`ПРОТИВОРЕЧИЯ И ПРОБЕЛЫ`, `findings-board`, `findingsBoard`,
+		`buildFindingsBoard`, `updateFindingsVisibility`, `finding-card`,
+		`Draft — предложение модели`, `Междокументное evidence неполно`,
+		`Связанные решения`, `mem map analyze`, `version<=8`,
 	} {
 		if !strings.Contains(html, marker) {
 			t.Errorf("HTML is missing %q", marker)

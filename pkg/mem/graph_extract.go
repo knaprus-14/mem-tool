@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"hash"
 	"io"
+	"reflect"
 	"sort"
 	"strconv"
 	"strings"
@@ -176,6 +177,48 @@ func BuildKnowledgeExtractionPrompt(focus string, entries []Entry, contextBudget
 		return KnowledgeExtractionPrompt{}, fmt.Errorf("knowledge extraction context budget exceeded: %d > %d", size, contextBudget)
 	}
 	return prompt, nil
+}
+
+// SubsetKnowledgeExtractionPrompt rebuilds an existing extraction prompt with
+// an exact subset of its trusted evidence. It is used when a model cannot
+// satisfy the strict graph schema for a larger batch and the host needs to
+// retry smaller, independently validated pieces without changing the focus or
+// allowing the model to alter provenance.
+func SubsetKnowledgeExtractionPrompt(prompt KnowledgeExtractionPrompt, evidence []GroundedEvidence) (KnowledgeExtractionPrompt, error) {
+	if len(evidence) == 0 {
+		return KnowledgeExtractionPrompt{}, errors.New("knowledge extraction prompt subset is empty")
+	}
+	original := make(map[string]GroundedEvidence, len(prompt.Evidence))
+	for _, item := range prompt.Evidence {
+		if item.CitationID == "" || original[item.CitationID].CitationID != "" {
+			return KnowledgeExtractionPrompt{}, fmt.Errorf("knowledge extraction prompt contains duplicate or empty citation %q", item.CitationID)
+		}
+		original[item.CitationID] = item
+	}
+	seen := make(map[string]bool, len(evidence))
+	for _, item := range evidence {
+		trusted, ok := original[item.CitationID]
+		if !ok || seen[item.CitationID] || !reflect.DeepEqual(trusted, item) {
+			return KnowledgeExtractionPrompt{}, fmt.Errorf("knowledge extraction prompt subset contains altered or duplicate citation %q", item.CitationID)
+		}
+		seen[item.CitationID] = true
+	}
+	const beginMarker = "\n\nEVIDENCE_JSON_BEGIN\n"
+	const endMarker = "\nEVIDENCE_JSON_END\n"
+	begin := strings.Index(prompt.User, beginMarker)
+	end := strings.LastIndex(prompt.User, endMarker)
+	if begin < 0 || end < begin+len(beginMarker) || end+len(endMarker) != len(prompt.User) {
+		return KnowledgeExtractionPrompt{}, errors.New("knowledge extraction prompt has invalid evidence envelope")
+	}
+	encoded, err := json.MarshalIndent(evidence, "", "  ")
+	if err != nil {
+		return KnowledgeExtractionPrompt{}, fmt.Errorf("knowledge extraction prompt subset: encode evidence: %w", err)
+	}
+	return KnowledgeExtractionPrompt{
+		System:   prompt.System,
+		User:     prompt.User[:begin] + beginMarker + string(encoded) + endMarker,
+		Evidence: append([]GroundedEvidence(nil), evidence...),
+	}, nil
 }
 
 // DecodeKnowledgeExtraction validates untrusted model JSON and derives every

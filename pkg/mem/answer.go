@@ -46,6 +46,28 @@ type AnswerProvider interface {
 	Generate(context.Context, AnswerRequest) (string, error)
 }
 
+// AnswerTokenLimitError reports that the provider stopped generation only
+// because the configured output budget was exhausted. Callers may use this
+// typed error to retry the same trusted request with a larger bounded budget;
+// other provider and validation failures must remain fail-closed.
+type AnswerTokenLimitError struct {
+	MaxTokens int
+}
+
+func (e *AnswerTokenLimitError) Error() string {
+	return fmt.Sprintf("ollama answer stopped at the %d-token limit before completing grounded JSON; increase answer.max_tokens or choose a concise instruct model", e.MaxTokens)
+}
+
+// AnswerTokenLimit returns the exhausted output budget when err represents a
+// provider token-limit stop. It also works through wrapped errors.
+func AnswerTokenLimit(err error) (int, bool) {
+	var limitErr *AnswerTokenLimitError
+	if !errors.As(err, &limitErr) || limitErr == nil {
+		return 0, false
+	}
+	return limitErr.MaxTokens, true
+}
+
 // OllamaAnswerProvider calls only a loopback Ollama /api/chat endpoint.
 type OllamaAnswerProvider struct {
 	BaseURL          string
@@ -299,7 +321,7 @@ func (p *OllamaAnswerProvider) Generate(ctx context.Context, request AnswerReque
 		return "", fmt.Errorf("ollama answer: decode response: %w", err)
 	}
 	if strings.EqualFold(strings.TrimSpace(decoded.DoneReason), "length") {
-		return "", fmt.Errorf("ollama answer stopped at the %d-token limit before completing grounded JSON; increase answer.max_tokens or choose a concise instruct model", request.MaxTokens)
+		return "", &AnswerTokenLimitError{MaxTokens: request.MaxTokens}
 	}
 	answer := strings.TrimSpace(decoded.Message.Content)
 	if answer == "" {

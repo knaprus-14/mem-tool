@@ -346,6 +346,8 @@ func TestOllamaAnswerProviderExplainsThinkingOnlyAndTokenLimitResponses(t *testi
 	request := AnswerRequest{System: "system", Prompt: "user", MaxTokens: 128}
 	if _, err := provider.Generate(context.Background(), request); err == nil || !strings.Contains(err.Error(), "128-token limit") {
 		t.Fatalf("token-limit response was not explained: %v", err)
+	} else if limit, ok := AnswerTokenLimit(err); !ok || limit != 128 {
+		t.Fatalf("token-limit response is not typed: limit=%d ok=%v err=%v", limit, ok, err)
 	}
 	if _, err := provider.Generate(context.Background(), request); err == nil || !strings.Contains(err.Error(), "only thinking") {
 		t.Fatalf("thinking-only response was not explained: %v", err)

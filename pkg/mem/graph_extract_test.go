@@ -41,6 +41,31 @@ func TestBuildKnowledgeExtractionPromptUsesOnlyBoundedVersionedEvidence(t *testi
 	}
 }
 
+func TestSubsetKnowledgeExtractionPromptPreservesFocusAndExactTrustedEvidence(t *testing.T) {
+	store, _ := graphStoreAndAnchor(t)
+	defer store.Close()
+	entries := store.GetBySourceFile(validStructuredChunks()[0].Provenance.SourcePath)
+	prompt, err := BuildKnowledgeExtractionPrompt("hydraulics", entries, 10000, 65)
+	if err != nil {
+		t.Fatal(err)
+	}
+	subset, err := SubsetKnowledgeExtractionPrompt(prompt, prompt.Evidence[1:])
+	if err != nil {
+		t.Fatal(err)
+	}
+	if subset.System != prompt.System || len(subset.Evidence) != 1 ||
+		subset.Evidence[0].CitationID != prompt.Evidence[1].CitationID ||
+		!strings.Contains(subset.User, `Focus (user input): "hydraulics"`) ||
+		strings.Contains(subset.User, prompt.Evidence[0].CitationID) {
+		t.Fatalf("prompt subset changed focus or evidence boundary: %#v", subset)
+	}
+	altered := prompt.Evidence[1]
+	altered.Text = "altered"
+	if _, err := SubsetKnowledgeExtractionPrompt(prompt, []GroundedEvidence{altered}); err == nil || !strings.Contains(err.Error(), "altered") {
+		t.Fatalf("altered evidence was accepted: %v", err)
+	}
+}
+
 func TestDecodeKnowledgeExtractionDerivesStableAnchoredGraph(t *testing.T) {
 	store, _ := graphStoreAndAnchor(t)
 	defer store.Close()

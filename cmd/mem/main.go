@@ -1093,24 +1093,15 @@ func handleMapExtract(cfg *Config, store *Store, args []string) error {
 				fmt.Fprintf(os.Stderr, "[MAP EXTRACT] warning %s: %s\n", evidence.CitationLabel, strings.Join(strings.Fields(warning), " "))
 			}
 		}
-		ctx, cancel := mem.AnswerContext(rootCtx, answerCfg)
-		raw, generateErr := provider.Generate(ctx, mem.AnswerRequest{
-			Model: answerCfg.Model, System: batch.Prompt.System, Prompt: batch.Prompt.User,
-			MaxTokens: answerCfg.MaxTokens, Temperature: answerCfg.Temperature,
-		})
-		cancel()
-		if generateErr != nil {
-			if saveErr := store.SaveKnowledgeExtractionBatchFailure(run.ID, batch.BatchID, generateErr); saveErr != nil {
-				return fmt.Errorf("map extract batch %d, run=%s: %v; save failure: %w", i+1, run.ID, generateErr, saveErr)
+		extracted, rejected, batchErr := extractKnowledgeExtractionBatch(rootCtx, provider, answerCfg, batch, i+1, len(plan.Batches))
+		if batchErr != nil {
+			if saveErr := store.SaveKnowledgeExtractionBatchFailure(run.ID, batch.BatchID, batchErr); saveErr != nil {
+				return fmt.Errorf("map extract batch %d, run=%s: %v; save failure: %w", i+1, run.ID, batchErr, saveErr)
 			}
-			return fmt.Errorf("map extract batch %d, run=%s: %w", i+1, run.ID, generateErr)
-		}
-		extracted, decodeErr := mem.DecodeKnowledgeExtraction(raw, batch.Prompt.Evidence)
-		if decodeErr != nil {
-			if saveErr := store.SaveKnowledgeExtractionBatchFailure(run.ID, batch.BatchID, decodeErr); saveErr != nil {
-				return fmt.Errorf("map extract batch %d rejected, run=%s: %v; save failure: %w", i+1, run.ID, decodeErr, saveErr)
+			if rejected {
+				return fmt.Errorf("map extract batch %d rejected after correction retries, run=%s: %w", i+1, run.ID, batchErr)
 			}
-			return fmt.Errorf("map extract batch %d rejected, run=%s: %w", i+1, run.ID, decodeErr)
+			return fmt.Errorf("map extract batch %d, run=%s: %w", i+1, run.ID, batchErr)
 		}
 		if extracted.Insufficient {
 			if err := store.SaveKnowledgeExtractionBatchInsufficient(run.ID, batch.BatchID, extracted.Reason); err != nil {
@@ -1132,6 +1123,150 @@ func handleMapExtract(cfg *Config, store *Store, args []string) error {
 	fmt.Fprintf(os.Stdout, "Задание извлечения завершено: run=%s processed=%d nodes=%d edges=%d remaining=%d. Результаты сохранены как draft.\n",
 		run.ID, plan.SelectedChunks, len(merged.Nodes), len(merged.Edges), plan.RemainingChunks)
 	return nil
+}
+
+const maxAutomaticKnowledgeExtractionTokens = 16384
+const maxKnowledgeExtractionCorrectionRetries = 2
+
+func extractKnowledgeExtractionBatch(rootCtx context.Context, provider mem.AnswerProvider, answerCfg mem.AnswerConfig, batch mem.KnowledgeExtractionJobBatch, ordinal, total int) (mem.KnowledgeExtractionResult, bool, error) {
+	extracted, rejected, err := extractKnowledgeExtractionBatchAttempt(rootCtx, provider, answerCfg, batch, ordinal, total)
+	if err == nil || !rejected || len(batch.Prompt.Evidence) <= 1 {
+		return extracted, rejected, err
+	}
+
+	middle := len(batch.Prompt.Evidence) / 2
+	parts := [][]mem.GroundedEvidence{
+		batch.Prompt.Evidence[:middle],
+		batch.Prompt.Evidence[middle:],
+	}
+	fmt.Fprintf(os.Stderr, "[MAP EXTRACT] batch=%d/%d: пакет из %d фрагментов не прошёл проверку; делю на подпакеты %d+%d\n",
+		ordinal, total, len(batch.Prompt.Evidence), len(parts[0]), len(parts[1]))
+	graphs := make([]mem.KnowledgeGraph, 0, len(parts))
+	insufficientReasons := make([]string, 0, len(parts))
+	for i, evidence := range parts {
+		prompt, promptErr := mem.SubsetKnowledgeExtractionPrompt(batch.Prompt, evidence)
+		if promptErr != nil {
+			return mem.KnowledgeExtractionResult{}, false, promptErr
+		}
+		subBatch := batch
+		subBatch.Prompt = prompt
+		fmt.Fprintf(os.Stderr, "[MAP EXTRACT] batch=%d/%d: подпакет %d/%d, фрагментов=%d\n",
+			ordinal, total, i+1, len(parts), len(evidence))
+		part, partRejected, partErr := extractKnowledgeExtractionBatch(rootCtx, provider, answerCfg, subBatch, ordinal, total)
+		if partErr != nil {
+			return mem.KnowledgeExtractionResult{}, partRejected, fmt.Errorf("sub-batch %d/%d with %d evidence items: %w", i+1, len(parts), len(evidence), partErr)
+		}
+		if part.Insufficient {
+			insufficientReasons = append(insufficientReasons, part.Reason)
+			continue
+		}
+		graphs = append(graphs, part.Graph)
+	}
+	if len(graphs) == 0 {
+		reason := strings.Join(insufficientReasons, "; ")
+		if strings.TrimSpace(reason) == "" {
+			reason = "Недостаточно подтверждённых данных после разбиения пакета."
+		}
+		return mem.KnowledgeExtractionResult{Insufficient: true, Reason: reason}, false, nil
+	}
+	merged, mergeErr := mem.MergeKnowledgeExtractionGraphs(graphs...)
+	if mergeErr != nil {
+		return mem.KnowledgeExtractionResult{}, false, fmt.Errorf("merge split extraction batch: %w", mergeErr)
+	}
+	fmt.Fprintf(os.Stderr, "[MAP EXTRACT] batch=%d/%d: подпакеты объединены, nodes=%d edges=%d\n",
+		ordinal, total, len(merged.Nodes), len(merged.Edges))
+	return mem.KnowledgeExtractionResult{Graph: merged}, false, nil
+}
+
+func extractKnowledgeExtractionBatchAttempt(rootCtx context.Context, provider mem.AnswerProvider, answerCfg mem.AnswerConfig, batch mem.KnowledgeExtractionJobBatch, ordinal, total int) (mem.KnowledgeExtractionResult, bool, error) {
+	attemptBatch := batch
+	for correction := 0; ; correction++ {
+		raw, err := generateKnowledgeExtractionBatch(rootCtx, provider, answerCfg, attemptBatch, ordinal, total)
+		if err != nil {
+			return mem.KnowledgeExtractionResult{}, false, err
+		}
+		extracted, err := mem.DecodeKnowledgeExtraction(raw, batch.Prompt.Evidence)
+		if err == nil {
+			return extracted, false, nil
+		}
+		if correction >= maxKnowledgeExtractionCorrectionRetries {
+			return mem.KnowledgeExtractionResult{}, true, err
+		}
+		fmt.Fprintf(os.Stderr, "[MAP EXTRACT] batch=%d/%d: JSON отклонён строгой проверкой (%s); исправляющий повтор %d/%d\n",
+			ordinal, total, strings.Join(strings.Fields(err.Error()), " "), correction+1, maxKnowledgeExtractionCorrectionRetries)
+		attemptBatch.Prompt.System = correctedKnowledgeExtractionPrompt(batch.Prompt.System, err, len(batch.Prompt.Evidence))
+	}
+}
+
+func generateKnowledgeExtractionBatch(rootCtx context.Context, provider mem.AnswerProvider, answerCfg mem.AnswerConfig, batch mem.KnowledgeExtractionJobBatch, ordinal, total int) (string, error) {
+	request := mem.AnswerRequest{
+		Model: answerCfg.Model, System: batch.Prompt.System, Prompt: batch.Prompt.User,
+		MaxTokens: answerCfg.MaxTokens, Temperature: answerCfg.Temperature,
+	}
+	for retry := 0; ; retry++ {
+		ctx, cancel := mem.AnswerContext(rootCtx, answerCfg)
+		raw, err := provider.Generate(ctx, request)
+		cancel()
+		if err == nil {
+			return raw, nil
+		}
+		exhausted, tokenLimit := mem.AnswerTokenLimit(err)
+		nextBudget := nextKnowledgeExtractionOutputBudget(request.MaxTokens)
+		if !tokenLimit || nextBudget <= request.MaxTokens {
+			return "", err
+		}
+		request.MaxTokens = nextBudget
+		request.System = compactKnowledgeExtractionRetryPrompt(batch.Prompt.System, len(batch.Prompt.Evidence))
+		fmt.Fprintf(os.Stderr, "[MAP EXTRACT] batch=%d/%d: ответ достиг лимита %d tokens; повтор %d с компактным JSON и бюджетом %d tokens\n",
+			ordinal, total, exhausted, retry+1, request.MaxTokens)
+	}
+}
+
+func nextKnowledgeExtractionOutputBudget(current int) int {
+	if current < 1 || current >= maxAutomaticKnowledgeExtractionTokens {
+		return current
+	}
+	next := current * 2
+	if next > maxAutomaticKnowledgeExtractionTokens {
+		next = maxAutomaticKnowledgeExtractionTokens
+	}
+	return next
+}
+
+func compactKnowledgeExtractionRetryPrompt(base string, evidenceCount int) string {
+	maxObjects := evidenceCount * 3
+	if maxObjects < 1 {
+		maxObjects = 1
+	}
+	return base + fmt.Sprintf(`
+
+RETRY AFTER OUTPUT-LIMIT STOP. Preserve coverage, citations, and strict JSON, but compress the representation.
+Do not repeat evidence text. Keep labels under 160 characters, bodies under 400 characters, and relation labels under 120 characters.
+Merge duplicate wording. Return at most %d nodes and %d edges for these %d evidence items. Return the JSON object immediately with no commentary.`,
+		maxObjects, maxObjects*2, evidenceCount)
+}
+
+func correctedKnowledgeExtractionPrompt(base string, validationErr error, evidenceCount int) string {
+	reason := "the response failed strict host validation"
+	message := strings.ToLower(validationErr.Error())
+	switch {
+	case strings.Contains(message, "references unknown ref"):
+		reason = "an edge referenced a ref that was not declared by a node in the same response"
+	case strings.Contains(message, "invalid kind or label"):
+		reason = "a node used an unsupported kind or an empty label; kind must be one exact lowercase value from the allowed list and label must contain visible text"
+	case strings.Contains(message, "unknown citation"):
+		reason = "an object used a citation_id that was not supplied in EVIDENCE_JSON"
+	case strings.Contains(message, "not valid strict json"), strings.Contains(message, "data after the json object"):
+		reason = "the response was not exactly one complete strict JSON object"
+	case strings.Contains(message, "duplicate"):
+		reason = "the response contained duplicate refs, IDs, or citations"
+	}
+	return base + fmt.Sprintf(`
+
+CORRECTION RETRY. The previous response was rejected because %s.
+Rebuild the complete JSON object from scratch. Declare every node ref before using it. Every edge from/to must exactly match a ref in the nodes array of this same response. Use only supplied citation_id values. Do not mention or repair the old response outside the new JSON.
+Node kind must be exactly one of: document, section, topic, definition, claim, formula, example, procedure, event, comparison, contradiction, gap, dependency, cause, effect, risk, constraint. Every node label must be a non-empty JSON string.
+For these %d evidence items, return one complete strict JSON object and no Markdown or commentary.`, reason, evidenceCount)
 }
 
 func handleMapExtractionRuns(store *Store, args []string) error {

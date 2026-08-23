@@ -556,6 +556,193 @@ func TestKnowledgeMapWorkspaceCreatesPinnedManualBranch(t *testing.T) {
 	}
 }
 
+func TestKnowledgeMapWorkspaceProtectsPinnedSelectionManifestAndAnswer(t *testing.T) {
+	store, anchor := graphStoreAndAnchor(t)
+	defer store.Close()
+	const nodeID = "workspace-selection-node"
+	if err := store.UpsertKnowledgeGraph(KnowledgeGraph{Nodes: []KnowledgeNode{{
+		ID: nodeID, Kind: KnowledgeNodeClaim, Label: "Selected claim", Status: KnowledgeStatusDraft,
+		Origin: KnowledgeOriginGenerated, Evidence: []EvidenceAnchor{anchor},
+	}}}); err != nil {
+		t.Fatal(err)
+	}
+	provider := &selectionAnswerProvider{answers: []string{`{"claims":[{"text":"Grounded selection","citations":["E1"]}]}`}}
+	service := &KnowledgeSelectionAnswerService{
+		Provider: provider,
+		Config:   AnswerConfig{Model: "test-chat", BaseURL: "http://127.0.0.1:11434", TimeoutSeconds: 1, MaxTokens: 512, ContextChars: 12000, Temperature: 0.1},
+	}
+	const token = "selection-session-capability-with-enough-entropy"
+	const host = "127.0.0.1:8765"
+	handler := NewKnowledgeMapWorkspaceHandlerWithSelection(store, "", token, DefaultKnowledgeMapView, service)
+	selection := KnowledgeSelectionRequest{NodeIDs: []string{nodeID}}
+	raw, _ := json.Marshal(selection)
+	if got := requestKnowledgeMapMutation(t, handler, "/api/selection/manifest", host, "http://"+host, "wrong", "same-origin", raw); got.Code != http.StatusForbidden {
+		t.Fatalf("unauthorized selection manifest returned %d", got.Code)
+	}
+	manifestResponse := requestKnowledgeMapMutation(t, handler, "/api/selection/manifest", host, "http://"+host, token, "same-origin", raw)
+	if manifestResponse.Code != http.StatusOK {
+		t.Fatalf("selection manifest failed: status=%d body=%q", manifestResponse.Code, manifestResponse.Body.String())
+	}
+	var manifest KnowledgeSelectionManifest
+	if err := json.Unmarshal(manifestResponse.Body.Bytes(), &manifest); err != nil || !manifest.Ready || manifest.Digest == "" {
+		t.Fatalf("selection manifest response is invalid: %#v err=%v", manifest, err)
+	}
+	exploreRequest := KnowledgeSelectionExploreRequest{
+		Selection: selection, ExpectedManifestDigest: manifest.Digest,
+		Mode: KnowledgeSelectionExploreNeighbours, Direction: KnowledgeSelectionDirectionBoth, Depth: 1,
+	}
+	raw, _ = json.Marshal(exploreRequest)
+	if got := requestKnowledgeMapMutation(t, handler, "/api/selection/explore", host, "http://"+host, "wrong", "same-origin", raw); got.Code != http.StatusForbidden {
+		t.Fatalf("unauthorized selection explore returned %d", got.Code)
+	}
+	explored := requestKnowledgeMapMutation(t, handler, "/api/selection/explore", host, "http://"+host, token, "same-origin", raw)
+	if explored.Code != http.StatusOK || !strings.Contains(explored.Body.String(), manifest.Digest) {
+		t.Fatalf("selection explore failed: status=%d body=%q", explored.Code, explored.Body.String())
+	}
+	answerRequest := KnowledgeSelectionAnswerRequest{
+		Selection: selection, ExpectedManifestDigest: "sha256:stale",
+		Mode: KnowledgeSelectionModeQuestion, Question: "What?",
+	}
+	raw, _ = json.Marshal(answerRequest)
+	if got := requestKnowledgeMapMutation(t, handler, "/api/selection/answer", host, "http://"+host, token, "same-origin", raw); got.Code != http.StatusConflict {
+		t.Fatalf("stale selection pin returned %d: %s", got.Code, got.Body.String())
+	}
+	answerRequest.ExpectedManifestDigest = manifest.Digest
+	raw, _ = json.Marshal(answerRequest)
+	answered := requestKnowledgeMapMutation(t, handler, "/api/selection/answer", host, "http://"+host, token, "same-origin", raw)
+	if answered.Code != http.StatusOK || !strings.Contains(answered.Body.String(), "Grounded selection") || len(provider.requests) != 1 {
+		t.Fatalf("selection answer failed: status=%d body=%q calls=%d", answered.Code, answered.Body.String(), len(provider.requests))
+	}
+	analysisRequest := KnowledgeSelectionAnalysisRequest{Selection: selection, ExpectedManifestDigest: manifest.Digest}
+	raw, _ = json.Marshal(analysisRequest)
+	if got := requestKnowledgeMapMutation(t, handler, "/api/selection/analyze", host, "http://"+host, "wrong", "same-origin", raw); got.Code != http.StatusForbidden {
+		t.Fatalf("unauthorized selection analysis returned %d", got.Code)
+	}
+	analyzed := requestKnowledgeMapMutation(t, handler, "/api/selection/analyze", host, "http://"+host, token, "same-origin", raw)
+	if analyzed.Code != http.StatusOK {
+		t.Fatalf("selection analysis failed: status=%d body=%q", analyzed.Code, analyzed.Body.String())
+	}
+	var analysis KnowledgeSelectionAnalysis
+	if err := json.Unmarshal(analyzed.Body.Bytes(), &analysis); err != nil || analysis.Digest == "" || !analysis.Ready {
+		t.Fatalf("selection analysis response is invalid: %#v err=%v", analysis, err)
+	}
+	exportRequest := KnowledgeSelectionExportRequest{Selection: selection, ExpectedManifestDigest: manifest.Digest, Format: KnowledgeSelectionExportReport, Title: "API export"}
+	raw, _ = json.Marshal(exportRequest)
+	if got := requestKnowledgeMapMutation(t, handler, "/api/selection/export", host, "http://"+host, "wrong", "same-origin", raw); got.Code != http.StatusForbidden {
+		t.Fatalf("unauthorized selection export returned %d", got.Code)
+	}
+	exported := requestKnowledgeMapMutation(t, handler, "/api/selection/export", host, "http://"+host, token, "same-origin", raw)
+	if exported.Code != http.StatusOK || !strings.Contains(exported.Body.String(), "# API export") ||
+		exported.Header().Get("Content-Type") != "text/markdown; charset=utf-8" ||
+		!strings.Contains(exported.Header().Get("Content-Disposition"), "mem-selection-report.md") {
+		t.Fatalf("selection export failed: status=%d type=%q disposition=%q body=%q", exported.Code, exported.Header().Get("Content-Type"), exported.Header().Get("Content-Disposition"), exported.Body.String())
+	}
+	saveRequest := KnowledgeSelectionAnalysisSaveRequest{Selection: selection, ExpectedManifestDigest: manifest.Digest, ExpectedAnalysisDigest: analysis.Digest, Label: "API report", Author: "Руслан"}
+	raw, _ = json.Marshal(saveRequest)
+	if got := requestKnowledgeMapMutation(t, handler, "/api/selection/analyze/save", host, "http://"+host, "wrong", "same-origin", raw); got.Code != http.StatusForbidden {
+		t.Fatalf("unauthorized selection analysis save returned %d", got.Code)
+	}
+	saved := requestKnowledgeMapMutation(t, handler, "/api/selection/analyze/save", host, "http://"+host, token, "same-origin", raw)
+	if saved.Code != http.StatusOK || !strings.Contains(saved.Body.String(), "API report") {
+		t.Fatalf("selection analysis save failed: status=%d body=%q", saved.Code, saved.Body.String())
+	}
+	readOnly := NewKnowledgeMapLiveHandler(store, "")
+	if got := requestKnowledgeMapMutation(t, readOnly, "/api/selection/manifest", host, "http://"+host, token, "same-origin", raw); got.Code != http.StatusNotFound {
+		t.Fatalf("read-only map exposed selection workspace API: %d", got.Code)
+	}
+	if got := requestKnowledgeMapMutation(t, readOnly, "/api/selection/explore", host, "http://"+host, token, "same-origin", raw); got.Code != http.StatusNotFound {
+		t.Fatalf("read-only map exposed selection explore API: %d", got.Code)
+	}
+	if got := requestKnowledgeMapMutation(t, readOnly, "/api/selection/analyze", host, "http://"+host, token, "same-origin", raw); got.Code != http.StatusNotFound {
+		t.Fatalf("read-only map exposed selection analysis API: %d", got.Code)
+	}
+	if got := requestKnowledgeMapMutation(t, readOnly, "/api/selection/analyze/save", host, "http://"+host, token, "same-origin", raw); got.Code != http.StatusNotFound {
+		t.Fatalf("read-only map exposed selection analysis save API: %d", got.Code)
+	}
+	if got := requestKnowledgeMapMutation(t, readOnly, "/api/selection/export", host, "http://"+host, token, "same-origin", raw); got.Code != http.StatusNotFound {
+		t.Fatalf("read-only map exposed selection export API: %d", got.Code)
+	}
+}
+
+func TestKnowledgeMapWorkspaceLearningAPIProducesAndSavesGroundedDrafts(t *testing.T) {
+	store, anchor := graphStoreAndAnchor(t)
+	defer store.Close()
+	const nodeID = "workspace-learning-node"
+	if err := store.UpsertKnowledgeGraph(KnowledgeGraph{Nodes: []KnowledgeNode{
+		{
+			ID: nodeID, Kind: KnowledgeNodeDefinition, Label: "Закон Ома", Body: "Связь тока, напряжения и сопротивления",
+			Status: KnowledgeStatusActive, Origin: KnowledgeOriginGenerated, Evidence: []EvidenceAnchor{anchor},
+		},
+		{
+			ID: "workspace-reviewed-card", Kind: KnowledgeNodeCard, Label: "Что связывает закон Ома?", Body: "Ток, напряжение и сопротивление.",
+			Status: KnowledgeStatusActive, Origin: KnowledgeOriginManual, Evidence: []EvidenceAnchor{anchor},
+		},
+	}, Edges: []KnowledgeEdge{{
+		ID: "workspace-reviewed-card-source", From: "workspace-reviewed-card", To: nodeID, Kind: KnowledgeRelationDerivedFrom,
+		Status: KnowledgeStatusDraft, Origin: KnowledgeOriginGenerated, Evidence: []EvidenceAnchor{anchor},
+	}}}); err != nil {
+		t.Fatal(err)
+	}
+	provider := &selectionAnswerProvider{answers: []string{`{"items":[{"kind":"card","prompt":"Что связывает закон Ома?","answer":"Ток, напряжение и сопротивление.","citations":["E1"]}]}`}}
+	service := &KnowledgeSelectionAnswerService{
+		Provider: provider,
+		Config:   AnswerConfig{Model: "test-chat", BaseURL: "http://127.0.0.1:11434", TimeoutSeconds: 1, MaxTokens: 512, ContextChars: 12000, Temperature: 0.1},
+	}
+	const token = "learning-session-capability-with-enough-entropy"
+	const host = "127.0.0.1:8765"
+	handler := NewKnowledgeMapWorkspaceHandlerWithSelection(store, "", token, DefaultKnowledgeMapView, service)
+	selection := KnowledgeSelectionRequest{NodeIDs: []string{nodeID}}
+	manifest, err := store.BuildKnowledgeSelectionManifest(selection)
+	if err != nil {
+		t.Fatal(err)
+	}
+	generateRequest := KnowledgeLearningGenerateRequest{Selection: selection, ExpectedManifestDigest: manifest.Digest, Count: 4, Focus: "определения"}
+	raw, _ := json.Marshal(generateRequest)
+	if got := requestKnowledgeMapMutation(t, handler, "/api/selection/learning/generate", host, "http://"+host, "wrong", "same-origin", raw); got.Code != http.StatusForbidden {
+		t.Fatalf("unauthorized learning generation returned %d", got.Code)
+	}
+	generated := requestKnowledgeMapMutation(t, handler, "/api/selection/learning/generate", host, "http://"+host, token, "same-origin", raw)
+	if generated.Code != http.StatusOK {
+		t.Fatalf("learning generation failed: status=%d body=%q", generated.Code, generated.Body.String())
+	}
+	var run KnowledgeLearningRun
+	if err := json.Unmarshal(generated.Body.Bytes(), &run); err != nil || run.ID == "" || len(run.Candidates) != 1 || len(run.Candidates[0].Sources) != 1 {
+		t.Fatalf("learning generation response is invalid: run=%#v err=%v", run, err)
+	}
+	saveRequest := KnowledgeLearningSaveRequest{RunID: run.ID, CandidateIndexes: []int{0}, Author: "Руслан", Comment: "Проверить"}
+	raw, _ = json.Marshal(saveRequest)
+	if got := requestKnowledgeMapMutation(t, handler, "/api/selection/learning/save", host, "http://"+host, "wrong", "same-origin", raw); got.Code != http.StatusForbidden {
+		t.Fatalf("unauthorized learning save returned %d", got.Code)
+	}
+	saved := requestKnowledgeMapMutation(t, handler, "/api/selection/learning/save", host, "http://"+host, token, "same-origin", raw)
+	if saved.Code != http.StatusOK {
+		t.Fatalf("learning save failed: status=%d body=%q", saved.Code, saved.Body.String())
+	}
+	var result KnowledgeLearningSaveResult
+	if err := json.Unmarshal(saved.Body.Bytes(), &result); err != nil || len(result.Nodes) != 1 || result.Nodes[0].Status != KnowledgeStatusDraft || result.Record.Author != "Руслан" {
+		t.Fatalf("learning save response is invalid: result=%#v err=%v", result, err)
+	}
+	routeRequest := KnowledgeLearningRouteRequest{Selection: selection, ExpectedManifestDigest: manifest.Digest}
+	raw, _ = json.Marshal(routeRequest)
+	if got := requestKnowledgeMapMutation(t, handler, "/api/selection/learning/route", host, "http://"+host, "wrong", "same-origin", raw); got.Code != http.StatusForbidden {
+		t.Fatalf("unauthorized learning route returned %d", got.Code)
+	}
+	routed := requestKnowledgeMapMutation(t, handler, "/api/selection/learning/route", host, "http://"+host, token, "same-origin", raw)
+	if routed.Code != http.StatusOK {
+		t.Fatalf("learning route failed: status=%d body=%q", routed.Code, routed.Body.String())
+	}
+	var route KnowledgeLearningRoute
+	if err := json.Unmarshal(routed.Body.Bytes(), &route); err != nil || !route.Ready || len(route.Items) != 1 || route.Items[0].ID != "workspace-reviewed-card" {
+		t.Fatalf("learning route response is invalid: route=%#v err=%v", route, err)
+	}
+	readOnly := NewKnowledgeMapLiveHandler(store, "")
+	for _, path := range []string{"/api/selection/learning/generate", "/api/selection/learning/save", "/api/selection/learning/route"} {
+		if got := requestKnowledgeMapMutation(t, readOnly, path, host, "http://"+host, token, "same-origin", raw); got.Code != http.StatusNotFound {
+			t.Fatalf("read-only map exposed %s: %d", path, got.Code)
+		}
+	}
+}
+
 func requestKnowledgeMap(t *testing.T, handler http.Handler, method, path, host string) *httptest.ResponseRecorder {
 	t.Helper()
 	req := httptest.NewRequest(method, "http://127.0.0.1"+path, nil)

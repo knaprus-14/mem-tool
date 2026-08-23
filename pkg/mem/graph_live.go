@@ -20,7 +20,7 @@ import (
 // current graph directly from store on every request. Network binding and
 // process lifetime remain the caller's responsibility.
 func NewKnowledgeMapLiveHandler(store *Store, title string) http.Handler {
-	return newKnowledgeMapHandler(store, title, nil)
+	return newKnowledgeMapHandler(store, title, nil, nil)
 }
 
 // NewKnowledgeMapWorkspaceHandler returns a live handler for local source
@@ -28,16 +28,24 @@ func NewKnowledgeMapLiveHandler(store *Store, title string) http.Handler {
 // require a same-origin request plus the short-lived session capability
 // embedded in the generated page.
 func NewKnowledgeMapWorkspaceHandler(store *Store, title, sessionToken, viewName string) http.Handler {
+	return NewKnowledgeMapWorkspaceHandlerWithSelection(store, title, sessionToken, viewName, nil)
+}
+
+// NewKnowledgeMapWorkspaceHandlerWithSelection enables the same loopback-only
+// workspace plus pinned selected-subgraph manifests and, when configured, local
+// grounded answer operations over only that selected evidence.
+func NewKnowledgeMapWorkspaceHandlerWithSelection(store *Store, title, sessionToken, viewName string, selection *KnowledgeSelectionAnswerService) http.Handler {
 	if strings.TrimSpace(viewName) == "" {
 		viewName = DefaultKnowledgeMapView
 	}
 	return newKnowledgeMapHandler(store, title, &KnowledgeMapWorkspace{
-		SessionToken: sessionToken,
-		ViewName:     viewName,
-	})
+		SessionToken:    sessionToken,
+		ViewName:        viewName,
+		SelectionAnswer: selection != nil && selection.Provider != nil,
+	}, selection)
 }
 
-func newKnowledgeMapHandler(store *Store, title string, workspace *KnowledgeMapWorkspace) http.Handler {
+func newKnowledgeMapHandler(store *Store, title string, workspace *KnowledgeMapWorkspace, selection *KnowledgeSelectionAnswerService) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		setKnowledgeMapSecurityHeaders(w.Header())
 		if !knowledgeMapLoopbackHost(r.Host) {
@@ -65,10 +73,393 @@ func newKnowledgeMapHandler(store *Store, title string, workspace *KnowledgeMapW
 			serveKnowledgeMapEditMutation(w, r, store, workspace, KnowledgeEditActionUndo)
 		case "/api/workspace/create":
 			serveKnowledgeMapWorkspaceCreate(w, r, store, workspace)
+		case "/api/selection/manifest":
+			serveKnowledgeMapSelectionManifest(w, r, store, workspace)
+		case "/api/selection/answer":
+			serveKnowledgeMapSelectionAnswer(w, r, store, workspace, selection)
+		case "/api/selection/explore":
+			serveKnowledgeMapSelectionExplore(w, r, store, workspace)
+		case "/api/selection/analyze":
+			serveKnowledgeMapSelectionAnalyze(w, r, store, workspace)
+		case "/api/selection/analyze/save":
+			serveKnowledgeMapSelectionAnalysisSave(w, r, store, workspace)
+		case "/api/selection/export":
+			serveKnowledgeMapSelectionExport(w, r, store, workspace)
+		case "/api/selection/learning/generate":
+			serveKnowledgeMapLearningGenerate(w, r, store, workspace, selection)
+		case "/api/selection/learning/save":
+			serveKnowledgeMapLearningSave(w, r, store, workspace)
+		case "/api/selection/learning/route":
+			serveKnowledgeMapLearningRoute(w, r, store, workspace)
 		default:
 			http.NotFound(w, r)
 		}
 	})
+}
+
+const MaxKnowledgeMapSelectionJSON = 128 << 10
+
+func serveKnowledgeMapSelectionManifest(w http.ResponseWriter, r *http.Request, store *Store, workspace *KnowledgeMapWorkspace) {
+	if workspace == nil {
+		http.NotFound(w, r)
+		return
+	}
+	if r.Method != http.MethodPost {
+		w.Header().Set("Allow", "POST")
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	if store == nil {
+		http.Error(w, "knowledge map store is unavailable", http.StatusServiceUnavailable)
+		return
+	}
+	if !knowledgeMapWorkspaceAuthorized(r, workspace.SessionToken) {
+		http.Error(w, "forbidden selection request", http.StatusForbidden)
+		return
+	}
+	var request KnowledgeSelectionRequest
+	if !decodeKnowledgeMapSelectionJSON(w, r, &request) {
+		return
+	}
+	manifest, err := store.BuildKnowledgeSelectionManifest(request)
+	if err != nil {
+		if errors.Is(err, ErrKnowledgeSelectionEmpty) {
+			http.Error(w, "knowledge selection is empty", http.StatusBadRequest)
+			return
+		}
+		http.Error(w, "knowledge selection was rejected", http.StatusBadRequest)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json; charset=utf-8")
+	_ = json.NewEncoder(w).Encode(manifest)
+}
+
+func serveKnowledgeMapSelectionAnswer(w http.ResponseWriter, r *http.Request, store *Store, workspace *KnowledgeMapWorkspace, service *KnowledgeSelectionAnswerService) {
+	if workspace == nil {
+		http.NotFound(w, r)
+		return
+	}
+	if r.Method != http.MethodPost {
+		w.Header().Set("Allow", "POST")
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	if store == nil {
+		http.Error(w, "knowledge map store is unavailable", http.StatusServiceUnavailable)
+		return
+	}
+	if !knowledgeMapWorkspaceAuthorized(r, workspace.SessionToken) {
+		http.Error(w, "forbidden selection answer request", http.StatusForbidden)
+		return
+	}
+	if service == nil || service.Provider == nil {
+		http.Error(w, "selection answer model is unavailable", http.StatusServiceUnavailable)
+		return
+	}
+	var request KnowledgeSelectionAnswerRequest
+	if !decodeKnowledgeMapSelectionJSON(w, r, &request) {
+		return
+	}
+	result, err := store.AnswerKnowledgeSelection(r.Context(), service, request)
+	if err != nil {
+		switch {
+		case errors.Is(err, ErrKnowledgeSelectionChanged), errors.Is(err, ErrKnowledgeSelectionNotCurrent):
+			http.Error(w, "selection or evidence changed; rebuild the selection before retrying", http.StatusConflict)
+		case errors.Is(err, ErrKnowledgeSelectionUnavailable):
+			http.Error(w, "selection answer model is unavailable", http.StatusServiceUnavailable)
+		default:
+			http.Error(w, "selection answer request was rejected", http.StatusBadRequest)
+		}
+		return
+	}
+	w.Header().Set("Content-Type", "application/json; charset=utf-8")
+	_ = json.NewEncoder(w).Encode(result)
+}
+
+func serveKnowledgeMapSelectionExplore(w http.ResponseWriter, r *http.Request, store *Store, workspace *KnowledgeMapWorkspace) {
+	if workspace == nil {
+		http.NotFound(w, r)
+		return
+	}
+	if r.Method != http.MethodPost {
+		w.Header().Set("Allow", "POST")
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	if store == nil {
+		http.Error(w, "knowledge map store is unavailable", http.StatusServiceUnavailable)
+		return
+	}
+	if !knowledgeMapWorkspaceAuthorized(r, workspace.SessionToken) {
+		http.Error(w, "forbidden selection explore request", http.StatusForbidden)
+		return
+	}
+	var request KnowledgeSelectionExploreRequest
+	if !decodeKnowledgeMapSelectionJSON(w, r, &request) {
+		return
+	}
+	result, err := store.ExploreKnowledgeSelection(request)
+	if err != nil {
+		if errors.Is(err, ErrKnowledgeSelectionChanged) {
+			http.Error(w, "selection or evidence changed; rebuild the selection before retrying", http.StatusConflict)
+			return
+		}
+		http.Error(w, "selection explore request was rejected", http.StatusBadRequest)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json; charset=utf-8")
+	_ = json.NewEncoder(w).Encode(result)
+}
+
+func serveKnowledgeMapSelectionAnalyze(w http.ResponseWriter, r *http.Request, store *Store, workspace *KnowledgeMapWorkspace) {
+	if workspace == nil {
+		http.NotFound(w, r)
+		return
+	}
+	if r.Method != http.MethodPost {
+		w.Header().Set("Allow", "POST")
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	if store == nil {
+		http.Error(w, "knowledge map store is unavailable", http.StatusServiceUnavailable)
+		return
+	}
+	if !knowledgeMapWorkspaceAuthorized(r, workspace.SessionToken) {
+		http.Error(w, "forbidden selection analysis request", http.StatusForbidden)
+		return
+	}
+	var request KnowledgeSelectionAnalysisRequest
+	if !decodeKnowledgeMapSelectionJSON(w, r, &request) {
+		return
+	}
+	result, err := store.AnalyzeKnowledgeSelection(request)
+	if err != nil {
+		if errors.Is(err, ErrKnowledgeSelectionChanged) {
+			http.Error(w, "selection or evidence changed; rebuild the selection before retrying", http.StatusConflict)
+			return
+		}
+		http.Error(w, "selection analysis request was rejected", http.StatusBadRequest)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json; charset=utf-8")
+	_ = json.NewEncoder(w).Encode(result)
+}
+
+func serveKnowledgeMapSelectionAnalysisSave(w http.ResponseWriter, r *http.Request, store *Store, workspace *KnowledgeMapWorkspace) {
+	if workspace == nil {
+		http.NotFound(w, r)
+		return
+	}
+	if r.Method != http.MethodPost {
+		w.Header().Set("Allow", "POST")
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	if store == nil {
+		http.Error(w, "knowledge map store is unavailable", http.StatusServiceUnavailable)
+		return
+	}
+	if !knowledgeMapWorkspaceAuthorized(r, workspace.SessionToken) {
+		http.Error(w, "forbidden selection analysis save request", http.StatusForbidden)
+		return
+	}
+	var request KnowledgeSelectionAnalysisSaveRequest
+	if !decodeKnowledgeMapSelectionJSON(w, r, &request) {
+		return
+	}
+	result, err := store.SaveKnowledgeSelectionAnalysis(request)
+	if err != nil {
+		switch {
+		case errors.Is(err, ErrKnowledgeSelectionChanged), errors.Is(err, ErrKnowledgeSelectionNotCurrent):
+			http.Error(w, "selection, analysis, or evidence changed; rebuild the analysis before retrying", http.StatusConflict)
+		default:
+			http.Error(w, "selection analysis save request was rejected", http.StatusBadRequest)
+		}
+		return
+	}
+	w.Header().Set("Content-Type", "application/json; charset=utf-8")
+	_ = json.NewEncoder(w).Encode(result)
+}
+
+func serveKnowledgeMapSelectionExport(w http.ResponseWriter, r *http.Request, store *Store, workspace *KnowledgeMapWorkspace) {
+	if workspace == nil {
+		http.NotFound(w, r)
+		return
+	}
+	if r.Method != http.MethodPost {
+		w.Header().Set("Allow", "POST")
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	if store == nil {
+		http.Error(w, "knowledge map store is unavailable", http.StatusServiceUnavailable)
+		return
+	}
+	if !knowledgeMapWorkspaceAuthorized(r, workspace.SessionToken) {
+		http.Error(w, "forbidden selection export request", http.StatusForbidden)
+		return
+	}
+	var request KnowledgeSelectionExportRequest
+	if !decodeKnowledgeMapSelectionJSON(w, r, &request) {
+		return
+	}
+	result, err := store.ExportKnowledgeSelection(request)
+	if err != nil {
+		if errors.Is(err, ErrKnowledgeSelectionChanged) {
+			http.Error(w, "selection or evidence changed; rebuild the selection before exporting", http.StatusConflict)
+			return
+		}
+		http.Error(w, "selection export request was rejected", http.StatusBadRequest)
+		return
+	}
+	w.Header().Set("Content-Type", result.ContentType)
+	w.Header().Set("Content-Disposition", mime.FormatMediaType("attachment", map[string]string{"filename": result.Filename}))
+	w.Header().Set("Content-Length", fmt.Sprint(len(result.Content)))
+	w.WriteHeader(http.StatusOK)
+	_, _ = w.Write(result.Content)
+}
+
+func serveKnowledgeMapLearningGenerate(w http.ResponseWriter, r *http.Request, store *Store, workspace *KnowledgeMapWorkspace, service *KnowledgeSelectionAnswerService) {
+	if workspace == nil {
+		http.NotFound(w, r)
+		return
+	}
+	if r.Method != http.MethodPost {
+		w.Header().Set("Allow", "POST")
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	if store == nil {
+		http.Error(w, "knowledge map store is unavailable", http.StatusServiceUnavailable)
+		return
+	}
+	if !knowledgeMapWorkspaceAuthorized(r, workspace.SessionToken) {
+		http.Error(w, "forbidden knowledge learning generation request", http.StatusForbidden)
+		return
+	}
+	if service == nil || service.Provider == nil {
+		http.Error(w, "knowledge learning model is unavailable", http.StatusServiceUnavailable)
+		return
+	}
+	var request KnowledgeLearningGenerateRequest
+	if !decodeKnowledgeMapSelectionJSON(w, r, &request) {
+		return
+	}
+	result, err := store.GenerateKnowledgeLearningCandidates(r.Context(), service, request)
+	if err != nil {
+		switch {
+		case errors.Is(err, ErrKnowledgeSelectionChanged), errors.Is(err, ErrKnowledgeSelectionNotCurrent):
+			http.Error(w, "selection or evidence changed; rebuild the selection before generating learning candidates", http.StatusConflict)
+		case errors.Is(err, ErrKnowledgeSelectionUnavailable):
+			http.Error(w, "knowledge learning model is unavailable", http.StatusServiceUnavailable)
+		default:
+			http.Error(w, "knowledge learning generation was rejected", http.StatusBadRequest)
+		}
+		return
+	}
+	w.Header().Set("Content-Type", "application/json; charset=utf-8")
+	_ = json.NewEncoder(w).Encode(result)
+}
+
+func serveKnowledgeMapLearningSave(w http.ResponseWriter, r *http.Request, store *Store, workspace *KnowledgeMapWorkspace) {
+	if workspace == nil {
+		http.NotFound(w, r)
+		return
+	}
+	if r.Method != http.MethodPost {
+		w.Header().Set("Allow", "POST")
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	if store == nil {
+		http.Error(w, "knowledge map store is unavailable", http.StatusServiceUnavailable)
+		return
+	}
+	if !knowledgeMapWorkspaceAuthorized(r, workspace.SessionToken) {
+		http.Error(w, "forbidden knowledge learning save request", http.StatusForbidden)
+		return
+	}
+	var request KnowledgeLearningSaveRequest
+	if !decodeKnowledgeMapSelectionJSON(w, r, &request) {
+		return
+	}
+	result, err := store.SaveKnowledgeLearningCandidates(request)
+	if err != nil {
+		switch {
+		case errors.Is(err, ErrKnowledgeSelectionChanged), errors.Is(err, ErrKnowledgeSelectionNotCurrent), errors.Is(err, ErrKnowledgeContentChanged), errors.Is(err, ErrKnowledgeEvidenceChanged), errors.Is(err, ErrKnowledgeEvidenceNotCurrent):
+			http.Error(w, "learning run, selection, or evidence changed; generate candidates again", http.StatusConflict)
+		default:
+			http.Error(w, "knowledge learning save was rejected", http.StatusBadRequest)
+		}
+		return
+	}
+	w.Header().Set("Content-Type", "application/json; charset=utf-8")
+	_ = json.NewEncoder(w).Encode(result)
+}
+
+func serveKnowledgeMapLearningRoute(w http.ResponseWriter, r *http.Request, store *Store, workspace *KnowledgeMapWorkspace) {
+	if workspace == nil {
+		http.NotFound(w, r)
+		return
+	}
+	if r.Method != http.MethodPost {
+		w.Header().Set("Allow", "POST")
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	if store == nil {
+		http.Error(w, "knowledge map store is unavailable", http.StatusServiceUnavailable)
+		return
+	}
+	if !knowledgeMapWorkspaceAuthorized(r, workspace.SessionToken) {
+		http.Error(w, "forbidden knowledge learning route request", http.StatusForbidden)
+		return
+	}
+	var request KnowledgeLearningRouteRequest
+	if !decodeKnowledgeMapSelectionJSON(w, r, &request) {
+		return
+	}
+	result, err := store.BuildKnowledgeLearningRoute(request)
+	if err != nil {
+		if errors.Is(err, ErrKnowledgeSelectionChanged) {
+			http.Error(w, "selection changed; rebuild it before preparing the learning route", http.StatusConflict)
+			return
+		}
+		http.Error(w, "knowledge learning route request was rejected", http.StatusBadRequest)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json; charset=utf-8")
+	_ = json.NewEncoder(w).Encode(result)
+}
+
+func decodeKnowledgeMapSelectionJSON(w http.ResponseWriter, r *http.Request, target any) bool {
+	mediaType, _, err := mime.ParseMediaType(r.Header.Get("Content-Type"))
+	if err != nil || mediaType != "application/json" {
+		http.Error(w, "content type must be application/json", http.StatusUnsupportedMediaType)
+		return false
+	}
+	if r.ContentLength > MaxKnowledgeMapSelectionJSON {
+		http.Error(w, "selection request is too large", http.StatusRequestEntityTooLarge)
+		return false
+	}
+	r.Body = http.MaxBytesReader(w, r.Body, MaxKnowledgeMapSelectionJSON)
+	decoder := json.NewDecoder(r.Body)
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(target); err != nil {
+		var tooLarge *http.MaxBytesError
+		if errors.As(err, &tooLarge) {
+			http.Error(w, "selection request is too large", http.StatusRequestEntityTooLarge)
+			return false
+		}
+		http.Error(w, "invalid selection request", http.StatusBadRequest)
+		return false
+	}
+	if err := decoder.Decode(&struct{}{}); err != io.EOF {
+		http.Error(w, "selection request must contain one JSON object", http.StatusBadRequest)
+		return false
+	}
+	return true
 }
 
 const MaxKnowledgeMapWorkspaceCreateJSON = 128 << 10

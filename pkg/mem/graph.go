@@ -288,6 +288,44 @@ CREATE TABLE IF NOT EXISTS knowledge_workspace_creations (
     created TEXT NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS knowledge_selection_reports (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    node_id TEXT NOT NULL UNIQUE,
+    edge_ids_json TEXT NOT NULL,
+    selection_json TEXT NOT NULL,
+    manifest_digest TEXT NOT NULL,
+    analysis_digest TEXT NOT NULL,
+    author TEXT NOT NULL,
+    comment TEXT NOT NULL DEFAULT '',
+    content_digest TEXT NOT NULL,
+    evidence_digest TEXT NOT NULL,
+    created TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS knowledge_learning_runs (
+    id TEXT PRIMARY KEY,
+    selection_json TEXT NOT NULL,
+    manifest_digest TEXT NOT NULL,
+    candidates_json TEXT NOT NULL,
+    generation_digest TEXT NOT NULL,
+    model TEXT NOT NULL,
+    correction_retries INTEGER NOT NULL DEFAULT 0,
+    created TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS knowledge_learning_saves (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    run_id TEXT NOT NULL,
+    candidate_indexes_json TEXT NOT NULL,
+    node_ids_json TEXT NOT NULL,
+    edge_ids_json TEXT NOT NULL,
+    author TEXT NOT NULL,
+    comment TEXT NOT NULL DEFAULT '',
+    generation_digest TEXT NOT NULL,
+    created TEXT NOT NULL,
+    UNIQUE(run_id, candidate_indexes_json)
+);
+
 CREATE INDEX IF NOT EXISTS idx_knowledge_edges_from ON knowledge_edges(from_node);
 CREATE INDEX IF NOT EXISTS idx_knowledge_edges_to ON knowledge_edges(to_node);
 CREATE INDEX IF NOT EXISTS idx_knowledge_node_evidence_citation ON knowledge_node_evidence(citation_id);
@@ -297,6 +335,9 @@ CREATE INDEX IF NOT EXISTS idx_knowledge_edits_object ON knowledge_edits(object_
 CREATE INDEX IF NOT EXISTS idx_knowledge_node_merges_source ON knowledge_node_merges(source_node, id);
 CREATE INDEX IF NOT EXISTS idx_knowledge_node_merges_target ON knowledge_node_merges(target_node, id);
 CREATE INDEX IF NOT EXISTS idx_knowledge_workspace_creations_parent ON knowledge_workspace_creations(parent_node_id, id);
+CREATE INDEX IF NOT EXISTS idx_knowledge_selection_reports_created ON knowledge_selection_reports(id);
+CREATE INDEX IF NOT EXISTS idx_knowledge_learning_runs_created ON knowledge_learning_runs(created, id);
+CREATE INDEX IF NOT EXISTS idx_knowledge_learning_saves_run ON knowledge_learning_saves(run_id, id);
 
 CREATE TRIGGER IF NOT EXISTS knowledge_reviews_no_update
 BEFORE UPDATE ON knowledge_reviews
@@ -344,6 +385,42 @@ CREATE TRIGGER IF NOT EXISTS knowledge_workspace_creations_no_delete
 BEFORE DELETE ON knowledge_workspace_creations
 BEGIN
     SELECT RAISE(ABORT, 'knowledge workspace creation history is append-only');
+END;
+
+CREATE TRIGGER IF NOT EXISTS knowledge_selection_reports_no_update
+BEFORE UPDATE ON knowledge_selection_reports
+BEGIN
+    SELECT RAISE(ABORT, 'knowledge selection report history is append-only');
+END;
+
+CREATE TRIGGER IF NOT EXISTS knowledge_selection_reports_no_delete
+BEFORE DELETE ON knowledge_selection_reports
+BEGIN
+    SELECT RAISE(ABORT, 'knowledge selection report history is append-only');
+END;
+
+CREATE TRIGGER IF NOT EXISTS knowledge_learning_runs_no_update
+BEFORE UPDATE ON knowledge_learning_runs
+BEGIN
+    SELECT RAISE(ABORT, 'knowledge learning run history is append-only');
+END;
+
+CREATE TRIGGER IF NOT EXISTS knowledge_learning_runs_no_delete
+BEFORE DELETE ON knowledge_learning_runs
+BEGIN
+    SELECT RAISE(ABORT, 'knowledge learning run history is append-only');
+END;
+
+CREATE TRIGGER IF NOT EXISTS knowledge_learning_saves_no_update
+BEFORE UPDATE ON knowledge_learning_saves
+BEGIN
+    SELECT RAISE(ABORT, 'knowledge learning save history is append-only');
+END;
+
+CREATE TRIGGER IF NOT EXISTS knowledge_learning_saves_no_delete
+BEFORE DELETE ON knowledge_learning_saves
+BEGIN
+    SELECT RAISE(ABORT, 'knowledge learning save history is append-only');
 END;
 `
 

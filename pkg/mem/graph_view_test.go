@@ -3,6 +3,9 @@ package mem
 import (
 	"bytes"
 	"encoding/json"
+	"os"
+	"os/exec"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -48,7 +51,7 @@ func TestKnowledgeMapHTMLContainsOfflineInteractiveProvenancePayload(t *testing.
 	if err != nil {
 		t.Fatal(err)
 	}
-	if data.Version != KnowledgeMapViewVersion || len(data.Graph.Nodes) != 2 || len(data.Review.Items) != 3 || data.Merges == nil || data.LatestEdits == nil ||
+	if data.Version != KnowledgeMapViewVersion || len(data.Graph.Nodes) != 2 || len(data.Review.Items) != 3 || data.Merges == nil || data.LatestEdits == nil || data.SelectionReports == nil ||
 		data.Layout == nil || data.Layout.Nodes["view-claim"].X != 120 || data.Workspace != nil {
 		t.Fatalf("view payload is incomplete: %#v", data)
 	}
@@ -110,6 +113,21 @@ func TestKnowledgeMapHTMLContainsOfflineInteractiveProvenancePayload(t *testing.
 		`buildFindingsBoard`, `updateFindingsVisibility`, `finding-card`,
 		`Draft — предложение модели`, `Междокументное evidence неполно`,
 		`Связанные решения`, `mem map analyze`, `version<=8`,
+		`selectionBtn`, `Ctrl+Click`, `currentSelectionRequest`, `selectionManifest`,
+		`/api/selection/manifest`, `/api/selection/answer`, `expected_manifest_digest`,
+		`СПРОСИТЬ ВЫБРАННОЕ`, `СДЕЛАТЬ СВОДКУ`, `только evidence выбранных объектов`,
+		`/api/selection/explore`, `РАСШИРИТЬ ПО СВЯЗЯМ`, `НАЙТИ ПУТЬ`,
+		`runSelectionExplore`, `applyExploredSelection`, `ВСЕ НАПРАВЛЕНИЯ`, `ГЛУБИНА `,
+		`/api/selection/analyze`, `/api/selection/analyze/save`, `АНАЛИЗ ВЫБРАННОГО`,
+		`СОХРАНИТЬ АНАЛИЗ В КАРТУ`, `runSelectionAnalysis`, `renderSelectionAnalysis`,
+		`expected_analysis_digest`, `Нулевой счётчик не доказывает отсутствие свойства`,
+		`selection_reports`, `selectionReportMeta`, `Автор сохранения`, `Сохранённый анализ`,
+		`/api/selection/export`, `runSelectionExport`, `ОТЧЁТ · MARKDOWN`, `ПЛАН · MARKDOWN`,
+		`ЧЕК-ЛИСТ · MARKDOWN`, `ТАБЛИЦА · CSV`, `ВЕТВЬ · JSON`, `без модели`,
+		`/api/selection/learning/generate`, `/api/selection/learning/save`, `selectionLearningRun`,
+		`СОЗДАТЬ УЧЕБНЫЕ КАНДИДАТЫ`, `СОХРАНИТЬ ВЫБРАННЫЕ КАК DRAFT`, `learning-preview`,
+		`/api/selection/learning/route`, `runKnowledgeLearningRoute`, `ПОСТРОИТЬ УЧЕБНЫЙ МАРШРУТ`,
+		`learning-route`, `НЕ ДОПУЩЕНО В МАРШРУТ`, `prerequisite/depends_on`,
 	} {
 		if !strings.Contains(html, marker) {
 			t.Errorf("HTML is missing %q", marker)
@@ -162,5 +180,34 @@ func TestKnowledgeMapHTMLRejectsInvalidArguments(t *testing.T) {
 	}
 	if err := WriteKnowledgeMapHTML(&bytes.Buffer{}, "", KnowledgeMapViewData{Version: KnowledgeMapViewVersion + 1}); err == nil {
 		t.Fatal("unknown view version was accepted")
+	}
+}
+
+func TestKnowledgeMapBrowserScriptHasValidJavaScriptSyntax(t *testing.T) {
+	node, err := exec.LookPath("node")
+	if err != nil {
+		t.Skip("node is not installed")
+	}
+	var output bytes.Buffer
+	if err := WriteKnowledgeMapHTML(&output, "syntax", KnowledgeMapViewData{
+		Version: KnowledgeMapViewVersion,
+		Graph:   KnowledgeGraph{},
+		Review:  KnowledgeReviewReport{},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	html := output.String()
+	start := strings.LastIndex(html, "<script>")
+	end := strings.LastIndex(html, "</script>")
+	if start < 0 || end <= start {
+		t.Fatal("browser script not found")
+	}
+	scriptPath := filepath.Join(t.TempDir(), "knowledge-map.js")
+	if err := os.WriteFile(scriptPath, []byte(html[start+len("<script>"):end]), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	command := exec.Command(node, "--check", scriptPath)
+	if result, err := command.CombinedOutput(); err != nil {
+		t.Fatalf("knowledge-map JavaScript syntax check failed: %v\n%s", err, result)
 	}
 }

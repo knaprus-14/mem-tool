@@ -27,7 +27,7 @@ type mapOpenOptions struct {
 
 var launchKnowledgeMapBrowser = openBrowserURL
 
-func handleMapOpen(store *Store, args []string) error {
+func handleMapOpen(cfg *Config, store *Store, args []string) error {
 	options, err := parseMapOpenOptions(args)
 	if err != nil {
 		return err
@@ -46,8 +46,20 @@ func handleMapOpen(store *Store, args []string) error {
 	if err != nil {
 		return err
 	}
+	var selectionService *mem.KnowledgeSelectionAnswerService
+	if cfg != nil {
+		answerCfg := cfg.Answer.WithDefaults()
+		provider, providerErr := newAnswerProvider(answerCfg)
+		if providerErr != nil {
+			fmt.Fprintf(os.Stderr, "[MAP OPEN] Вопросы по выбранной области недоступны: %v\n", providerErr)
+		} else {
+			selectionService = &mem.KnowledgeSelectionAnswerService{
+				Provider: provider, Config: answerCfg,
+			}
+		}
+	}
 	server := &http.Server{
-		Handler:           mem.NewKnowledgeMapWorkspaceHandler(store, options.Title, sessionToken, mem.DefaultKnowledgeMapView),
+		Handler:           mem.NewKnowledgeMapWorkspaceHandlerWithSelection(store, options.Title, sessionToken, mem.DefaultKnowledgeMapView, selectionService),
 		ReadHeaderTimeout: 5 * time.Second,
 		IdleTimeout:       60 * time.Second,
 		MaxHeaderBytes:    32 << 10,

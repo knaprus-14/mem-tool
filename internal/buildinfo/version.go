@@ -5,7 +5,7 @@ package buildinfo
 //
 // Release builds may override it with:
 //
-//	go build -ldflags "-X github.com/knaprus-14/mem-tool/internal/buildinfo.Version=1.43.3"
+//	go build -ldflags "-X github.com/knaprus-14/mem-tool/internal/buildinfo.Version=1.49.0"
 //
 // Keep the default in sync with the release notes before committing a release.
-var Version = "1.43.3"
+var Version = "1.49.0"

@@ -837,7 +837,7 @@ func handleMap(cfg *Config, store *Store, args []string) error {
 	}
 	switch args[0] {
 	case "open":
-		return handleMapOpen(store, args[1:])
+		return handleMapOpen(cfg, store, args[1:])
 	case "export":
 		if len(args) != 1 {
 			return errors.New("использование: mem map export")

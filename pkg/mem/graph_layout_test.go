@@ -32,6 +32,8 @@ func TestKnowledgeMapLayoutRoundTripAndDelete(t *testing.T) {
 			Collapsed:      []string{"layout-node"},
 			ClusterLayout:  true,
 			Representation: KnowledgeMapRepresentationFindings,
+			RelationLens:   KnowledgeMapRelationLensLogic,
+			SemanticZoom:   KnowledgeMapSemanticZoomAuto,
 		},
 	}
 	saved, err := store.SaveKnowledgeMapLayout(DefaultKnowledgeMapView, want)
@@ -42,7 +44,8 @@ func TestKnowledgeMapLayoutRoundTripAndDelete(t *testing.T) {
 	if err != nil || loaded == nil || loaded.Nodes["layout-node"].X != want.Nodes["layout-node"].X ||
 		loaded.Viewport.Scale != want.Viewport.Scale || loaded.Updated != saved.Updated ||
 		loaded.State == nil || loaded.State.Focus.NodeID != "layout-node" || !loaded.State.ClusterLayout ||
-		loaded.State.Representation != KnowledgeMapRepresentationFindings {
+		loaded.State.Representation != KnowledgeMapRepresentationFindings || loaded.State.RelationLens != KnowledgeMapRelationLensLogic ||
+		loaded.State.SemanticZoom != KnowledgeMapSemanticZoomAuto {
 		t.Fatalf("layout round trip failed: loaded=%#v err=%v", loaded, err)
 	}
 	if legacy, err := decodeKnowledgeMapLayout([]byte(`{"version":1,"nodes":{},"viewport":{"scale":1,"x":0,"y":0}}`)); err != nil || legacy.Version != 1 || legacy.State != nil {
@@ -65,6 +68,9 @@ func TestKnowledgeMapLayoutRoundTripAndDelete(t *testing.T) {
 	}
 	if legacy, err := decodeKnowledgeMapLayout([]byte(`{"version":7,"nodes":{},"viewport":{"scale":1,"x":0,"y":0},"state":{"filters":{"statuses":[],"evidence":[],"node_kinds":[],"relation_kinds":[]},"representation":"comparison-matrix"}}`)); err != nil || legacy.Version != 7 || legacy.State == nil || legacy.State.Representation != KnowledgeMapRepresentationComparison {
 		t.Fatalf("legacy v7 layout is not readable: layout=%#v err=%v", legacy, err)
+	}
+	if legacy, err := decodeKnowledgeMapLayout([]byte(`{"version":8,"nodes":{},"viewport":{"scale":1,"x":0,"y":0},"state":{"filters":{"statuses":[],"evidence":[],"node_kinds":[],"relation_kinds":[]},"representation":"findings-board"}}`)); err != nil || legacy.Version != 8 || legacy.State == nil || legacy.State.Representation != KnowledgeMapRepresentationFindings {
+		t.Fatalf("legacy v8 layout is not readable: layout=%#v err=%v", legacy, err)
 	}
 	if err := store.DeleteKnowledgeMapLayout(DefaultKnowledgeMapView); err != nil {
 		t.Fatal(err)
@@ -165,5 +171,21 @@ func TestKnowledgeMapLayoutRejectsInvalidOrUnknownNodes(t *testing.T) {
 	legacyFindings.State = &KnowledgeMapViewState{Representation: KnowledgeMapRepresentationFindings}
 	if _, err := store.SaveKnowledgeMapLayout(DefaultKnowledgeMapView, legacyFindings); err == nil || !strings.Contains(err.Error(), "version 8") {
 		t.Fatalf("v7 layout accepted findings board representation: %v", err)
+	}
+	legacyLens := base
+	legacyLens.Version = knowledgeMapLayoutV8
+	legacyLens.State = &KnowledgeMapViewState{Representation: KnowledgeMapRepresentationGraph, RelationLens: KnowledgeMapRelationLensLogic}
+	if _, err := store.SaveKnowledgeMapLayout(DefaultKnowledgeMapView, legacyLens); err == nil || !strings.Contains(err.Error(), "version 9") {
+		t.Fatalf("v8 layout accepted relation lens: %v", err)
+	}
+	invalidLens := base
+	invalidLens.State = &KnowledgeMapViewState{Representation: KnowledgeMapRepresentationGraph, RelationLens: "noise"}
+	if _, err := store.SaveKnowledgeMapLayout(DefaultKnowledgeMapView, invalidLens); err == nil || !strings.Contains(err.Error(), "relation lens") {
+		t.Fatalf("invalid relation lens was accepted: %v", err)
+	}
+	invalidSemanticZoom := base
+	invalidSemanticZoom.State = &KnowledgeMapViewState{Representation: KnowledgeMapRepresentationGraph, SemanticZoom: "random"}
+	if _, err := store.SaveKnowledgeMapLayout(DefaultKnowledgeMapView, invalidSemanticZoom); err == nil || !strings.Contains(err.Error(), "semantic zoom") {
+		t.Fatalf("invalid semantic zoom was accepted: %v", err)
 	}
 }

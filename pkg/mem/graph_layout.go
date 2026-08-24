@@ -13,7 +13,7 @@ import (
 )
 
 const (
-	KnowledgeMapLayoutVersion = 8
+	KnowledgeMapLayoutVersion = 9
 	knowledgeMapLayoutV1      = 1
 	knowledgeMapLayoutV2      = 2
 	knowledgeMapLayoutV3      = 3
@@ -21,6 +21,7 @@ const (
 	knowledgeMapLayoutV5      = 5
 	knowledgeMapLayoutV6      = 6
 	knowledgeMapLayoutV7      = 7
+	knowledgeMapLayoutV8      = 8
 	DefaultKnowledgeMapView   = "default"
 	MaxKnowledgeMapViewNodes  = 10000
 	MaxKnowledgeMapLayoutJSON = 1 << 20
@@ -28,6 +29,24 @@ const (
 )
 
 type KnowledgeMapRepresentation string
+
+type KnowledgeMapRelationLens string
+
+const (
+	KnowledgeMapRelationLensSmart     KnowledgeMapRelationLens = "smart"
+	KnowledgeMapRelationLensAll       KnowledgeMapRelationLens = "all"
+	KnowledgeMapRelationLensStructure KnowledgeMapRelationLens = "structure"
+	KnowledgeMapRelationLensLogic     KnowledgeMapRelationLens = "logic"
+	KnowledgeMapRelationLensIssues    KnowledgeMapRelationLens = "issues"
+	KnowledgeMapRelationLensWorkspace KnowledgeMapRelationLens = "workspace"
+)
+
+type KnowledgeMapSemanticZoom string
+
+const (
+	KnowledgeMapSemanticZoomAuto KnowledgeMapSemanticZoom = "auto"
+	KnowledgeMapSemanticZoomAll  KnowledgeMapSemanticZoom = "all"
+)
 
 const (
 	KnowledgeMapRepresentationGraph        KnowledgeMapRepresentation = "graph"
@@ -78,6 +97,8 @@ type KnowledgeMapViewState struct {
 	Collapsed      []string                   `json:"collapsed,omitempty"`
 	ClusterLayout  bool                       `json:"cluster_layout,omitempty"`
 	Representation KnowledgeMapRepresentation `json:"representation,omitempty"`
+	RelationLens   KnowledgeMapRelationLens   `json:"relation_lens,omitempty"`
+	SemanticZoom   KnowledgeMapSemanticZoom   `json:"semantic_zoom,omitempty"`
 }
 
 type KnowledgeMapLayout struct {
@@ -290,7 +311,7 @@ func validateKnowledgeMapLayout(layout KnowledgeMapLayout) error {
 	if layout.Version != knowledgeMapLayoutV1 && layout.Version != knowledgeMapLayoutV2 &&
 		layout.Version != knowledgeMapLayoutV3 && layout.Version != knowledgeMapLayoutV4 &&
 		layout.Version != knowledgeMapLayoutV5 && layout.Version != knowledgeMapLayoutV6 &&
-		layout.Version != knowledgeMapLayoutV7 &&
+		layout.Version != knowledgeMapLayoutV7 && layout.Version != knowledgeMapLayoutV8 &&
 		layout.Version != KnowledgeMapLayoutVersion {
 		return fmt.Errorf("unsupported knowledge map layout version %d", layout.Version)
 	}
@@ -340,8 +361,20 @@ func validateKnowledgeMapViewState(version int, state KnowledgeMapViewState) err
 	if version < knowledgeMapLayoutV7 && state.Representation == KnowledgeMapRepresentationComparison {
 		return errors.New("knowledge map comparison-matrix representation requires version 7")
 	}
-	if version < KnowledgeMapLayoutVersion && state.Representation == KnowledgeMapRepresentationFindings {
+	if version < knowledgeMapLayoutV8 && state.Representation == KnowledgeMapRepresentationFindings {
 		return errors.New("knowledge map findings-board representation requires version 8")
+	}
+	if version < KnowledgeMapLayoutVersion && (state.RelationLens != "" || state.SemanticZoom != "") {
+		return errors.New("knowledge map relation lens and semantic zoom require version 9")
+	}
+	if state.RelationLens != "" && state.RelationLens != KnowledgeMapRelationLensSmart &&
+		state.RelationLens != KnowledgeMapRelationLensAll && state.RelationLens != KnowledgeMapRelationLensStructure &&
+		state.RelationLens != KnowledgeMapRelationLensLogic && state.RelationLens != KnowledgeMapRelationLensIssues &&
+		state.RelationLens != KnowledgeMapRelationLensWorkspace {
+		return errors.New("knowledge map relation lens is invalid")
+	}
+	if state.SemanticZoom != "" && state.SemanticZoom != KnowledgeMapSemanticZoomAuto && state.SemanticZoom != KnowledgeMapSemanticZoomAll {
+		return errors.New("knowledge map semantic zoom is invalid")
 	}
 	if err := validateUniqueMapValues("status", len(state.Filters.Statuses), func(index int) string {
 		value := state.Filters.Statuses[index]

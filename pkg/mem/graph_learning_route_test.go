@@ -77,6 +77,36 @@ func TestKnowledgeLearningRouteReversesDependsOnAndIgnoresDraftOrder(t *testing.
 	}
 }
 
+func TestKnowledgeLearningRouteNoOrderWarningIncludesQuestions(t *testing.T) {
+	store, anchor := graphStoreAndAnchor(t)
+	defer store.Close()
+	node := KnowledgeNode{ID: "route-only-question", Kind: KnowledgeNodeQuestion, Label: "Почему?", Body: "Ожидаемый ответ для проверки:\nПотому что.", Status: KnowledgeStatusActive, Origin: KnowledgeOriginManual, Evidence: []EvidenceAnchor{anchor}}
+	if err := store.UpsertKnowledgeGraph(KnowledgeGraph{Nodes: []KnowledgeNode{node}}); err != nil {
+		t.Fatal(err)
+	}
+	selection := KnowledgeSelectionRequest{NodeIDs: []string{node.ID}}
+	manifest, err := store.BuildKnowledgeSelectionManifest(selection)
+	if err != nil {
+		t.Fatal(err)
+	}
+	route, err := store.BuildKnowledgeLearningRoute(KnowledgeLearningRouteRequest{Selection: selection, ExpectedManifestDigest: manifest.Digest})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !route.Ready || len(route.Items) != 1 || route.Items[0].Kind != KnowledgeNodeQuestion {
+		t.Fatalf("question-only route is invalid: %#v", route)
+	}
+	found := false
+	for _, warning := range route.Warnings {
+		if warning.Code == "no_explicit_order" {
+			found = strings.Contains(warning.Message, "учебные объекты")
+		}
+	}
+	if !found {
+		t.Fatalf("question-only route has a card-specific warning: %#v", route.Warnings)
+	}
+}
+
 func TestKnowledgeLearningRouteReportsCycleAndRejectsStaleManifest(t *testing.T) {
 	store, anchor := graphStoreAndAnchor(t)
 	defer store.Close()

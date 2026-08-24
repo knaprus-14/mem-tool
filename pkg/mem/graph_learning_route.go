@@ -328,7 +328,7 @@ func (s *Store) BuildKnowledgeLearningRoute(request KnowledgeLearningRouteReques
 	if len(result.Items) == 0 {
 		result.Warnings = append(result.Warnings, KnowledgeLearningRouteWarning{Code: "no_reviewed_learning_items", Message: "В выбранной области нет подтверждённых карточек или вопросов с актуальными источниками."})
 	} else if !result.ExplicitOrder {
-		result.Warnings = append(result.Warnings, KnowledgeLearningRouteWarning{Code: "no_explicit_order", Message: "Подтверждённые карточки найдены, но между ними нет подтверждённых prerequisite/depends_on; алфавитный порядок не является учебной зависимостью."})
+		result.Warnings = append(result.Warnings, KnowledgeLearningRouteWarning{Code: "no_explicit_order", Message: "Подтверждённые учебные объекты найдены, но между ними нет подтверждённых prerequisite/depends_on; алфавитный порядок не является учебной зависимостью."})
 	}
 	if len(result.Excluded) > 0 {
 		result.Warnings = append(result.Warnings, KnowledgeLearningRouteWarning{Code: "learning_items_excluded", Message: "Черновики, закрытые объекты и объекты с неактуальными источниками исключены из маршрута."})

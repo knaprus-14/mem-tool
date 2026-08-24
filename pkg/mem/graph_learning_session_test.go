@@ -101,6 +101,40 @@ func TestKnowledgeLearningAttemptHistoryIsAppendOnly(t *testing.T) {
 	}
 }
 
+func TestKnowledgeLearningHistoryResetsChangedItemSchedule(t *testing.T) {
+	store, selection, manifest := knowledgeLearningSessionFixture(t)
+	defer store.Close()
+	now := time.Date(2026, 8, 23, 10, 0, 0, 0, time.UTC)
+	session, err := store.startKnowledgeLearningSessionAt(KnowledgeLearningSessionStartRequest{Selection: selection, ExpectedManifestDigest: manifest.Digest, Limit: 1}, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.gradeKnowledgeLearningItemAt(KnowledgeLearningGradeRequest{SessionID: session.ID, NodeID: session.Items[0].NodeID, Grade: KnowledgeLearningGradeGood}, now); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.db.Exec(`UPDATE knowledge_nodes SET body = 'Исправленный ответ' WHERE id = ?`, session.Items[0].NodeID); err != nil {
+		t.Fatal(err)
+	}
+	freshManifest, err := store.BuildKnowledgeSelectionManifest(selection)
+	if err != nil {
+		t.Fatal(err)
+	}
+	history, err := store.buildKnowledgeLearningHistoryAt(KnowledgeLearningHistoryRequest{Selection: selection, ExpectedManifestDigest: freshManifest.Digest}, now.Add(time.Hour))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var changed *KnowledgeLearningHistoryItem
+	for index := range history.Items {
+		if history.Items[index].NodeID == session.Items[0].NodeID {
+			changed = &history.Items[index]
+			break
+		}
+	}
+	if changed == nil || !changed.ScheduleReset || changed.State != nil || !changed.Due || changed.Attempts != 1 {
+		t.Fatalf("changed learning item did not reset its old schedule: %#v", changed)
+	}
+}
+
 func TestKnowledgeLearningSchedulerIntervalsAreDeterministic(t *testing.T) {
 	now := time.Date(2026, 8, 23, 12, 0, 0, 0, time.UTC)
 	again := scheduleKnowledgeLearningReview("n", "c", "e", KnowledgeLearningScheduleState{}, false, KnowledgeLearningGradeAgain, now)

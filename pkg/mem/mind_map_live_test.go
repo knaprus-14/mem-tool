@@ -195,6 +195,9 @@ func TestClassicMindMapWorkspaceHasOfflineEditorControls(t *testing.T) {
 		`id="newMap"`, `id="mapGrid"`, `id="tree"`, `id="inspectorBody"`,
 		`id="expandAll"`, `id="collapseAll"`, `id="zoomFit"`, `data-tab="sources"`,
 		`/api/nodes/move`, `/api/history/undo`, `/api/history/redo`, `mem-mindmap-theme`, `draggable=node.id!==doc.map.root_node_id`,
+		`/api/sources/search`, `/api/sources/evidence/add`, `/api/sources/upload`, `/api/sources/remove`,
+		`Из активной базы`, `Импортировать копию файла`, `Узел графа`, `/api/source/mindmap`,
+		`Number(item.chunk_index||0)+1`, `Number(e.block_index||0)+1`,
 	} {
 		if !strings.Contains(text, expected) {
 			t.Errorf("workspace missing %q", expected)

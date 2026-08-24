@@ -85,3 +85,38 @@ func TestMindMapCLIRejectsUnknownFlagsAndCanClearText(t *testing.T) {
 		t.Fatalf("unknown flag was accepted: %v", err)
 	}
 }
+
+func TestMindMapCLIManagesNonEvidenceSources(t *testing.T) {
+	store, err := mem.NewStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	if err := handleMindMap(store, []string{"create", "Source CLI"}); err != nil {
+		t.Fatal(err)
+	}
+	stdout, _, err := captureCLIStreams(func() error {
+		return handleMindMap(store, []string{"source-add", "Source CLI", "Source CLI", "--url", "https://example.org/spec", "--title", "Спецификация"})
+	})
+	if err != nil || !strings.Contains(stdout, "Спецификация") {
+		t.Fatalf("URL source add failed: stdout=%q err=%v", stdout, err)
+	}
+	doc, err := store.LoadClassicMindMap("Source CLI")
+	if err != nil || len(doc.Nodes[0].Sources) != 1 {
+		t.Fatalf("URL source missing: doc=%#v err=%v", doc, err)
+	}
+	sourceID := doc.Nodes[0].Sources[0].ID
+	if err := handleMindMap(store, []string{"source-move", "Source CLI", "Source CLI", "--source", sourceID, "--position", "0"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := handleMindMap(store, []string{"source-remove", "Source CLI", "Source CLI", "--source", sourceID}); err != nil {
+		t.Fatal(err)
+	}
+	loaded, err := store.LoadClassicMindMap("Source CLI")
+	if err != nil || len(loaded.Nodes[0].Sources) != 0 {
+		t.Fatalf("URL source was not removed: doc=%#v err=%v", loaded, err)
+	}
+	if err := handleMindMap(store, []string{"source-add", "Source CLI", "Source CLI", "--url", "https://example.org", "--file", "missing"}); err == nil || !strings.Contains(err.Error(), "ровно один") {
+		t.Fatalf("ambiguous source selector was accepted: %v", err)
+	}
+}

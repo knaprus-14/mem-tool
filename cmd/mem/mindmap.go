@@ -13,7 +13,7 @@ import (
 	ui "github.com/knaprus-14/mem-tool/pkg/ui"
 )
 
-const mindMapUsage = `использование: mem mindmap <open|create|list|show|add-node|edit-node|move-node|delete-node|source-add|history|undo|redo|snapshot|snapshots>
+const mindMapUsage = `использование: mem mindmap <open|create|list|show|add-node|edit-node|move-node|delete-node|source-add|source-remove|source-move|history|undo|redo|snapshot|snapshots>
   mem mindmap open [--port N] [--no-browser]
   mem mindmap create <название> [--description <текст>] [--json]
   mem mindmap list [--all] [--json]
@@ -22,7 +22,9 @@ const mindMapUsage = `использование: mem mindmap <open|create|list|
   mem mindmap edit-node <карта> <узел> [--label <текст>] [--summary <текст>] [--body <markdown>] [--kind <тип>] [--lock|--unlock] [--expect N] [--json]
   mem mindmap move-node <карта> <узел> --parent <родитель> [--position N] [--expect N] [--json]
   mem mindmap delete-node <карта> <узел> [--branch|--promote-children] [--expect N] [--json]
-  mem mindmap source-add <карта> <узел> --entry N [--excerpt <точный текст>] [--expect N] [--json]
+  mem mindmap source-add <карта> <узел> (--entry N [--excerpt <текст>] | --file <путь> | --url <адрес> | --knowledge-node <ID>) [--title <название>] [--expect N] [--json]
+  mem mindmap source-remove <карта> <узел> --source <ID> [--expect N] [--json]
+  mem mindmap source-move <карта> <узел> --source <ID> --position N [--expect N] [--json]
   mem mindmap history <карта> [-limit N] [--json]
 	mem mindmap undo <карта> [--change N] [--expect N] [--json]
 	mem mindmap redo <карта> [--expect N] [--json]
@@ -47,6 +49,11 @@ type mindMapCLIOptions struct {
 	expect          int64
 	position        int
 	entryID         int64
+	sourceID        string
+	filePath        string
+	sourceURL       string
+	knowledgeNodeID string
+	sourceTitle     string
 	changeID        int64
 	limit           int
 	jsonOutput      bool
@@ -198,19 +205,49 @@ func handleMindMap(store *Store, args []string) error {
 			ui.Mark("ok"), doc.Map.Revision, doc.Map.Title, doc.Map.Revision)
 		return nil
 	case "source-add":
-		if len(options.positional) != 2 || options.entryID <= 0 {
-			return errors.New("использование: mem mindmap source-add <карта> <узел> --entry N [--excerpt <точный текст>] [--expect N] [--json]")
+		if len(options.positional) != 2 {
+			return errors.New("использование: mem mindmap source-add <карта> <узел> (--entry N|--file <путь>|--url <адрес>|--knowledge-node <ID>) [--title <название>] [--expect N] [--json]")
 		}
-		entry, err := store.GetByID(options.entryID)
-		if err != nil {
-			return err
+		selected := 0
+		for _, ok := range []bool{options.entryID > 0, options.filePath != "", options.sourceURL != "", options.knowledgeNodeID != ""} {
+			if ok {
+				selected++
+			}
 		}
-		anchor, err := mem.EvidenceAnchorForEntry(*entry, options.excerpt)
-		if err != nil {
-			return err
+		if selected != 1 {
+			return errors.New("source-add требует ровно один из флагов --entry, --file, --url или --knowledge-node")
 		}
-		doc, source, err := store.AttachClassicMindMapEvidence(options.positional[0], options.positional[1], anchor,
-			options.expect, "cli", options.comment)
+		var doc mem.ClassicMindMapDocument
+		var source mem.ClassicMindMapSource
+		var err error
+		if options.entryID > 0 {
+			entry, getErr := store.GetByID(options.entryID)
+			if getErr != nil {
+				return getErr
+			}
+			excerpt := options.excerpt
+			if strings.TrimSpace(excerpt) == "" {
+				excerpt = entry.Text
+			}
+			anchor, anchorErr := mem.EvidenceAnchorForEntry(*entry, excerpt)
+			if anchorErr != nil {
+				return anchorErr
+			}
+			doc, source, err = store.AttachClassicMindMapEvidence(options.positional[0], options.positional[1], anchor,
+				options.expect, "cli", options.comment)
+		} else {
+			candidate := mem.ClassicMindMapSource{Title: options.sourceTitle}
+			switch {
+			case options.filePath != "":
+				candidate.Kind, candidate.Locator = mem.ClassicMindMapSourceExternalFile, options.filePath
+			case options.sourceURL != "":
+				candidate.Kind, candidate.URL = mem.ClassicMindMapSourceURL, options.sourceURL
+			case options.knowledgeNodeID != "":
+				candidate.Kind, candidate.KnowledgeNodeID = mem.ClassicMindMapSourceKnowledgeNode, options.knowledgeNodeID
+			}
+			doc, source, err = store.AttachClassicMindMapSource(options.positional[0], options.positional[1], candidate,
+				options.expect, "cli", options.comment)
+		}
 		if err != nil {
 			return err
 		}
@@ -220,8 +257,39 @@ func handleMindMap(store *Store, args []string) error {
 				Source mem.ClassicMindMapSource   `json:"source"`
 			}{doc, source})
 		}
-		fmt.Printf("%s Источник привязан: %s, %s. Ревизия карты: %d.\n", ui.Mark("ok"),
-			source.Title, source.Locator, doc.Map.Revision)
+		fmt.Printf("%s Источник привязан: %s", ui.Mark("ok"), source.Title)
+		if reference := firstMindMapValue(source.Locator, source.URL, source.KnowledgeNodeID); reference != "" {
+			fmt.Printf(", %s", reference)
+		}
+		fmt.Printf(". Ревизия карты: %d.\n", doc.Map.Revision)
+		return nil
+	case "source-remove":
+		if len(options.positional) != 2 || options.sourceID == "" {
+			return errors.New("использование: mem mindmap source-remove <карта> <узел> --source <ID> [--expect N] [--json]")
+		}
+		doc, err := store.DetachClassicMindMapSource(options.positional[0], options.positional[1], options.sourceID,
+			options.expect, "cli", options.comment)
+		if err != nil {
+			return err
+		}
+		if options.jsonOutput {
+			return printMindMapJSON(doc)
+		}
+		fmt.Printf("%s Источник отвязан. Ревизия карты: %d.\n", ui.Mark("ok"), doc.Map.Revision)
+		return nil
+	case "source-move":
+		if len(options.positional) != 2 || options.sourceID == "" || options.position < 0 {
+			return errors.New("использование: mem mindmap source-move <карта> <узел> --source <ID> --position N [--expect N] [--json]")
+		}
+		doc, err := store.MoveClassicMindMapSource(options.positional[0], options.positional[1], options.sourceID,
+			options.position, options.expect, "cli", options.comment)
+		if err != nil {
+			return err
+		}
+		if options.jsonOutput {
+			return printMindMapJSON(doc)
+		}
+		fmt.Printf("%s Порядок источников изменён. Ревизия карты: %d.\n", ui.Mark("ok"), doc.Map.Revision)
 		return nil
 	case "history":
 		if len(options.positional) != 1 {
@@ -344,7 +412,7 @@ func parseMindMapCLIOptions(args []string) (mindMapCLIOptions, error) {
 		case "--unlock":
 			locked := false
 			options.lock = &locked
-		case "--description", "--summary", "--body", "--kind", "--label", "--parent", "--excerpt", "--comment", "--reason":
+		case "--description", "--summary", "--body", "--kind", "--label", "--parent", "--excerpt", "--comment", "--reason", "--source", "--file", "--url", "--knowledge-node", "--title":
 			name := args[i]
 			v, err := value(&i, name)
 			if err != nil {
@@ -373,6 +441,16 @@ func parseMindMapCLIOptions(args []string) (mindMapCLIOptions, error) {
 				options.comment = v
 			case "--reason":
 				options.reason = v
+			case "--source":
+				options.sourceID = v
+			case "--file":
+				options.filePath = v
+			case "--url":
+				options.sourceURL = v
+			case "--knowledge-node":
+				options.knowledgeNodeID = v
+			case "--title":
+				options.sourceTitle = v
 			}
 		case "--expect", "--position", "--entry", "--change", "-limit":
 			name := args[i]
@@ -478,7 +556,16 @@ func printClassicMindMapNode(node mem.ClassicMindMapNode, children map[string][]
 				}
 				fmt.Printf("%s   «%s»\n", childPrefix, strings.ReplaceAll(excerpt, "\n", " "))
 			}
+			continue
 		}
+		fmt.Printf("%s   Источник: %s", childPrefix, source.Title)
+		if reference := firstMindMapValue(source.Locator, source.URL, source.KnowledgeNodeID); reference != "" {
+			fmt.Printf(", %s", reference)
+		}
+		if source.EvidenceState != "" {
+			fmt.Printf(" [%s]", source.EvidenceState)
+		}
+		fmt.Println()
 	}
 	items := children[node.ID]
 	for i, child := range items {
@@ -504,6 +591,16 @@ func humanMindMapAction(action string) string {
 		return "удаление узла с переносом дочерних"
 	case "attach_evidence":
 		return "привязка источника"
+	case "attach_source:external_file":
+		return "привязка файла"
+	case "attach_source:url":
+		return "привязка веб-ссылки"
+	case "attach_source:knowledge_node":
+		return "привязка узла графа"
+	case "detach_source":
+		return "отвязка источника"
+	case "move_source":
+		return "изменение порядка источников"
 	default:
 		if strings.HasPrefix(action, "undo:") {
 			return "отмена: " + humanMindMapAction(strings.TrimPrefix(action, "undo:"))
@@ -513,4 +610,13 @@ func humanMindMapAction(action string) string {
 		}
 		return action
 	}
+}
+
+func firstMindMapValue(values ...string) string {
+	for _, value := range values {
+		if strings.TrimSpace(value) != "" {
+			return value
+		}
+	}
+	return ""
 }

@@ -498,7 +498,7 @@ VALUES (?, ?, 'completed', ?, ?, ?, ?, ?, ?, ?)`, runID, mapID, normalized.Gener
 	if err := tx.Commit(); err != nil {
 		return ClassicMindMapDocument{}, fmt.Errorf("commit classic mind map: %w", err)
 	}
-	return resolveClassicMindMapSourceStates(doc, s.entries), nil
+	return s.resolveClassicMindMapSourceStates(doc), nil
 }
 
 func (s *Store) ListClassicMindMaps(includeArchived bool) ([]ClassicMindMapSummary, error) {
@@ -546,7 +546,7 @@ func (s *Store) LoadClassicMindMap(ref string) (ClassicMindMapDocument, error) {
 	if err != nil {
 		return ClassicMindMapDocument{}, err
 	}
-	return resolveClassicMindMapSourceStates(doc, s.entries), nil
+	return s.resolveClassicMindMapSourceStates(doc), nil
 }
 
 func normalizeClassicMindMapDraft(draft ClassicMindMapDraft) (ClassicMindMapDraft, string, error) {
@@ -993,18 +993,6 @@ func emptyClassicMindMapDigest() string {
 	return "sha256:" + hex.EncodeToString(hash[:])
 }
 
-func resolveClassicMindMapSourceStates(doc ClassicMindMapDocument, entries []Entry) ClassicMindMapDocument {
-	for i := range doc.Nodes {
-		for j := range doc.Nodes[i].Sources {
-			source := &doc.Nodes[i].Sources[j]
-			if source.Kind == ClassicMindMapSourceEvidence && source.Evidence != nil {
-				source.EvidenceState = resolveEvidenceAnchorFromEntries(*source.Evidence, entries).State
-			}
-		}
-	}
-	return doc
-}
-
 func insertClassicMindMapSource(tx *sql.Tx, mapID, nodeID string, position int, source ClassicMindMapSource, now string) error {
 	if err := validateClassicMindMapSource(source); err != nil {
 		return err
@@ -1108,7 +1096,7 @@ VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, item.ID, item.Revision, newRevisio
 	if err := tx.Commit(); err != nil {
 		return ClassicMindMapDocument{}, ClassicMindMapChange{}, fmt.Errorf("commit classic mind map change: %w", err)
 	}
-	return resolveClassicMindMapSourceStates(after, s.entries), change, nil
+	return s.resolveClassicMindMapSourceStates(after), change, nil
 }
 
 // EditClassicMindMap updates the card shown in the map library. When a newly
@@ -1594,7 +1582,7 @@ VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, item.ID, item.Revision, newRevi
 	if err := tx.Commit(); err != nil {
 		return ClassicMindMapDocument{}, ClassicMindMapChange{}, err
 	}
-	return resolveClassicMindMapSourceStates(after, s.entries), undo, nil
+	return s.resolveClassicMindMapSourceStates(after), undo, nil
 }
 
 // RedoClassicMindMapChange reapplies the newest undo which has not already
@@ -1702,7 +1690,7 @@ VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, item.ID, item.Revision, newRevi
 	if err := tx.Commit(); err != nil {
 		return ClassicMindMapDocument{}, ClassicMindMapChange{}, err
 	}
-	return resolveClassicMindMapSourceStates(after, s.entries), redo, nil
+	return s.resolveClassicMindMapSourceStates(after), redo, nil
 }
 
 func (s *Store) CreateClassicMindMapSnapshot(mapRef, reason string, expectedRevision int64) (string, error) {

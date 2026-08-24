@@ -7,6 +7,8 @@ import (
 	"io"
 	"mime"
 	"net/http"
+	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 )
@@ -34,12 +36,17 @@ func NewClassicMindMapWorkspaceHandler(store *Store, sessionToken string) http.H
 				http.Error(w, "mind map workspace is unavailable", http.StatusInternalServerError)
 				return
 			}
+			http.SetCookie(w, knowledgeMapSourceCookie(sessionToken))
 			w.Header().Set("Content-Type", "text/html; charset=utf-8")
 			_, _ = w.Write(page)
 			return
 		}
 		if store == nil {
 			http.Error(w, "mind map store is unavailable", http.StatusServiceUnavailable)
+			return
+		}
+		if r.URL.Path == "/api/source/mindmap" {
+			serveClassicMindMapSourceFile(w, r, store, sessionToken)
 			return
 		}
 		if r.Method != http.MethodPost {
@@ -70,6 +77,22 @@ func NewClassicMindMapWorkspaceHandler(store *Store, sessionToken string) http.H
 			serveClassicMindMapNodeMove(w, r, store)
 		case "/api/nodes/delete":
 			serveClassicMindMapNodeDelete(w, r, store)
+		case "/api/sources/documents":
+			serveClassicMindMapSourceDocuments(w, r, store)
+		case "/api/sources/search":
+			serveClassicMindMapSourceSearch(w, r, store)
+		case "/api/sources/knowledge/search":
+			serveClassicMindMapKnowledgeSearch(w, r, store)
+		case "/api/sources/evidence/add":
+			serveClassicMindMapEvidenceAdd(w, r, store)
+		case "/api/sources/add":
+			serveClassicMindMapSourceAdd(w, r, store)
+		case "/api/sources/upload":
+			serveClassicMindMapSourceUpload(w, r, store)
+		case "/api/sources/remove":
+			serveClassicMindMapSourceRemove(w, r, store)
+		case "/api/sources/move":
+			serveClassicMindMapSourceMove(w, r, store)
 		case "/api/history/list":
 			serveClassicMindMapHistory(w, r, store)
 		case "/api/history/undo":
@@ -163,6 +186,44 @@ type classicMindMapUndoRequest struct {
 type classicMindMapSnapshotCreateRequest struct {
 	MapID            string `json:"map_id"`
 	Reason           string `json:"reason"`
+	ExpectedRevision int64  `json:"expected_revision"`
+}
+
+type classicMindMapSourceSearchRequest struct {
+	Query    string `json:"query"`
+	Document string `json:"document"`
+	Page     int    `json:"page"`
+	Limit    int    `json:"limit"`
+}
+
+type classicMindMapKnowledgeSearchRequest struct {
+	Query string `json:"query"`
+	Limit int    `json:"limit"`
+}
+
+type classicMindMapEvidenceAddRequest struct {
+	MapID            string `json:"map_id"`
+	NodeID           string `json:"node_id"`
+	EntryID          int64  `json:"entry_id"`
+	ExpectedRevision int64  `json:"expected_revision"`
+}
+
+type classicMindMapSourceAddRequest struct {
+	MapID            string                   `json:"map_id"`
+	NodeID           string                   `json:"node_id"`
+	Kind             ClassicMindMapSourceKind `json:"kind"`
+	Title            string                   `json:"title"`
+	Locator          string                   `json:"locator"`
+	URL              string                   `json:"url"`
+	KnowledgeNodeID  string                   `json:"knowledge_node_id"`
+	ExpectedRevision int64                    `json:"expected_revision"`
+}
+
+type classicMindMapSourceMutationRequest struct {
+	MapID            string `json:"map_id"`
+	NodeID           string `json:"node_id"`
+	SourceID         string `json:"source_id"`
+	Position         int    `json:"position"`
 	ExpectedRevision int64  `json:"expected_revision"`
 }
 
@@ -263,6 +324,166 @@ func serveClassicMindMapNodeDelete(w http.ResponseWriter, r *http.Request, store
 	doc, err := store.DeleteClassicMindMapNode(request.MapID, request.NodeID, request.Mode,
 		request.ExpectedRevision, "browser", "удалён узел в редакторе")
 	writeClassicMindMapResult(w, doc, err)
+}
+
+func serveClassicMindMapSourceDocuments(w http.ResponseWriter, r *http.Request, store *Store) {
+	var request struct{}
+	if !decodeClassicMindMapJSON(w, r, &request) {
+		return
+	}
+	writeClassicMindMapResult(w, store.ListClassicMindMapSourceDocuments(), nil)
+}
+
+func serveClassicMindMapSourceSearch(w http.ResponseWriter, r *http.Request, store *Store) {
+	var request classicMindMapSourceSearchRequest
+	if !decodeClassicMindMapJSON(w, r, &request) {
+		return
+	}
+	items, err := store.SearchClassicMindMapEvidence(ClassicMindMapEvidenceSearchOptions{
+		Query: request.Query, Document: request.Document, Page: request.Page, Limit: request.Limit,
+	})
+	writeClassicMindMapResult(w, items, err)
+}
+
+func serveClassicMindMapKnowledgeSearch(w http.ResponseWriter, r *http.Request, store *Store) {
+	var request classicMindMapKnowledgeSearchRequest
+	if !decodeClassicMindMapJSON(w, r, &request) {
+		return
+	}
+	items, err := store.SearchClassicMindMapKnowledgeNodes(request.Query, request.Limit)
+	writeClassicMindMapResult(w, items, err)
+}
+
+func serveClassicMindMapEvidenceAdd(w http.ResponseWriter, r *http.Request, store *Store) {
+	var request classicMindMapEvidenceAddRequest
+	if !decodeClassicMindMapJSON(w, r, &request) {
+		return
+	}
+	entry, err := store.GetByID(request.EntryID)
+	if err != nil {
+		writeClassicMindMapResult(w, nil, err)
+		return
+	}
+	anchor, err := EvidenceAnchorForEntry(*entry, entry.Text)
+	if err != nil {
+		writeClassicMindMapResult(w, nil, err)
+		return
+	}
+	doc, source, err := store.AttachClassicMindMapEvidence(request.MapID, request.NodeID, anchor,
+		request.ExpectedRevision, "browser", "привязан фрагмент активной базы")
+	writeClassicMindMapResult(w, struct {
+		Document ClassicMindMapDocument `json:"document"`
+		Source   ClassicMindMapSource   `json:"source"`
+	}{doc, source}, err)
+}
+
+func serveClassicMindMapSourceAdd(w http.ResponseWriter, r *http.Request, store *Store) {
+	var request classicMindMapSourceAddRequest
+	if !decodeClassicMindMapJSON(w, r, &request) {
+		return
+	}
+	doc, source, err := store.AttachClassicMindMapSource(request.MapID, request.NodeID, ClassicMindMapSource{
+		Kind: request.Kind, Title: request.Title, Locator: request.Locator,
+		URL: request.URL, KnowledgeNodeID: request.KnowledgeNodeID,
+	}, request.ExpectedRevision, "browser", "привязан внешний источник")
+	writeClassicMindMapResult(w, struct {
+		Document ClassicMindMapDocument `json:"document"`
+		Source   ClassicMindMapSource   `json:"source"`
+	}{doc, source}, err)
+}
+
+func serveClassicMindMapSourceUpload(w http.ResponseWriter, r *http.Request, store *Store) {
+	r.Body = http.MaxBytesReader(w, r.Body, MaxClassicMindMapUploadBytes+(1<<20))
+	if err := r.ParseMultipartForm(MaxClassicMindMapUploadBytes + (1 << 20)); err != nil {
+		http.Error(w, "не удалось прочитать выбранный файл", http.StatusBadRequest)
+		return
+	}
+	if r.MultipartForm != nil {
+		defer r.MultipartForm.RemoveAll()
+	}
+	file, header, err := r.FormFile("file")
+	if err != nil {
+		http.Error(w, "файл не выбран", http.StatusBadRequest)
+		return
+	}
+	defer file.Close()
+	expectedRevision, err := strconv.ParseInt(r.FormValue("expected_revision"), 10, 64)
+	if err != nil || expectedRevision < 0 {
+		http.Error(w, "expected_revision некорректен", http.StatusBadRequest)
+		return
+	}
+	path, digest, err := store.ImportClassicMindMapAttachment(header.Filename, file)
+	if err != nil {
+		writeClassicMindMapResult(w, nil, err)
+		return
+	}
+	title := strings.TrimSpace(r.FormValue("title"))
+	doc, source, err := store.AttachClassicMindMapSource(r.FormValue("map_id"), r.FormValue("node_id"), ClassicMindMapSource{
+		Kind: ClassicMindMapSourceExternalFile, Title: title, Locator: path,
+	}, expectedRevision, "browser", "импортирован и привязан файл "+digest)
+	if err != nil {
+		_ = os.Remove(path)
+	}
+	writeClassicMindMapResult(w, struct {
+		Document ClassicMindMapDocument `json:"document"`
+		Source   ClassicMindMapSource   `json:"source"`
+	}{doc, source}, err)
+}
+
+func serveClassicMindMapSourceRemove(w http.ResponseWriter, r *http.Request, store *Store) {
+	var request classicMindMapSourceMutationRequest
+	if !decodeClassicMindMapJSON(w, r, &request) {
+		return
+	}
+	doc, err := store.DetachClassicMindMapSource(request.MapID, request.NodeID, request.SourceID,
+		request.ExpectedRevision, "browser", "источник отвязан в редакторе")
+	writeClassicMindMapResult(w, doc, err)
+}
+
+func serveClassicMindMapSourceMove(w http.ResponseWriter, r *http.Request, store *Store) {
+	var request classicMindMapSourceMutationRequest
+	if !decodeClassicMindMapJSON(w, r, &request) {
+		return
+	}
+	doc, err := store.MoveClassicMindMapSource(request.MapID, request.NodeID, request.SourceID,
+		request.Position, request.ExpectedRevision, "browser", "изменён порядок источников")
+	writeClassicMindMapResult(w, doc, err)
+}
+
+func serveClassicMindMapSourceFile(w http.ResponseWriter, r *http.Request, store *Store, sessionToken string) {
+	if r.Method != http.MethodGet && r.Method != http.MethodHead {
+		w.Header().Set("Allow", "GET, HEAD")
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	if !knowledgeMapSourceAuthorized(r, sessionToken) {
+		http.Error(w, "forbidden source request", http.StatusForbidden)
+		return
+	}
+	mapIDs, sourceIDs := r.URL.Query()["map_id"], r.URL.Query()["source_id"]
+	if len(mapIDs) != 1 || len(sourceIDs) != 1 {
+		http.NotFound(w, r)
+		return
+	}
+	resolved, err := store.ResolveClassicMindMapFileSource(mapIDs[0], sourceIDs[0])
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusConflict)
+		return
+	}
+	file, err := os.Open(resolved.Path)
+	if err != nil {
+		http.Error(w, "файл источника недоступен", http.StatusGone)
+		return
+	}
+	defer file.Close()
+	info, err := file.Stat()
+	if err != nil || !info.Mode().IsRegular() {
+		http.Error(w, "файл источника недоступен", http.StatusGone)
+		return
+	}
+	w.Header().Set("Content-Type", resolved.MediaType)
+	w.Header().Set("Content-Disposition", mime.FormatMediaType("inline", map[string]string{"filename": filepath.Base(resolved.Path)}))
+	http.ServeContent(w, r, filepath.Base(resolved.Path), info.ModTime(), file)
 }
 
 func serveClassicMindMapHistory(w http.ResponseWriter, r *http.Request, store *Store) {

@@ -1329,6 +1329,40 @@ func TestHandleMapDiffPrintsHumanAndJSONReports(t *testing.T) {
 	if err := handleMap(cfg, store, []string{"diff", "--unknown"}); err == nil {
 		t.Fatal("unknown map diff flag was accepted")
 	}
+	newText := "Single changed claim evidence"
+	newRevision := mem.ChunkContentHash("single changed revision")
+	if err := store.ReplaceDocumentChunks(anchor.SourcePath, []mem.DocumentChunk{{
+		Text: newText, Title: "Single", Backend: "test", Embedding: []float32{1, 0},
+		ChunkIndex: 0, TotalChunks: 1, Provenance: mem.Provenance{
+			DocumentID: anchor.DocumentID, DocumentRevision: newRevision,
+			ChunkHash: mem.ChunkContentHash(newText), SourcePath: anchor.SourcePath,
+			MediaType: "text/markdown", Page: 1, BlockIndex: 0, BlockChunkIndex: 0,
+			BlockTotalChunks: 1, ExtractionMethod: "text", OCRConfidence: -1,
+		},
+	}}); err != nil {
+		t.Fatal(err)
+	}
+	snapshots, _, err := captureCLIStreams(func() error {
+		return handleMap(cfg, store, []string{"snapshots", "--document", anchor.SourcePath})
+	})
+	if err != nil || !strings.Contains(snapshots, "Неизменяемые снимки документов") ||
+		!strings.Contains(snapshots, anchor.DocumentRevision) {
+		t.Fatalf("snapshot list is incomplete: stdout=%q err=%v", snapshots, err)
+	}
+	corpusDiff, _, err := captureCLIStreams(func() error {
+		return handleMap(cfg, store, []string{"corpus-diff", "--document", anchor.SourcePath})
+	})
+	if err != nil || !strings.Contains(corpusDiff, "Полное сравнение ревизий документа") ||
+		!strings.Contains(corpusDiff, "изменено: 1") {
+		t.Fatalf("corpus diff is incomplete: stdout=%q err=%v", corpusDiff, err)
+	}
+	jsonDiff, _, err := captureCLIStreams(func() error {
+		return handleMap(cfg, store, []string{"corpus-diff", "--document", anchor.DocumentID, "--json"})
+	})
+	if err != nil || !strings.Contains(jsonDiff, `"changed_chunks": 1`) ||
+		!strings.Contains(jsonDiff, `"to_revision": "`+newRevision+`"`) {
+		t.Fatalf("JSON corpus diff is incomplete: stdout=%q err=%v", jsonDiff, err)
+	}
 }
 
 func cliGraphStoreAndAnchor(t *testing.T) (*mem.Store, mem.EvidenceAnchor) {

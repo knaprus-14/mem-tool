@@ -15,15 +15,19 @@ type KnowledgeRevisionDiffOptions struct {
 }
 
 type KnowledgeRevisionDiffSummary struct {
-	Documents        int `json:"documents"`
-	CurrentDocuments int `json:"current_documents"`
-	ChangedDocuments int `json:"changed_documents"`
-	MissingDocuments int `json:"missing_documents"`
-	CurrentAnchors   int `json:"current_anchors"`
-	ChangedAnchors   int `json:"changed_anchors"`
-	MissingAnchors   int `json:"missing_anchors"`
-	AffectedNodes    int `json:"affected_nodes"`
-	AffectedEdges    int `json:"affected_edges"`
+	Documents         int `json:"documents"`
+	CurrentDocuments  int `json:"current_documents"`
+	ChangedDocuments  int `json:"changed_documents"`
+	MissingDocuments  int `json:"missing_documents"`
+	CurrentAnchors    int `json:"current_anchors"`
+	ChangedAnchors    int `json:"changed_anchors"`
+	MissingAnchors    int `json:"missing_anchors"`
+	AffectedNodes     int `json:"affected_nodes"`
+	AffectedEdges     int `json:"affected_edges"`
+	AddedChunks       int `json:"added_chunks"`
+	ChangedChunks     int `json:"changed_chunks"`
+	RemovedChunks     int `json:"removed_chunks"`
+	SnapshotDocuments int `json:"snapshot_documents"`
 }
 
 type KnowledgeRevisionAnchorDiff struct {
@@ -63,6 +67,7 @@ type KnowledgeDocumentRevisionDiff struct {
 	AffectedNodes     int                           `json:"affected_nodes"`
 	AffectedEdges     int                           `json:"affected_edges"`
 	Objects           []KnowledgeRevisionObjectDiff `json:"objects"`
+	CorpusDiff        *CorpusRevisionDiff           `json:"corpus_diff,omitempty"`
 }
 
 type KnowledgeRevisionDiffReport struct {
@@ -211,10 +216,9 @@ func (s *Store) buildKnowledgeRevisionDiff(options KnowledgeRevisionDiffOptions,
 		GeneratedAt: time.Now().UTC().Format(time.RFC3339), Scope: options,
 		Limitations: []string{
 			"Сравниваются сохранённые evidence карты и текущие versioned chunks активной базы; модель не вызывается.",
-			"Полный текст старого документа не хранится: отчёт показывает точные прежние выдержки карты, но не выдаёт полный построчный diff всего файла.",
-			"Текущий chunk без прежнего evidence нельзя достоверно назвать добавленным знанием; для этого требуется отдельный исторический снимок корпуса.",
 		},
 	}
+	hasCorpusSnapshots := false
 	globalNodes, globalEdges := make(map[string]bool), make(map[string]bool)
 	for _, builder := range builders {
 		for revision := range builder.revisions {
@@ -248,6 +252,18 @@ func (s *Store) buildKnowledgeRevisionDiff(options KnowledgeRevisionDiffOptions,
 			}
 		}
 		builder.diff.AffectedNodes, builder.diff.AffectedEdges = len(builder.nodes), len(builder.edges)
+		corpusDiff, corpusErr := s.BuildCorpusRevisionDiff(builder.diff.SourcePath, "", "current")
+		if corpusErr == nil {
+			builder.diff.CorpusDiff = &corpusDiff
+			report.Summary.SnapshotDocuments++
+			report.Summary.AddedChunks += corpusDiff.AddedChunks
+			report.Summary.ChangedChunks += corpusDiff.ChangedChunks
+			report.Summary.RemovedChunks += corpusDiff.RemovedChunks
+			hasCorpusSnapshots = true
+		} else if !strings.Contains(corpusErr.Error(), ErrDocumentHistoryUnavailable.Error()) &&
+			!strings.Contains(corpusErr.Error(), "current revision") {
+			return KnowledgeRevisionDiffReport{}, fmt.Errorf("revision diff corpus snapshot %q: %w", builder.diff.SourcePath, corpusErr)
+		}
 		for id := range builder.nodes {
 			globalNodes[id] = true
 		}
@@ -284,6 +300,14 @@ func (s *Store) buildKnowledgeRevisionDiff(options KnowledgeRevisionDiffOptions,
 		}
 	}
 	report.Summary.AffectedNodes, report.Summary.AffectedEdges = len(globalNodes), len(globalEdges)
+	if hasCorpusSnapshots {
+		report.Limitations = append(report.Limitations,
+			"Полный chunk-diff строится по неизменяемому снимку заменённой ревизии; неизменённые chunks учитываются в счётчиках, но не дублируются в выдаче.")
+	} else {
+		report.Limitations = append(report.Limitations,
+			"Для этих документов ещё нет полного снимка прежнего корпуса: он появится автоматически перед первой заменой ревизии после обновления до 1.57.0.",
+			"До появления снимка отчёт показывает только точные прежние evidence-выдержки карты, а не полный diff всего документа.")
+	}
 	return report, nil
 }
 

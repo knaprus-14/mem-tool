@@ -1033,8 +1033,16 @@ VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, table, ownerColumn)
 func (s *Store) LoadKnowledgeGraph() (KnowledgeGraph, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
+	return loadKnowledgeGraphFromQuerier(s.db)
+}
+
+type knowledgeGraphQuerier interface {
+	Query(string, ...any) (*sql.Rows, error)
+}
+
+func loadKnowledgeGraphFromQuerier(q knowledgeGraphQuerier) (KnowledgeGraph, error) {
 	var graph KnowledgeGraph
-	rows, err := s.db.Query(`SELECT id, kind, label, body, status, origin, confidence, created, updated
+	rows, err := q.Query(`SELECT id, kind, label, body, status, origin, confidence, created, updated
 FROM knowledge_nodes ORDER BY id`)
 	if err != nil {
 		return graph, err
@@ -1051,7 +1059,7 @@ FROM knowledge_nodes ORDER BY id`)
 	if err := rows.Close(); err != nil {
 		return graph, err
 	}
-	rows, err = s.db.Query(`SELECT id, from_node, to_node, kind, label, status, origin, confidence, created, updated
+	rows, err = q.Query(`SELECT id, from_node, to_node, kind, label, status, origin, confidence, created, updated
 FROM knowledge_edges ORDER BY id`)
 	if err != nil {
 		return graph, err
@@ -1069,13 +1077,13 @@ FROM knowledge_edges ORDER BY id`)
 		return graph, err
 	}
 	for i := range graph.Nodes {
-		graph.Nodes[i].Evidence, err = loadKnowledgeEvidence(s.db, "knowledge_node_evidence", "node_id", graph.Nodes[i].ID)
+		graph.Nodes[i].Evidence, err = loadKnowledgeEvidence(q, "knowledge_node_evidence", "node_id", graph.Nodes[i].ID)
 		if err != nil {
 			return KnowledgeGraph{}, err
 		}
 	}
 	for i := range graph.Edges {
-		graph.Edges[i].Evidence, err = loadKnowledgeEvidence(s.db, "knowledge_edge_evidence", "edge_id", graph.Edges[i].ID)
+		graph.Edges[i].Evidence, err = loadKnowledgeEvidence(q, "knowledge_edge_evidence", "edge_id", graph.Edges[i].ID)
 		if err != nil {
 			return KnowledgeGraph{}, err
 		}

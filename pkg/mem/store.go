@@ -262,6 +262,10 @@ func initSchema(db *sql.DB) error {
 		_ = tx.Rollback()
 		return err
 	}
+	if _, err := tx.Exec(documentHistorySchema); err != nil {
+		_ = tx.Rollback()
+		return err
+	}
 	if err := migrateEntrySchema(tx); err != nil {
 		_ = tx.Rollback()
 		return err
@@ -297,6 +301,9 @@ func initSchema(db *sql.DB) error {
 			return err
 		}
 		if _, err := db.Exec(documentImportRunSchema); err != nil {
+			return err
+		}
+		if _, err := db.Exec(documentHistorySchema); err != nil {
 			return err
 		}
 		if err := migrateEntrySchemaDB(db); err != nil {
@@ -975,6 +982,35 @@ func (s *Store) replaceDocumentChunks(sourcePath string, chunks []DocumentChunk,
 			return fmt.Errorf("%v; rollback failed: %w", cause, rollbackErr)
 		}
 		return cause
+	}
+	oldEntries := make([]Entry, 0)
+	for i := range s.entries {
+		if s.entries[i].SourceFile == sourcePath {
+			oldEntries = append(oldEntries, cloneEntry(s.entries[i]))
+		}
+	}
+	if len(oldEntries) > 0 && oldEntries[0].DocumentID != "" &&
+		oldEntries[0].DocumentRevision == expectedDocumentRevision {
+		if len(oldEntries) != len(prepared) {
+			return rollback(fmt.Errorf("document revision %s was reused for different chunk content", expectedDocumentRevision))
+		}
+		sort.Slice(oldEntries, func(i, j int) bool { return oldEntries[i].ChunkIndex < oldEntries[j].ChunkIndex })
+		for i := range prepared {
+			if oldEntries[i].ChunkIndex != prepared[i].entry.ChunkIndex ||
+				oldEntries[i].ChunkHash != prepared[i].entry.ChunkHash || oldEntries[i].Text != prepared[i].entry.Text {
+				return rollback(fmt.Errorf("document revision %s was reused for different chunk content", expectedDocumentRevision))
+			}
+		}
+	}
+	if len(oldEntries) > 0 && oldEntries[0].DocumentID != "" && oldEntries[0].DocumentRevision != "" &&
+		oldEntries[0].DocumentRevision != expectedDocumentRevision {
+		graph, graphErr := loadKnowledgeGraphFromQuerier(s.db)
+		if graphErr != nil {
+			return rollback(fmt.Errorf("snapshot current knowledge graph: %w", graphErr))
+		}
+		if snapshotErr := archiveDocumentHistoryTx(tx, oldEntries, graph, now, "before_document_replace"); snapshotErr != nil {
+			return rollback(snapshotErr)
+		}
 	}
 
 	for i := range prepared {

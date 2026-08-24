@@ -3830,6 +3830,7 @@ func printUsage() {
   mem mindmap ai-sources <карта> <узел> <запрос> [AI scope flags] [--expect N] [--json]
   mem mindmap ai-show <preview-id> [--json]
   mem mindmap ai-apply <preview-id> [--select <id,id>] [--expect N] [--json]
+  mem mindmap export <карта> --format html|svg|png|json|opml --output <путь> [--force]
       AI scope flags: --document <путь|document-id>, --page-from N, --page-to N,
       --query <текст>, повторяемый --entry N, --node-sources, --without-sources,
       --limit N (1..10000). Без --limit безопасный автоматический порог — 512
@@ -3844,6 +3845,8 @@ func printUsage() {
       защищает от конкурентной правки, undo отменяет последнее доступное изменение.
       AI-команды сначала сохраняют неизменяемый preview. Новая карта или изменения
       публикуются только отдельной командой ai-apply после проверки предложений.
+      export всегда снимает полное дерево независимо от свёрнутых ветвей. По
+      умолчанию существующий файл не перезаписывается; это разрешает только --force.
 
   mem map build <фокус> [-limit N] [-tags "тег1,тег2"] [-tag "категория"] [-from 2026-01-01] [-to 2026-07-01] [-min-score 0.5] [-vector-only] [-context-chars N]
       Извлечь типизированные узлы и связи только из versioned document evidence.

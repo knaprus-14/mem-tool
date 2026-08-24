@@ -13,7 +13,7 @@ import (
 	ui "github.com/knaprus-14/mem-tool/pkg/ui"
 )
 
-const mindMapUsage = `использование: mem mindmap <open|create|list|show|add-node|edit-node|move-node|delete-node|source-add|source-remove|source-move|history|undo|redo|snapshot|snapshots|ai-new|ai-expand|ai-fill|ai-sources|ai-show|ai-apply>
+const mindMapUsage = `использование: mem mindmap <open|create|list|show|add-node|edit-node|move-node|delete-node|source-add|source-remove|source-move|history|undo|redo|snapshot|snapshots|ai-new|ai-expand|ai-fill|ai-sources|ai-show|ai-apply|export>
   mem mindmap open [--port N] [--no-browser]
   mem mindmap create <название> [--description <текст>] [--json]
   mem mindmap list [--all] [--json]
@@ -36,6 +36,7 @@ const mindMapUsage = `использование: mem mindmap <open|create|list|
   mem mindmap ai-sources <карта> <узел> <запрос> [AI scope flags] [--expect N] [--json]
   mem mindmap ai-show <preview-id> [--json]
   mem mindmap ai-apply <preview-id> [--select <id,id>] [--expect N] [--json]
+  mem mindmap export <карта> --format html|svg|png|json|opml --output <путь> [--force]
 
 AI scope flags: --document <путь|document-id> [--page-from N] [--page-to N],
   --query <текст>, повторяемый --entry N, --node-sources, --without-sources,
@@ -86,6 +87,9 @@ func handleMindMap(cfg *Config, store *Store, args []string) error {
 	}
 	if strings.HasPrefix(args[0], "ai-") {
 		return handleMindMapAI(cfg, store, args)
+	}
+	if args[0] == "export" {
+		return handleClassicMindMapExport(store, args[1:])
 	}
 	options, err := parseMindMapCLIOptions(args[1:])
 	if err != nil {

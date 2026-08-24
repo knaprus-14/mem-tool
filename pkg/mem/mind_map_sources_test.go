@@ -157,6 +157,64 @@ func TestClassicMindMapAttachmentImportIsPrivateAndBounded(t *testing.T) {
 	}
 }
 
+func TestClassicMindMapURLSourceValidation(t *testing.T) {
+	store, err := NewStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	doc, err := store.CreateClassicMindMap("URL sources", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	const valid = "https://example.org/spec?q=fire%20safety#section-2"
+	doc, attached, err := store.AttachClassicMindMapSource(doc.Map.ID, doc.Map.RootNodeID, ClassicMindMapSource{
+		Kind: ClassicMindMapSourceURL, URL: valid,
+	}, doc.Map.Revision, "test", "valid URL")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if attached.URL != valid || attached.Title != "example.org" {
+		t.Fatalf("valid URL was changed unexpectedly: %#v", attached)
+	}
+
+	invalid := []string{
+		"javascript:alert(1)",
+		"data:text/html,<script>alert(1)</script>",
+		"file:///C:/private.txt",
+		"/relative/document",
+		"https://user:secret@example.org/private",
+		"https://:443/path",
+		"https://example.org/" + strings.Repeat("a", MaxClassicMindMapTextRunes),
+	}
+	for _, raw := range invalid {
+		t.Run(raw[:min(len(raw), 40)], func(t *testing.T) {
+			beforeRevision := doc.Map.Revision
+			if _, _, err := store.AttachClassicMindMapSource(doc.Map.ID, doc.Map.RootNodeID, ClassicMindMapSource{
+				Kind: ClassicMindMapSourceURL, URL: raw,
+			}, beforeRevision, "test", "invalid URL"); err == nil {
+				t.Fatalf("unsafe URL was accepted: %q", raw)
+			}
+			loaded, loadErr := store.LoadClassicMindMap(doc.Map.ID)
+			if loadErr != nil || loaded.Map.Revision != beforeRevision {
+				t.Fatalf("rejected URL changed the map: revision=%d err=%v", loaded.Map.Revision, loadErr)
+			}
+		})
+	}
+
+	_, err = store.ImportClassicMindMap(ClassicMindMapDraft{
+		Title: "Unsafe import",
+		Nodes: []ClassicMindMapNodeDraft{{
+			Ref: "root", Label: "Unsafe import", Kind: ClassicMindMapNodeTopic, Origin: ClassicMindMapNodeImported,
+			Sources: []ClassicMindMapSource{{Kind: ClassicMindMapSourceURL, URL: "javascript:alert(1)"}},
+		}},
+	}, "test", "unsafe import")
+	if err == nil {
+		t.Fatal("central draft validation accepted an unsafe URL")
+	}
+}
+
 func TestClassicMindMapWorkspaceSourceAPIAndPhysicalPage(t *testing.T) {
 	storeDir := t.TempDir()
 	store, err := NewStore(storeDir)

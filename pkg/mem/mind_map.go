@@ -115,10 +115,11 @@ type ClassicMindMapSource struct {
 }
 
 type ClassicMindMapDocument struct {
-	Version int                  `json:"version"`
-	Map     ClassicMindMap       `json:"map"`
-	Nodes   []ClassicMindMapNode `json:"nodes"`
-	Digest  string               `json:"digest"`
+	Version     int                  `json:"version"`
+	Map         ClassicMindMap       `json:"map"`
+	Nodes       []ClassicMindMapNode `json:"nodes"`
+	Digest      string               `json:"digest"`
+	StateDigest string               `json:"state_digest,omitempty"`
 }
 
 type ClassicMindMapSummary struct {
@@ -498,7 +499,7 @@ VALUES (?, ?, 'completed', ?, ?, ?, ?, ?, ?, ?)`, runID, mapID, normalized.Gener
 	if err := tx.Commit(); err != nil {
 		return ClassicMindMapDocument{}, fmt.Errorf("commit classic mind map: %w", err)
 	}
-	return s.resolveClassicMindMapSourceStates(doc), nil
+	return s.resolveClassicMindMapSourceStates(doc)
 }
 
 func (s *Store) ListClassicMindMaps(includeArchived bool) ([]ClassicMindMapSummary, error) {
@@ -534,11 +535,16 @@ FROM mind_maps m WHERE m.deleted_at=''`
 func (s *Store) LoadClassicMindMap(ref string) (ClassicMindMapDocument, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	item, err := resolveClassicMindMapRef(s.db, ref)
+	tx, err := s.db.Begin()
+	if err != nil {
+		return ClassicMindMapDocument{}, fmt.Errorf("begin classic mind map load: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+	item, err := resolveClassicMindMapRef(tx, ref)
 	if err != nil {
 		return ClassicMindMapDocument{}, err
 	}
-	doc, err := loadClassicMindMapDocument(s.db, item.ID)
+	doc, err := loadClassicMindMapDocument(tx, item.ID)
 	if err != nil {
 		return ClassicMindMapDocument{}, err
 	}
@@ -546,7 +552,14 @@ func (s *Store) LoadClassicMindMap(ref string) (ClassicMindMapDocument, error) {
 	if err != nil {
 		return ClassicMindMapDocument{}, err
 	}
-	return s.resolveClassicMindMapSourceStates(doc), nil
+	doc, err = resolveClassicMindMapSourceStatesWithQuery(tx, doc)
+	if err != nil {
+		return ClassicMindMapDocument{}, err
+	}
+	if err := tx.Commit(); err != nil {
+		return ClassicMindMapDocument{}, fmt.Errorf("finish classic mind map load: %w", err)
+	}
+	return doc, nil
 }
 
 func normalizeClassicMindMapDraft(draft ClassicMindMapDraft) (ClassicMindMapDraft, string, error) {
@@ -741,8 +754,8 @@ func validateClassicMindMapSource(source ClassicMindMapSource) error {
 			return fmt.Errorf("external_file source не содержит путь или координаты")
 		}
 	case ClassicMindMapSourceURL:
-		if strings.TrimSpace(source.URL) == "" {
-			return fmt.Errorf("url source пуст")
+		if _, err := validateClassicMindMapHTTPURL(source.URL); err != nil {
+			return err
 		}
 	case ClassicMindMapSourceKnowledgeNode:
 		if err := validateKnowledgeID(strings.TrimSpace(source.KnowledgeNodeID)); err != nil {
@@ -955,6 +968,7 @@ FROM mind_map_node_sources WHERE map_id=? AND deleted_at='' ORDER BY node_id, po
 func finalizeClassicMindMapDocument(doc ClassicMindMapDocument) (ClassicMindMapDocument, []byte, error) {
 	doc.Version = ClassicMindMapFormatVersion
 	doc.Digest = ""
+	doc.StateDigest = ""
 	sort.Slice(doc.Nodes, func(i, j int) bool {
 		if doc.Nodes[i].ParentID != doc.Nodes[j].ParentID {
 			return doc.Nodes[i].ParentID < doc.Nodes[j].ParentID
@@ -1096,7 +1110,8 @@ VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, item.ID, item.Revision, newRevisio
 	if err := tx.Commit(); err != nil {
 		return ClassicMindMapDocument{}, ClassicMindMapChange{}, fmt.Errorf("commit classic mind map change: %w", err)
 	}
-	return s.resolveClassicMindMapSourceStates(after), change, nil
+	resolved, err := s.resolveClassicMindMapSourceStates(after)
+	return resolved, change, err
 }
 
 // EditClassicMindMap updates the card shown in the map library. When a newly
@@ -1582,7 +1597,8 @@ VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, item.ID, item.Revision, newRevi
 	if err := tx.Commit(); err != nil {
 		return ClassicMindMapDocument{}, ClassicMindMapChange{}, err
 	}
-	return s.resolveClassicMindMapSourceStates(after), undo, nil
+	resolved, err := s.resolveClassicMindMapSourceStates(after)
+	return resolved, undo, err
 }
 
 // RedoClassicMindMapChange reapplies the newest undo which has not already
@@ -1690,7 +1706,8 @@ VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, item.ID, item.Revision, newRevi
 	if err := tx.Commit(); err != nil {
 		return ClassicMindMapDocument{}, ClassicMindMapChange{}, err
 	}
-	return s.resolveClassicMindMapSourceStates(after), redo, nil
+	resolved, err := s.resolveClassicMindMapSourceStates(after)
+	return resolved, redo, err
 }
 
 func (s *Store) CreateClassicMindMapSnapshot(mapRef, reason string, expectedRevision int64) (string, error) {

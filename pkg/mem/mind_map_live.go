@@ -80,6 +80,8 @@ func newClassicMindMapWorkspaceHandler(store *Store, sessionToken string, assist
 			serveClassicMindMapEdit(w, r, store)
 		case "/api/maps/duplicate":
 			serveClassicMindMapDuplicate(w, r, store)
+		case "/api/maps/export":
+			serveClassicMindMapExport(w, r, store)
 		case "/api/nodes/add":
 			serveClassicMindMapNodeAdd(w, r, store)
 		case "/api/nodes/edit":
@@ -153,6 +155,18 @@ type classicMindMapDuplicateRequest struct {
 	MapID string `json:"map_id"`
 	Title string `json:"title"`
 }
+
+type classicMindMapExportRequest struct {
+	MapID               string                     `json:"map_id"`
+	Format              ClassicMindMapExportFormat `json:"format"`
+	ExpectedRevision    int64                      `json:"expected_revision"`
+	ExpectedDigest      string                     `json:"expected_digest"`
+	ExpectedStateDigest string                     `json:"expected_state_digest"`
+}
+
+type classicMindMapExportFunc func(ClassicMindMapExportRequest) (ClassicMindMapExportArtifact, error)
+
+var classicMindMapPNGExportSlots = make(chan struct{}, 1)
 
 type classicMindMapNodeAddRequest struct {
 	MapID            string                 `json:"map_id"`
@@ -291,6 +305,76 @@ func serveClassicMindMapDuplicate(w http.ResponseWriter, r *http.Request, store 
 	}
 	doc, err := store.DuplicateClassicMindMap(request.MapID, request.Title)
 	writeClassicMindMapResult(w, doc, err)
+}
+
+func serveClassicMindMapExport(w http.ResponseWriter, r *http.Request, store *Store) {
+	serveClassicMindMapExportWith(w, r, store.ExportClassicMindMap, classicMindMapPNGExportSlots)
+}
+
+func serveClassicMindMapExportWith(w http.ResponseWriter, r *http.Request, export classicMindMapExportFunc, pngSlots chan struct{}) {
+	var request classicMindMapExportRequest
+	if !decodeClassicMindMapJSON(w, r, &request) {
+		return
+	}
+	if classicMindMapExportRequestCancelled(w, r) {
+		return
+	}
+	if request.ExpectedRevision <= 0 || strings.TrimSpace(request.ExpectedDigest) == "" || strings.TrimSpace(request.ExpectedStateDigest) == "" {
+		http.Error(w, "mind map export requires expected_revision, expected_digest and expected_state_digest", http.StatusBadRequest)
+		return
+	}
+	if request.Format == ClassicMindMapExportPNG {
+		select {
+		case pngSlots <- struct{}{}:
+			defer func() { <-pngSlots }()
+		default:
+			w.Header().Set("Retry-After", "1")
+			http.Error(w, "PNG export is busy; retry shortly", http.StatusTooManyRequests)
+			return
+		}
+		if classicMindMapExportRequestCancelled(w, r) {
+			return
+		}
+	}
+	artifact, err := export(ClassicMindMapExportRequest{
+		MapRef:              request.MapID,
+		Format:              request.Format,
+		ExpectedRevision:    request.ExpectedRevision,
+		ExpectedDigest:      request.ExpectedDigest,
+		ExpectedStateDigest: request.ExpectedStateDigest,
+	})
+	if err != nil {
+		status := http.StatusBadRequest
+		switch {
+		case errors.Is(err, ErrClassicMindMapNotFound):
+			status = http.StatusNotFound
+		case errors.Is(err, ErrClassicMindMapExportChanged):
+			status = http.StatusConflict
+		}
+		http.Error(w, strings.TrimSpace(err.Error()), status)
+		return
+	}
+	if classicMindMapExportRequestCancelled(w, r) {
+		return
+	}
+	w.Header().Set("Content-Type", artifact.MediaType)
+	w.Header().Set("Content-Disposition", mime.FormatMediaType("attachment", map[string]string{"filename": artifact.Filename}))
+	w.Header().Set("X-Mem-Map-Revision", strconv.FormatInt(artifact.Revision, 10))
+	w.Header().Set("X-Mem-Map-Digest", artifact.Digest)
+	w.Header().Set("X-Mem-Map-State-Digest", artifact.StateDigest)
+	w.Header().Set("X-Content-Type-Options", "nosniff")
+	w.WriteHeader(http.StatusOK)
+	_, _ = w.Write(artifact.Data)
+}
+
+func classicMindMapExportRequestCancelled(w http.ResponseWriter, r *http.Request) bool {
+	select {
+	case <-r.Context().Done():
+		http.Error(w, "mind map export request was cancelled", http.StatusRequestTimeout)
+		return true
+	default:
+		return false
+	}
 }
 
 func serveClassicMindMapNodeAdd(w http.ResponseWriter, r *http.Request, store *Store) {

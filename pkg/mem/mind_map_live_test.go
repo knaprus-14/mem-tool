@@ -2,12 +2,15 @@ package mem
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
+	"time"
 )
 
 func TestClassicMindMapLibraryMetadataAndDuplicate(t *testing.T) {
@@ -170,6 +173,149 @@ func TestClassicMindMapWorkspaceCRUDAndRevisionConflict(t *testing.T) {
 	}
 }
 
+func TestClassicMindMapWorkspaceExportsPinnedAttachment(t *testing.T) {
+	store, err := NewStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	doc, err := store.CreateClassicMindMap("Переносимая карта", "Проверка HTTP-экспорта")
+	if err != nil {
+		t.Fatal(err)
+	}
+	handler := NewClassicMindMapWorkspaceHandler(store, "session")
+
+	exported := classicMindMapWorkspaceRequest(t, handler, "/api/maps/export", "127.0.0.1:9000", "http://127.0.0.1:9000", "session", map[string]any{
+		"map_id": doc.Map.ID, "format": "html", "expected_revision": doc.Map.Revision, "expected_digest": doc.Digest, "expected_state_digest": doc.StateDigest,
+	})
+	if exported.Code != http.StatusOK || exported.Header().Get("Content-Type") != "text/html; charset=utf-8" ||
+		!strings.Contains(exported.Header().Get("Content-Disposition"), ".html") ||
+		exported.Header().Get("X-Mem-Map-Digest") != doc.Digest ||
+		exported.Header().Get("X-Mem-Map-State-Digest") != doc.StateDigest ||
+		!strings.Contains(exported.Body.String(), "Переносимая карта") {
+		t.Fatalf("export status=%d headers=%#v body=%q", exported.Code, exported.Header(), exported.Body.String())
+	}
+
+	stale := classicMindMapWorkspaceRequest(t, handler, "/api/maps/export", "127.0.0.1:9000", "http://127.0.0.1:9000", "session", map[string]any{
+		"map_id": doc.Map.ID, "format": "json", "expected_revision": doc.Map.Revision + 1,
+		"expected_digest": doc.Digest, "expected_state_digest": doc.StateDigest,
+	})
+	if stale.Code != http.StatusConflict {
+		t.Fatalf("stale export status=%d body=%q", stale.Code, stale.Body.String())
+	}
+	loaded, err := store.LoadClassicMindMap(doc.Map.ID)
+	if err != nil || loaded.Map.Revision != doc.Map.Revision || loaded.Digest != doc.Digest {
+		t.Fatalf("export mutated map: revision=%d digest=%q err=%v", loaded.Map.Revision, loaded.Digest, err)
+	}
+
+	unpinned := classicMindMapWorkspaceRequest(t, handler, "/api/maps/export", "127.0.0.1:9000", "http://127.0.0.1:9000", "session", map[string]any{
+		"map_id": doc.Map.ID, "format": "json",
+	})
+	if unpinned.Code != http.StatusBadRequest || !strings.Contains(unpinned.Body.String(), "expected_state_digest") {
+		t.Fatalf("unpinned export status=%d body=%q", unpinned.Code, unpinned.Body.String())
+	}
+}
+
+func TestClassicMindMapWorkspacePNGExportConcurrencyGuard(t *testing.T) {
+	slots := make(chan struct{}, 1)
+	started := make(chan struct{})
+	release := make(chan struct{})
+	var pngCalls atomic.Int32
+	export := func(request ClassicMindMapExportRequest) (ClassicMindMapExportArtifact, error) {
+		if request.Format == ClassicMindMapExportPNG && pngCalls.Add(1) == 1 {
+			close(started)
+			<-release
+		}
+		mediaType := "application/json; charset=utf-8"
+		if request.Format == ClassicMindMapExportPNG {
+			mediaType = "image/png"
+		}
+		return ClassicMindMapExportArtifact{
+			Format: request.Format, Filename: "map." + string(request.Format), MediaType: mediaType,
+			Data: []byte("artifact"), MapID: request.MapRef, Revision: request.ExpectedRevision, Digest: request.ExpectedDigest,
+		}, nil
+	}
+
+	firstResponse := httptest.NewRecorder()
+	firstDone := make(chan struct{})
+	go func() {
+		defer close(firstDone)
+		serveClassicMindMapExportWith(firstResponse, classicMindMapExportTestRequest(context.Background(), ClassicMindMapExportPNG), export, slots)
+	}()
+	select {
+	case <-started:
+	case <-time.After(2 * time.Second):
+		t.Fatal("first PNG export did not enter renderer")
+	}
+
+	busy := httptest.NewRecorder()
+	serveClassicMindMapExportWith(busy, classicMindMapExportTestRequest(context.Background(), ClassicMindMapExportPNG), export, slots)
+	if busy.Code != http.StatusTooManyRequests || busy.Header().Get("Retry-After") != "1" || pngCalls.Load() != 1 {
+		t.Fatalf("concurrent PNG was not rejected before rendering: status=%d headers=%#v calls=%d", busy.Code, busy.Header(), pngCalls.Load())
+	}
+
+	jsonResponse := httptest.NewRecorder()
+	serveClassicMindMapExportWith(jsonResponse, classicMindMapExportTestRequest(context.Background(), ClassicMindMapExportJSON), export, slots)
+	if jsonResponse.Code != http.StatusOK || jsonResponse.Body.String() != "artifact" {
+		t.Fatalf("PNG guard limited a non-raster export: status=%d body=%q", jsonResponse.Code, jsonResponse.Body.String())
+	}
+
+	close(release)
+	select {
+	case <-firstDone:
+	case <-time.After(2 * time.Second):
+		t.Fatal("first PNG export did not release its slot")
+	}
+	if firstResponse.Code != http.StatusOK || firstResponse.Body.String() != "artifact" {
+		t.Fatalf("first PNG export failed: status=%d body=%q", firstResponse.Code, firstResponse.Body.String())
+	}
+
+	afterRelease := httptest.NewRecorder()
+	serveClassicMindMapExportWith(afterRelease, classicMindMapExportTestRequest(context.Background(), ClassicMindMapExportPNG), export, slots)
+	if afterRelease.Code != http.StatusOK || pngCalls.Load() != 2 {
+		t.Fatalf("PNG slot was not reusable: status=%d calls=%d", afterRelease.Code, pngCalls.Load())
+	}
+}
+
+func TestClassicMindMapWorkspaceExportHonorsRequestCancellation(t *testing.T) {
+	slots := make(chan struct{}, 1)
+	var calls atomic.Int32
+	export := func(request ClassicMindMapExportRequest) (ClassicMindMapExportArtifact, error) {
+		calls.Add(1)
+		return ClassicMindMapExportArtifact{
+			Format: request.Format, Filename: "map.png", MediaType: "image/png", Data: []byte("must not be written"),
+		}, nil
+	}
+
+	beforeContext, cancelBefore := context.WithCancel(context.Background())
+	cancelBefore()
+	before := httptest.NewRecorder()
+	serveClassicMindMapExportWith(before, classicMindMapExportTestRequest(beforeContext, ClassicMindMapExportPNG), export, slots)
+	if before.Code != http.StatusRequestTimeout || calls.Load() != 0 {
+		t.Fatalf("cancelled request reached renderer: status=%d calls=%d", before.Code, calls.Load())
+	}
+
+	afterContext, cancelAfter := context.WithCancel(context.Background())
+	after := httptest.NewRecorder()
+	serveClassicMindMapExportWith(after, classicMindMapExportTestRequest(afterContext, ClassicMindMapExportPNG), func(request ClassicMindMapExportRequest) (ClassicMindMapExportArtifact, error) {
+		cancelAfter()
+		return export(request)
+	}, slots)
+	if after.Code != http.StatusRequestTimeout || strings.Contains(after.Body.String(), "must not be written") || calls.Load() != 1 {
+		t.Fatalf("post-render cancellation leaked artifact: status=%d body=%q calls=%d", after.Code, after.Body.String(), calls.Load())
+	}
+}
+
+func classicMindMapExportTestRequest(ctx context.Context, format ClassicMindMapExportFormat) *http.Request {
+	payload, _ := json.Marshal(classicMindMapExportRequest{
+		MapID: "mmm-test", Format: format, ExpectedRevision: 7,
+		ExpectedDigest: "sha256:test", ExpectedStateDigest: "sha256:state",
+	})
+	request := httptest.NewRequest(http.MethodPost, "http://127.0.0.1:9000/api/maps/export", bytes.NewReader(payload)).WithContext(ctx)
+	request.Header.Set("Content-Type", "application/json")
+	return request
+}
+
 func classicMindMapWorkspaceRequest(t *testing.T, handler http.Handler, path, host, origin, token string, payload any) *httptest.ResponseRecorder {
 	t.Helper()
 	encoded, err := json.Marshal(payload)
@@ -224,6 +370,11 @@ func TestClassicMindMapWorkspaceHasOfflineEditorControls(t *testing.T) {
 		`planned:'План обработки готов'`, `generate:'Генерация структуры'`, `После публикации`,
 		`Дополнительные настройки объёма`, `limit:assistantState.setup.limit`,
 		`'ai:expand_branch':'AI расширил ветвь'`, `action!=='find_sources'`,
+		`id="exportMap"`, `id="exportDialog"`, `id="exportForm"`, `/api/maps/export`,
+		`Интерактивный HTML`, `value="svg"`, `value="png"`, `value="json"`, `value="opml"`,
+		`expected_revision:doc.map.revision`, `expected_digest:doc.digest`, `expected_state_digest:doc.state_digest`, `Все ветви войдут в файл`,
+		`function safeWebSourceURL(value)`, `parsed.protocol!=='http:'`, `parsed.protocol!=='https:'`,
+		`parsed.username`, `link.href=webURL`,
 	} {
 		if !strings.Contains(text, expected) {
 			t.Errorf("workspace missing %q", expected)
@@ -231,5 +382,8 @@ func TestClassicMindMapWorkspaceHasOfflineEditorControls(t *testing.T) {
 	}
 	if strings.Contains(text, `<script src=`) || strings.Contains(text, `<link rel="stylesheet"`) {
 		t.Fatal("offline workspace unexpectedly depends on an external asset")
+	}
+	if strings.Contains(text, `link.href=source.url`) {
+		t.Fatal("workspace links an unvalidated source URL")
 	}
 }

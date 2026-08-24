@@ -1567,31 +1567,7 @@ func (s *Store) verifyClassicMindMapAIPreviewTx(tx *sql.Tx, preview ClassicMindM
 }
 
 func resolveClassicMindMapAIEvidenceTx(tx *sql.Tx, anchor EvidenceAnchor) (EvidenceResolution, error) {
-	if err := validateEvidenceAnchor(anchor); err != nil {
-		return EvidenceResolution{Anchor: anchor, State: EvidenceMissing}, err
-	}
-	rows, err := tx.Query(`SELECT id, text, document_id, document_revision, chunk_hash,
-source_file, source_path, page, block_index, block_chunk_index, block_total_chunks, chunk_index
-FROM entries WHERE document_id=? AND page=? AND block_index=? AND block_chunk_index=? ORDER BY id`,
-		anchor.DocumentID, anchor.Page, anchor.BlockIndex, anchor.BlockChunkIndex)
-	if err != nil {
-		return EvidenceResolution{Anchor: anchor, State: EvidenceMissing}, err
-	}
-	defer rows.Close()
-	var entries []Entry
-	for rows.Next() {
-		var entry Entry
-		if err := rows.Scan(&entry.ID, &entry.Text, &entry.DocumentID, &entry.DocumentRevision, &entry.ChunkHash,
-			&entry.SourceFile, &entry.SourcePath, &entry.Page, &entry.BlockIndex, &entry.BlockChunkIndex,
-			&entry.BlockTotalChunks, &entry.ChunkIndex); err != nil {
-			return EvidenceResolution{Anchor: anchor, State: EvidenceMissing}, err
-		}
-		entries = append(entries, entry)
-	}
-	if err := rows.Err(); err != nil {
-		return EvidenceResolution{Anchor: anchor, State: EvidenceMissing}, err
-	}
-	return resolveEvidenceAnchorFromEntries(anchor, entries), nil
+	return resolveClassicMindMapEvidenceWithQuery(tx, anchor)
 }
 
 func (s *Store) publishExistingClassicMindMapAIPreview(preview ClassicMindMapAIPreview, selected []ClassicMindMapAIProposal, selectedIDs []string, actor, comment string) (ClassicMindMapAIApplyResult, error) {
@@ -1937,6 +1913,9 @@ VALUES (?, ?, 0, 1, ?, ?, ?, ?, ?)`, preview.RunID, mapID, string(selectedJSON),
 	if err := tx.Commit(); err != nil {
 		return ClassicMindMapAIApplyResult{}, err
 	}
-	doc = s.resolveClassicMindMapSourceStates(doc)
+	doc, err = s.resolveClassicMindMapSourceStates(doc)
+	if err != nil {
+		return ClassicMindMapAIApplyResult{}, err
+	}
 	return ClassicMindMapAIApplyResult{Document: doc, RunID: preview.RunID, ProposalIDs: selectedIDs, PublicationID: publicationID}, nil
 }

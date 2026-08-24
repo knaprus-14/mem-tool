@@ -714,6 +714,7 @@ func tuiCommandMenuItems() []commandMenuEntry {
 		{"mindmap ai-sources <карта> <узел> <запрос> [флаги]", "предложить источники из активной базы"},
 		{"mindmap ai-show <preview-id> [--json]", "показать сохранённый AI-preview"},
 		{"mindmap ai-apply <preview-id> [--select id,id] [--expect N] [--json]", "атомарно применить проверенные предложения"},
+		{"mindmap export <карта> --format html|svg|png|json|opml --output <путь> [--force]", "создать переносимый снимок полного дерева"},
 		{"map build <фокус> [флаги]", "построить draft knowledge graph"},
 		{"map coverage [флаги]", "измерить покрытие документов и страниц"},
 		{"map diff [--document путь] [--json]", "сравнить evidence карты с текущими ревизиями"},

@@ -4,6 +4,7 @@ import (
 	"crypto/sha256"
 	"database/sql"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -74,14 +75,34 @@ type ClassicMindMapResolvedFile struct {
 	State     EvidenceState
 }
 
-func (s *Store) resolveClassicMindMapSourceStates(doc ClassicMindMapDocument) ClassicMindMapDocument {
+func (s *Store) resolveClassicMindMapSourceStates(doc ClassicMindMapDocument) (ClassicMindMapDocument, error) {
+	tx, err := s.db.Begin()
+	if err != nil {
+		return ClassicMindMapDocument{}, fmt.Errorf("begin classic mind map source resolution: %w", err)
+	}
+	resolved, err := resolveClassicMindMapSourceStatesWithQuery(tx, doc)
+	if err != nil {
+		_ = tx.Rollback()
+		return ClassicMindMapDocument{}, err
+	}
+	if err := tx.Commit(); err != nil {
+		return ClassicMindMapDocument{}, fmt.Errorf("finish classic mind map source resolution: %w", err)
+	}
+	return resolved, nil
+}
+
+func resolveClassicMindMapSourceStatesWithQuery(q classicMindMapQuerier, doc ClassicMindMapDocument) (ClassicMindMapDocument, error) {
 	for i := range doc.Nodes {
 		for j := range doc.Nodes[i].Sources {
 			source := &doc.Nodes[i].Sources[j]
 			switch source.Kind {
 			case ClassicMindMapSourceEvidence:
 				if source.Evidence != nil {
-					source.EvidenceState = resolveEvidenceAnchorFromEntries(*source.Evidence, s.entries).State
+					resolution, err := resolveClassicMindMapEvidenceWithQuery(q, *source.Evidence)
+					if err != nil {
+						return ClassicMindMapDocument{}, fmt.Errorf("resolve classic mind map evidence source %q: %w", source.ID, err)
+					}
+					source.EvidenceState = resolution.State
 				}
 			case ClassicMindMapSourceExternalFile:
 				source.EvidenceState = EvidenceMissing
@@ -93,13 +114,83 @@ func (s *Store) resolveClassicMindMapSourceStates(doc ClassicMindMapDocument) Cl
 			case ClassicMindMapSourceKnowledgeNode:
 				source.EvidenceState = EvidenceMissing
 				var count int
-				if err := s.db.QueryRow(`SELECT COUNT(*) FROM knowledge_nodes WHERE id=?`, source.KnowledgeNodeID).Scan(&count); err == nil && count == 1 {
+				if err := q.QueryRow(`SELECT COUNT(*) FROM knowledge_nodes WHERE id=?`, source.KnowledgeNodeID).Scan(&count); err != nil {
+					return ClassicMindMapDocument{}, fmt.Errorf("resolve classic mind map knowledge source %q: %w", source.ID, err)
+				} else if count == 1 {
 					source.EvidenceState = EvidenceCurrent
 				}
 			}
 		}
 	}
-	return doc
+	doc.StateDigest = classicMindMapResolvedStateDigest(doc)
+	return doc, nil
+}
+
+func resolveClassicMindMapEvidenceWithQuery(q classicMindMapQuerier, anchor EvidenceAnchor) (EvidenceResolution, error) {
+	if err := validateEvidenceAnchor(anchor); err != nil {
+		return EvidenceResolution{Anchor: anchor, State: EvidenceMissing}, err
+	}
+	rows, err := q.Query(`SELECT id, text, document_id, document_revision, chunk_hash,
+source_file, source_path, page, block_index, block_chunk_index, block_total_chunks, chunk_index
+FROM entries WHERE document_id=? AND page=? AND block_index=? AND block_chunk_index=? ORDER BY id`,
+		anchor.DocumentID, anchor.Page, anchor.BlockIndex, anchor.BlockChunkIndex)
+	if err != nil {
+		return EvidenceResolution{Anchor: anchor, State: EvidenceMissing}, err
+	}
+	defer rows.Close()
+	var entries []Entry
+	for rows.Next() {
+		var entry Entry
+		if err := rows.Scan(&entry.ID, &entry.Text, &entry.DocumentID, &entry.DocumentRevision, &entry.ChunkHash,
+			&entry.SourceFile, &entry.SourcePath, &entry.Page, &entry.BlockIndex, &entry.BlockChunkIndex,
+			&entry.BlockTotalChunks, &entry.ChunkIndex); err != nil {
+			return EvidenceResolution{Anchor: anchor, State: EvidenceMissing}, err
+		}
+		entries = append(entries, entry)
+	}
+	if err := rows.Err(); err != nil {
+		return EvidenceResolution{Anchor: anchor, State: EvidenceMissing}, err
+	}
+	return resolveEvidenceAnchorFromEntries(anchor, entries), nil
+}
+
+// classicMindMapResolvedStateDigest pins only the dynamic resolution state of
+// sources. It deliberately excludes content and timestamps: content is pinned
+// by Digest/revision, while repeated loads against unchanged backing state must
+// remain byte-deterministic.
+func classicMindMapResolvedStateDigest(doc ClassicMindMapDocument) string {
+	type sourceState struct {
+		ID     string                   `json:"id"`
+		NodeID string                   `json:"node_id"`
+		Kind   ClassicMindMapSourceKind `json:"kind"`
+		State  EvidenceState            `json:"state"`
+	}
+	states := make([]sourceState, 0)
+	for _, node := range doc.Nodes {
+		for _, source := range node.Sources {
+			states = append(states, sourceState{ID: source.ID, NodeID: node.ID, Kind: source.Kind, State: source.EvidenceState})
+		}
+	}
+	sort.Slice(states, func(i, j int) bool {
+		if states[i].NodeID != states[j].NodeID {
+			return states[i].NodeID < states[j].NodeID
+		}
+		if states[i].ID != states[j].ID {
+			return states[i].ID < states[j].ID
+		}
+		if states[i].Kind != states[j].Kind {
+			return states[i].Kind < states[j].Kind
+		}
+		return states[i].State < states[j].State
+	})
+	payload := struct {
+		Version int           `json:"version"`
+		MapID   string        `json:"map_id"`
+		Sources []sourceState `json:"sources"`
+	}{Version: 1, MapID: doc.Map.ID, Sources: states}
+	encoded, _ := json.Marshal(payload)
+	hash := sha256.Sum256(encoded)
+	return "sha256:" + hex.EncodeToString(hash[:])
 }
 
 // ListClassicMindMapSourceDocuments lists only versioned documents that are
@@ -382,9 +473,9 @@ func (s *Store) normalizeClassicMindMapSource(source ClassicMindMapSource) (Clas
 			source.Title = filepath.Base(path)
 		}
 	case ClassicMindMapSourceURL:
-		parsed, err := url.ParseRequestURI(source.URL)
-		if err != nil || parsed.Host == "" || (parsed.Scheme != "http" && parsed.Scheme != "https") {
-			return source, fmt.Errorf("URL должен быть абсолютной ссылкой http или https")
+		parsed, err := validateClassicMindMapHTTPURL(source.URL)
+		if err != nil {
+			return source, err
 		}
 		if source.Title == "" {
 			source.Title = parsed.Host
@@ -400,6 +491,25 @@ func (s *Store) normalizeClassicMindMapSource(source ClassicMindMapSource) (Clas
 		return source, err
 	}
 	return source, nil
+}
+
+// validateClassicMindMapHTTPURL is the single trust boundary for web sources.
+// Query strings and fragments are legitimate document locators, but relative,
+// opaque, credential-bearing and non-HTTP URLs must never become clickable.
+func validateClassicMindMapHTTPURL(raw string) (*url.URL, error) {
+	raw = strings.TrimSpace(raw)
+	if err := validateClassicMindMapText("URL source", raw, MaxClassicMindMapTextRunes, true); err != nil {
+		return nil, err
+	}
+	parsed, err := url.Parse(raw)
+	if err != nil || parsed.Opaque != "" || parsed.Hostname() == "" ||
+		(!strings.EqualFold(parsed.Scheme, "http") && !strings.EqualFold(parsed.Scheme, "https")) {
+		return nil, fmt.Errorf("URL должен быть абсолютной ссылкой http или https")
+	}
+	if parsed.User != nil {
+		return nil, fmt.Errorf("URL источника не должен содержать имя пользователя или пароль")
+	}
+	return parsed, nil
 }
 
 func (s *Store) DetachClassicMindMapSource(mapRef, nodeRef, sourceID string, expectedRevision int64, actor, comment string) (ClassicMindMapDocument, error) {

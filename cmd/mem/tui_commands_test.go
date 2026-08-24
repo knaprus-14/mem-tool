@@ -86,7 +86,7 @@ func TestTUICommandMenuCoversCLICommandsAndSubcommands(t *testing.T) {
 		"mindmap open", "mindmap create", "mindmap list", "mindmap show", "mindmap add-node", "mindmap edit-node",
 		"mindmap move-node", "mindmap delete-node", "mindmap source-add", "mindmap source-remove", "mindmap source-move", "mindmap history",
 		"mindmap undo", "mindmap redo", "mindmap snapshot", "mindmap snapshots", "mindmap ai-new", "mindmap ai-expand",
-		"mindmap ai-fill", "mindmap ai-sources", "mindmap ai-show", "mindmap ai-apply",
+		"mindmap ai-fill", "mindmap ai-sources", "mindmap ai-show", "mindmap ai-apply", "mindmap export",
 		"map build", "map coverage", "map diff", "map extract", "map extract-runs", "map extract-run",
 		"map analyze", "map duplicates", "map merge-node", "map merges",
 		"map runs", "map run", "map prune-runs", "map status", "map approve",

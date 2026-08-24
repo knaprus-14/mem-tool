@@ -833,7 +833,7 @@ func parseAskArgs(args []string) ([]string, int, error) {
 
 func handleMap(cfg *Config, store *Store, args []string) error {
 	if len(args) == 0 {
-		return errors.New("использование: mem map <open|build|coverage|diff|snapshots|corpus-diff|extract|extract-runs|extract-run|analyze|duplicates|merge-node|merges|runs|run|prune-runs|status|approve|approve-batch|reviews|edits|export|export-html>\n  mem map open [--port N] [--title <текст>] [--no-browser]\n  mem map build <фокус> [-limit N] [-context-chars N]\n  mem map coverage [--document <путь|document-id>] [--pages N|N-M] [--tag <тег>] [--json]\n  mem map diff [--document <путь|document-id>] [--json]\n  mem map snapshots [--document <путь|document-id>] [--json]\n  mem map corpus-diff --document <путь|document-id> [--from <revision>] [--to <revision|current>] [--json]\n  mem map extract <фокус> [--document <путь|document-id>] [--pages N|N-M] [--tag <тег>] [-context-chars N] [-batches N] [-resume <run-id>] [--dry-run]\n  mem map extract-runs [--json] [-limit N]\n  mem map extract-run <run-id> [--json]\n  mem map analyze <фокус> [-context-chars N] [-batches N] [-resume <run-id>]\n  mem map duplicates [--json] [-threshold 0.92] [-kind claim] [-nodes N] [-limit N]\n  mem map merge-node <manifest.json>\n  mem map merges [--json] [-limit N]\n  mem map runs [--json] [-limit N] [-status running|completed]\n  mem map run <run-id> [--json]\n  mem map prune-runs -older-than <duration> [-keep N] [--dry-run|--yes] [--json]\n  mem map status [--json]\n  mem map approve <node|edge> <id> --reviewer <имя> [--comment <текст>] [--evidence-digest <sha256>]\n  mem map approve-batch <manifest.json>\n  mem map reviews [--json] [-limit N]\n  mem map edits [--json] [-limit N]\n  mem map export\n  mem map export-html <output.html> [--title <текст>] [--force]")
+		return errors.New("использование: mem map <open|build|coverage|diff|snapshots|corpus-diff|restore|restore-runs|extract|extract-runs|extract-run|analyze|duplicates|merge-node|merges|runs|run|prune-runs|status|approve|approve-batch|reviews|edits|export|export-html>\n  mem map open [--port N] [--title <текст>] [--no-browser]\n  mem map build <фокус> [-limit N] [-context-chars N]\n  mem map coverage [--document <путь|document-id>] [--pages N|N-M] [--tag <тег>] [--json]\n  mem map diff [--document <путь|document-id>] [--json]\n  mem map snapshots [--document <путь|document-id>] [--json]\n  mem map corpus-diff --document <путь|document-id> [--from <revision>] [--to <revision|current>] [--json]\n  mem map restore --document <путь|document-id> --revision <revision> [--confirm <plan-digest>] [--json]\n  mem map restore --rollback <run-id> [--confirm <plan-digest>] [--json]\n  mem map restore-runs [--json] [-limit N]\n  mem map extract <фокус> [--document <путь|document-id>] [--pages N|N-M] [--tag <тег>] [-context-chars N] [-batches N] [-resume <run-id>] [--dry-run]\n  mem map extract-runs [--json] [-limit N]\n  mem map extract-run <run-id> [--json]\n  mem map analyze <фокус> [-context-chars N] [-batches N] [-resume <run-id>]\n  mem map duplicates [--json] [-threshold 0.92] [-kind claim] [-nodes N] [-limit N]\n  mem map merge-node <manifest.json>\n  mem map merges [--json] [-limit N]\n  mem map runs [--json] [-limit N] [-status running|completed]\n  mem map run <run-id> [--json]\n  mem map prune-runs -older-than <duration> [-keep N] [--dry-run|--yes] [--json]\n  mem map status [--json]\n  mem map approve <node|edge> <id> --reviewer <имя> [--comment <текст>] [--evidence-digest <sha256>]\n  mem map approve-batch <manifest.json>\n  mem map reviews [--json] [-limit N]\n  mem map edits [--json] [-limit N]\n  mem map export\n  mem map export-html <output.html> [--title <текст>] [--force]")
 	}
 	switch args[0] {
 	case "open":
@@ -864,6 +864,10 @@ func handleMap(cfg *Config, store *Store, args []string) error {
 		return handleMapSnapshots(store, args[1:])
 	case "corpus-diff":
 		return handleMapCorpusDiff(store, args[1:])
+	case "restore":
+		return handleMapRestore(store, args[1:])
+	case "restore-runs":
+		return handleMapRestoreRuns(store, args[1:])
 	case "extract":
 		return handleMapExtract(cfg, store, args[1:])
 	case "extract-runs":
@@ -895,7 +899,7 @@ func handleMap(cfg *Config, store *Store, args []string) error {
 	case "build":
 		return handleMapBuild(cfg, store, args[1:])
 	default:
-		return fmt.Errorf("неизвестная подкоманда map: %s (доступны open, build, coverage, diff, snapshots, corpus-diff, extract, extract-runs, extract-run, analyze, duplicates, merge-node, merges, runs, run, prune-runs, status, approve, approve-batch, reviews, edits, export, export-html)", args[0])
+		return fmt.Errorf("неизвестная подкоманда map: %s (доступны open, build, coverage, diff, snapshots, corpus-diff, restore, restore-runs, extract, extract-runs, extract-run, analyze, duplicates, merge-node, merges, runs, run, prune-runs, status, approve, approve-batch, reviews, edits, export, export-html)", args[0])
 	}
 }
 
@@ -1094,6 +1098,159 @@ func revisionDiffCLIText(value string, limit int) string {
 		return value
 	}
 	return string(runes[:limit]) + "…"
+}
+
+func handleMapRestore(store *Store, args []string) error {
+	document, revision, rollbackID, confirmDigest := "", "", "", ""
+	jsonOutput := false
+	for i := 0; i < len(args); i++ {
+		switch args[i] {
+		case "--json":
+			jsonOutput = true
+		case "--document", "--revision", "--rollback", "--confirm":
+			if i+1 >= len(args) || strings.TrimSpace(args[i+1]) == "" {
+				return errors.New("использование: mem map restore (--document <путь|document-id> --revision <revision> | --rollback <run-id>) [--confirm <plan-digest>] [--json]")
+			}
+			flag := args[i]
+			i++
+			value := strings.TrimSpace(args[i])
+			switch flag {
+			case "--document":
+				document = value
+			case "--revision":
+				revision = value
+			case "--rollback":
+				rollbackID = value
+			case "--confirm":
+				confirmDigest = value
+			}
+		default:
+			return fmt.Errorf("неизвестный аргумент map restore: %s", args[i])
+		}
+	}
+	if rollbackID != "" && (document != "" || revision != "") {
+		return errors.New("map restore: --rollback нельзя совмещать с --document/--revision")
+	}
+	if rollbackID == "" && (document == "" || revision == "") {
+		return errors.New("map restore: укажи --document и --revision либо --rollback <run-id>")
+	}
+	if confirmDigest == "" {
+		var plan mem.DocumentRestorePlan
+		var err error
+		if rollbackID != "" {
+			plan, err = store.BuildDocumentRestoreRollbackPlan(rollbackID)
+		} else {
+			plan, err = store.BuildDocumentRestorePlan(document, revision)
+		}
+		if err != nil {
+			return fmt.Errorf("map restore preview: %w", err)
+		}
+		if jsonOutput {
+			encoded, err := json.MarshalIndent(plan, "", "  ")
+			if err != nil {
+				return err
+			}
+			fmt.Fprintln(os.Stdout, string(encoded))
+			return nil
+		}
+		printDocumentRestorePlan(plan)
+		return nil
+	}
+	var run mem.DocumentRestoreRun
+	var err error
+	if rollbackID != "" {
+		run, err = store.ApplyDocumentRestoreRollback(rollbackID, confirmDigest)
+	} else {
+		run, err = store.ApplyDocumentRestore(document, revision, confirmDigest)
+	}
+	if err != nil {
+		return fmt.Errorf("map restore apply: %w", err)
+	}
+	if jsonOutput {
+		encoded, err := json.MarshalIndent(run, "", "  ")
+		if err != nil {
+			return err
+		}
+		fmt.Fprintln(os.Stdout, string(encoded))
+		return nil
+	}
+	fmt.Fprintln(os.Stdout, "Состояние восстановлено атомарно.")
+	fmt.Fprintf(os.Stdout, "Операция: %s\nДокумент: %s\nРевизия: %s -> %s\nChunks: %d\n",
+		run.ID, run.SourcePath, run.FromRevision, run.TargetRevision, run.RestoredChunks)
+	fmt.Fprintf(os.Stdout, "Для отката сначала выполни preview:\n  mem map restore --rollback %s\n", run.ID)
+	return nil
+}
+
+func printDocumentRestorePlan(plan mem.DocumentRestorePlan) {
+	fmt.Fprintln(os.Stdout, "Предпросмотр восстановления")
+	fmt.Fprintln(os.Stdout, "---------------------------")
+	if plan.RollbackOf != "" {
+		fmt.Fprintf(os.Stdout, "Откат операции: %s\n", plan.RollbackOf)
+	}
+	fmt.Fprintf(os.Stdout, "Документ: %s\nРевизия: %s -> %s\nChunks: %d -> %d\n",
+		plan.SourcePath, plan.CurrentRevision, plan.TargetRevision, plan.CurrentChunks, plan.TargetChunks)
+	fmt.Fprintf(os.Stdout, "Изменения chunks при применении: +%d ~%d -%d\n",
+		plan.ChunkDiff.AddedChunks, plan.ChunkDiff.ChangedChunks, plan.ChunkDiff.RemovedChunks)
+	fmt.Fprintf(os.Stdout, "Карта: %d узл./%d связ. -> %d узл./%d связ.\n",
+		plan.CurrentGraphNodes, plan.CurrentGraphEdges, plan.TargetGraphNodes, plan.TargetGraphEdges)
+	fmt.Fprintln(os.Stdout, "ВНИМАНИЕ: "+plan.Warning)
+	fmt.Fprintln(os.Stdout, "\nПлан привязан к текущему корпусу и digest карты:")
+	fmt.Fprintln(os.Stdout, plan.PlanDigest)
+	if plan.RollbackOf != "" {
+		fmt.Fprintf(os.Stdout, "\nПрименить после проверки:\n  mem map restore --rollback %s --confirm %s\n", plan.RollbackOf, plan.PlanDigest)
+	} else {
+		fmt.Fprintf(os.Stdout, "\nПрименить после проверки:\n  mem map restore --document %q --revision %s --confirm %s\n",
+			plan.SourcePath, plan.TargetRevision, plan.PlanDigest)
+	}
+}
+
+func handleMapRestoreRuns(store *Store, args []string) error {
+	jsonOutput, limit := false, 100
+	for i := 0; i < len(args); i++ {
+		switch args[i] {
+		case "--json":
+			jsonOutput = true
+		case "-limit":
+			if i+1 >= len(args) {
+				return errors.New("map restore-runs: -limit требует число")
+			}
+			i++
+			value, err := strconv.Atoi(args[i])
+			if err != nil || value <= 0 || value > 10000 {
+				return errors.New("map restore-runs: -limit должен быть 1..10000")
+			}
+			limit = value
+		default:
+			return fmt.Errorf("неизвестный аргумент map restore-runs: %s", args[i])
+		}
+	}
+	runs, err := store.ListDocumentRestoreRuns(limit)
+	if err != nil {
+		return fmt.Errorf("map restore-runs: %w", err)
+	}
+	if jsonOutput {
+		encoded, err := json.MarshalIndent(runs, "", "  ")
+		if err != nil {
+			return err
+		}
+		fmt.Fprintln(os.Stdout, string(encoded))
+		return nil
+	}
+	fmt.Fprintln(os.Stdout, "История восстановлений")
+	fmt.Fprintln(os.Stdout, "----------------------")
+	if len(runs) == 0 {
+		fmt.Fprintln(os.Stdout, "Операций восстановления пока нет.")
+	}
+	for _, run := range runs {
+		rollback := ""
+		if run.RollbackOf != "" {
+			rollback = " · откат " + run.RollbackOf
+		}
+		fmt.Fprintf(os.Stdout, "- %s · %s%s\n  %s -> %s · chunks %d · %s\n",
+			run.ID, run.SourcePath, rollback, run.FromRevision, run.TargetRevision,
+			run.RestoredChunks, run.Created)
+	}
+	return nil
 }
 
 func printKnowledgeRevisionDiff(report mem.KnowledgeRevisionDiffReport) {
@@ -3670,6 +3827,18 @@ func printUsage() {
       Полностью сравнить сохранённую ревизию со следующей исторической или текущей:
       added/changed/removed/unchanged chunks, тексты, хеши и физические координаты.
 
+  mem map restore --document <путь|document-id> --revision <revision> [--confirm <plan-digest>] [--json]
+      Без --confirm выполняет только обязательный preview: diff корпуса, размеры
+      текущей/целевой карты и state-pinned digest. С точным digest атомарно
+      восстанавливает документ и всю карту; перед изменением создаёт точку отката.
+
+  mem map restore --rollback <run-id> [--confirm <plan-digest>] [--json]
+      Предпросмотр или подтверждённый откат операции восстановления. Использует
+      точный снимок карты, созданный непосредственно перед исходной операцией.
+
+  mem map restore-runs [--json] [-limit N]
+      Показать append-only журнал восстановлений и откатов с их recovery point.
+
   mem map extract <фокус> [--document <путь|document-id>] [--pages N|N-M] [--tag <тег>] [-context-chars N] [-batches N] [-resume <run-id>] [--dry-run]
       Пакетно обработать только новые непокрытые chunks выбранной области. Каждый
       строгий batch-result сохраняется как checkpoint; -resume продолжает точный run.
@@ -3886,6 +4055,8 @@ func printUsage() {
   mem map diff --document "D:/Books/manual.pdf"
   mem map snapshots --document "D:/Books/manual.pdf"
   mem map corpus-diff --document "D:/Books/manual.pdf"
+  mem map restore --document "D:/Books/manual.pdf" --revision "sha256:..."
+  mem map restore-runs
   mem map extract "полный разбор документа" --document "D:/Books/manual.pdf" -batches 16
   mem map analyze "требования к рабочему давлению"
   mem map analyze "требования к рабочему давлению" -batches 8 -resume kar-0123456789abcdef0123456789abcdef

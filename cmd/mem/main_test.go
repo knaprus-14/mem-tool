@@ -1363,6 +1363,53 @@ func TestHandleMapDiffPrintsHumanAndJSONReports(t *testing.T) {
 		!strings.Contains(jsonDiff, `"to_revision": "`+newRevision+`"`) {
 		t.Fatalf("JSON corpus diff is incomplete: stdout=%q err=%v", jsonDiff, err)
 	}
+	restorePreview, _, err := captureCLIStreams(func() error {
+		return handleMap(cfg, store, []string{"restore", "--document", anchor.SourcePath,
+			"--revision", anchor.DocumentRevision})
+	})
+	if err != nil || !strings.Contains(restorePreview, "Предпросмотр восстановления") ||
+		!strings.Contains(restorePreview, "--confirm sha256:") {
+		t.Fatalf("restore preview is incomplete: stdout=%q err=%v", restorePreview, err)
+	}
+	restorePlan, err := store.BuildDocumentRestorePlan(anchor.SourcePath, anchor.DocumentRevision)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := captureCLIStreams(func() error {
+		return handleMap(cfg, store, []string{"restore", "--document", anchor.SourcePath,
+			"--revision", anchor.DocumentRevision, "--confirm", "sha256:" + strings.Repeat("0", 64)})
+	}); !errors.Is(err, mem.ErrDocumentRestoreStateChanged) {
+		t.Fatalf("restore accepted wrong preview digest: %v", err)
+	}
+	restoredOutput, _, err := captureCLIStreams(func() error {
+		return handleMap(cfg, store, []string{"restore", "--document", anchor.SourcePath,
+			"--revision", anchor.DocumentRevision, "--confirm", restorePlan.PlanDigest})
+	})
+	if err != nil || !strings.Contains(restoredOutput, "Состояние восстановлено атомарно") ||
+		!strings.Contains(restoredOutput, "mem map restore --rollback restore-run-") {
+		t.Fatalf("restore apply output is incomplete: stdout=%q err=%v", restoredOutput, err)
+	}
+	runs, err := store.ListDocumentRestoreRuns(10)
+	if err != nil || len(runs) != 1 {
+		t.Fatalf("restore run was not recorded: %#v err=%v", runs, err)
+	}
+	runsOutput, _, err := captureCLIStreams(func() error {
+		return handleMap(cfg, store, []string{"restore-runs", "--json"})
+	})
+	if err != nil || !strings.Contains(runsOutput, runs[0].ID) || !strings.Contains(runsOutput, `"restored_chunks": 1`) {
+		t.Fatalf("restore history output is incomplete: stdout=%q err=%v", runsOutput, err)
+	}
+	rollbackPlan, err := store.BuildDocumentRestoreRollbackPlan(runs[0].ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rollbackOutput, _, err := captureCLIStreams(func() error {
+		return handleMap(cfg, store, []string{"restore", "--rollback", runs[0].ID,
+			"--confirm", rollbackPlan.PlanDigest})
+	})
+	if err != nil || !strings.Contains(rollbackOutput, "Состояние восстановлено атомарно") {
+		t.Fatalf("restore rollback output is incomplete: stdout=%q err=%v", rollbackOutput, err)
+	}
 }
 
 func cliGraphStoreAndAnchor(t *testing.T) (*mem.Store, mem.EvidenceAnchor) {

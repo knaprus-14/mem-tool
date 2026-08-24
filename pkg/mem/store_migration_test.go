@@ -92,7 +92,7 @@ VALUES ('Legacy', 'legacy text', '[]', '2026-01-01T00:00:00Z', 'test', 1, x'0000
 		"document_import_manifests": false, "document_import_pages": false,
 		"document_import_runs": false, "document_import_run_pages": false,
 		"knowledge_graph_snapshots": false, "document_history_snapshots": false,
-		"document_history_chunks": false,
+		"document_history_chunks": false, "knowledge_restore_runs": false,
 	}
 	tableRows, err := store.db.Query(`SELECT name FROM sqlite_master WHERE type = 'table'`)
 	if err != nil {

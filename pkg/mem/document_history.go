@@ -64,6 +64,20 @@ CREATE TABLE IF NOT EXISTS document_history_chunks (
     PRIMARY KEY (document_id, document_revision, chunk_index)
 );
 
+CREATE TABLE IF NOT EXISTS knowledge_restore_runs (
+    id TEXT PRIMARY KEY,
+    document_id TEXT NOT NULL,
+    source_path TEXT NOT NULL,
+    from_revision TEXT NOT NULL,
+    target_revision TEXT NOT NULL,
+    before_graph_snapshot_id TEXT NOT NULL,
+    target_graph_snapshot_id TEXT NOT NULL,
+    plan_digest TEXT NOT NULL,
+    rollback_of TEXT NOT NULL DEFAULT '',
+    restored_chunks INTEGER NOT NULL,
+    created TEXT NOT NULL
+);
+
 CREATE INDEX IF NOT EXISTS idx_document_history_source
     ON document_history_snapshots(source_path, created);
 
@@ -90,6 +104,14 @@ END;
 CREATE TRIGGER IF NOT EXISTS document_history_chunks_no_delete
 BEFORE DELETE ON document_history_chunks BEGIN
     SELECT RAISE(ABORT, 'document history chunks are immutable');
+END;
+CREATE TRIGGER IF NOT EXISTS knowledge_restore_runs_no_update
+BEFORE UPDATE ON knowledge_restore_runs BEGIN
+    SELECT RAISE(ABORT, 'knowledge restore history is append-only');
+END;
+CREATE TRIGGER IF NOT EXISTS knowledge_restore_runs_no_delete
+BEFORE DELETE ON knowledge_restore_runs BEGIN
+    SELECT RAISE(ABORT, 'knowledge restore history is append-only');
 END;
 `
 
@@ -157,17 +179,9 @@ func archiveDocumentHistoryTx(tx *sql.Tx, entries []Entry, graph KnowledgeGraph,
 			return fmt.Errorf("archive document history: chunk %d has inconsistent document identity", i)
 		}
 	}
-	graphJSON, err := json.Marshal(graph)
+	graphID, _, err := writeKnowledgeGraphSnapshotTx(tx, graph, created)
 	if err != nil {
-		return fmt.Errorf("archive document history: encode graph: %w", err)
-	}
-	digestBytes := sha256.Sum256(graphJSON)
-	digest := "sha256:" + hex.EncodeToString(digestBytes[:])
-	graphID := "kgs-" + hex.EncodeToString(digestBytes[:16])
-	if _, err := tx.Exec(`INSERT OR IGNORE INTO knowledge_graph_snapshots
-(id, digest, graph_json, node_count, edge_count, created) VALUES (?, ?, ?, ?, ?, ?)`,
-		graphID, digest, string(graphJSON), len(graph.Nodes), len(graph.Edges), created); err != nil {
-		return fmt.Errorf("archive knowledge graph snapshot: %w", err)
+		return err
 	}
 	result, err := tx.Exec(`INSERT OR IGNORE INTO document_history_snapshots
 (document_id, document_revision, source_path, media_type, chunk_count, graph_snapshot_id, reason, created)
@@ -214,6 +228,22 @@ VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 
 		}
 	}
 	return nil
+}
+
+func writeKnowledgeGraphSnapshotTx(tx *sql.Tx, graph KnowledgeGraph, created string) (string, string, error) {
+	graphJSON, err := json.Marshal(graph)
+	if err != nil {
+		return "", "", fmt.Errorf("archive knowledge graph snapshot: encode: %w", err)
+	}
+	digestBytes := sha256.Sum256(graphJSON)
+	digest := "sha256:" + hex.EncodeToString(digestBytes[:])
+	graphID := "kgs-" + hex.EncodeToString(digestBytes[:16])
+	if _, err := tx.Exec(`INSERT OR IGNORE INTO knowledge_graph_snapshots
+(id, digest, graph_json, node_count, edge_count, created) VALUES (?, ?, ?, ?, ?, ?)`,
+		graphID, digest, string(graphJSON), len(graph.Nodes), len(graph.Edges), created); err != nil {
+		return "", "", fmt.Errorf("archive knowledge graph snapshot: %w", err)
+	}
+	return graphID, digest, nil
 }
 
 func (s *Store) ListDocumentHistorySnapshots(document string) ([]DocumentHistorySnapshot, error) {
@@ -300,6 +330,10 @@ func (s *Store) BuildCorpusRevisionDiff(document, fromRevision, toRevision strin
 }
 
 func (s *Store) loadHistoricalDocumentEntries(documentID, revision string) ([]Entry, DocumentHistorySnapshot, error) {
+	return s.loadHistoricalDocumentEntriesFull(documentID, revision)
+}
+
+func (s *Store) loadHistoricalDocumentEntriesFull(documentID, revision string) ([]Entry, DocumentHistorySnapshot, error) {
 	var snapshot DocumentHistorySnapshot
 	err := s.db.QueryRow(`SELECT document_id, document_revision, source_path, media_type, chunk_count,
 graph_snapshot_id, reason, created FROM document_history_snapshots
@@ -312,8 +346,11 @@ WHERE document_id = ? AND document_revision = ?`, documentID, revision).Scan(
 	if err != nil {
 		return nil, snapshot, err
 	}
-	rows, err := s.db.Query(`SELECT chunk_index, text, chunk_hash, source_path, page, block_index,
-block_chunk_index FROM document_history_chunks WHERE document_id = ? AND document_revision = ? ORDER BY chunk_index`, documentID, revision)
+	rows, err := s.db.Query(`SELECT chunk_index, title, text, tags, created, backend,
+embedding_model, embedding_space, dims, embedding, source_file, chunk_label, total_chunks,
+chunk_hash, source_path, media_type, page, block_index, block_marker, block_chunk_index,
+block_total_chunks, extraction_method, ocr_confidence, warnings, important
+FROM document_history_chunks WHERE document_id = ? AND document_revision = ? ORDER BY chunk_index`, documentID, revision)
 	if err != nil {
 		return nil, snapshot, err
 	}
@@ -321,10 +358,35 @@ block_chunk_index FROM document_history_chunks WHERE document_id = ? AND documen
 	entries := make([]Entry, 0, snapshot.ChunkCount)
 	for rows.Next() {
 		var entry Entry
+		var tagsJSON, warningsJSON string
+		var embedding []byte
+		var important int
 		entry.DocumentID, entry.DocumentRevision = documentID, revision
-		if err := rows.Scan(&entry.ChunkIndex, &entry.Text, &entry.ChunkHash, &entry.SourcePath,
-			&entry.Page, &entry.BlockIndex, &entry.BlockChunkIndex); err != nil {
+		if err := rows.Scan(&entry.ChunkIndex, &entry.Title, &entry.Text, &tagsJSON, &entry.Created,
+			&entry.Backend, &entry.EmbeddingModel, &entry.EmbeddingSpace, &entry.Dims, &embedding,
+			&entry.SourceFile, &entry.ChunkLabel, &entry.TotalChunks, &entry.ChunkHash, &entry.SourcePath,
+			&entry.MediaType, &entry.Page, &entry.BlockIndex, &entry.BlockMarker, &entry.BlockChunkIndex,
+			&entry.BlockTotalChunks, &entry.ExtractionMethod, &entry.OCRConfidence, &warningsJSON,
+			&important); err != nil {
 			return nil, snapshot, err
+		}
+		entry.Tags, err = tagsFromJSON(tagsJSON)
+		if err != nil {
+			return nil, snapshot, fmt.Errorf("decode historical chunk %d tags: %w", entry.ChunkIndex, err)
+		}
+		entry.Embedding, err = bytesToFloats(embedding)
+		if err != nil {
+			return nil, snapshot, fmt.Errorf("decode historical chunk %d embedding: %w", entry.ChunkIndex, err)
+		}
+		if len(entry.Embedding) != entry.Dims {
+			return nil, snapshot, fmt.Errorf("decode historical chunk %d embedding: dimensions %d != %d", entry.ChunkIndex, len(entry.Embedding), entry.Dims)
+		}
+		if err := json.Unmarshal([]byte(warningsJSON), &entry.Warnings); err != nil {
+			return nil, snapshot, fmt.Errorf("decode historical chunk %d warnings: %w", entry.ChunkIndex, err)
+		}
+		entry.Important = important != 0
+		if ChunkContentHash(entry.Text) != entry.ChunkHash {
+			return nil, snapshot, fmt.Errorf("historical chunk %d content hash mismatch", entry.ChunkIndex)
 		}
 		entries = append(entries, entry)
 	}

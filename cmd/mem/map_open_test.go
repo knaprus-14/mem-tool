@@ -66,3 +66,15 @@ func TestServeKnowledgeMapStopsWithContext(t *testing.T) {
 		t.Fatal("map server did not stop after context cancellation")
 	}
 }
+
+func TestParseMindMapOpenOptions(t *testing.T) {
+	options, err := parseMindMapOpenOptions([]string{"--port", "8124", "--no-browser"})
+	if err != nil || options.Port != 8124 || !options.NoBrowser {
+		t.Fatalf("unexpected mindmap open options: %#v err=%v", options, err)
+	}
+	for _, args := range [][]string{{"--port"}, {"--port", "-1"}, {"--port", "65536"}, {"--unknown"}} {
+		if _, err := parseMindMapOpenOptions(args); err == nil {
+			t.Fatalf("invalid mindmap open options were accepted: %v", args)
+		}
+	}
+}

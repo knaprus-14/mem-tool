@@ -191,6 +191,15 @@ type ClassicMindMapNodePatch struct {
 	Locked       *bool
 }
 
+// ClassicMindMapPatch changes library-level metadata without replacing the
+// tree. Nil fields are left unchanged so HTTP and CLI clients can use the same
+// optimistic-concurrency contract as node edits.
+type ClassicMindMapPatch struct {
+	Title       *string
+	Description *string
+	Status      *ClassicMindMapStatus
+}
+
 type ClassicMindMapDeleteMode string
 
 const (
@@ -343,6 +352,44 @@ func CreateClassicMindMapDraft(title, description string) ClassicMindMapDraft {
 
 func (s *Store) CreateClassicMindMap(title, description string) (ClassicMindMapDocument, error) {
 	return s.ImportClassicMindMap(CreateClassicMindMapDraft(title, description), "user", "создана пустая карта")
+}
+
+// DuplicateClassicMindMap creates an independent map with new host-assigned
+// IDs while preserving the ordered tree and its provenance links.
+func (s *Store) DuplicateClassicMindMap(mapRef, title string) (ClassicMindMapDocument, error) {
+	source, err := s.LoadClassicMindMap(mapRef)
+	if err != nil {
+		return ClassicMindMapDocument{}, err
+	}
+	title = strings.TrimSpace(title)
+	if title == "" {
+		title = source.Map.Title + " — копия"
+	}
+	refs := make(map[string]string, len(source.Nodes))
+	for i, node := range source.Nodes {
+		refs[node.ID] = fmt.Sprintf("node-%d", i+1)
+	}
+	draft := ClassicMindMapDraft{
+		Title: title, Description: source.Map.Description, Mode: ClassicMindMapModeManual,
+		Status: ClassicMindMapStatusDraft, Nodes: make([]ClassicMindMapNodeDraft, 0, len(source.Nodes)),
+	}
+	for _, node := range source.Nodes {
+		parentRef := ""
+		if node.ParentID != "" {
+			parentRef = refs[node.ParentID]
+		}
+		label := node.Label
+		if node.ID == source.Map.RootNodeID && node.Label == source.Map.Title {
+			label = title
+		}
+		draft.Nodes = append(draft.Nodes, ClassicMindMapNodeDraft{
+			Ref: refs[node.ID], ParentRef: parentRef, Label: label, Summary: node.Summary,
+			BodyMarkdown: node.BodyMarkdown, Kind: node.Kind, Origin: ClassicMindMapNodeManual,
+			Locked: node.Locked, Style: append(json.RawMessage(nil), node.Style...),
+			Sources: append([]ClassicMindMapSource(nil), node.Sources...),
+		})
+	}
+	return s.ImportClassicMindMap(draft, "user", "создана независимая копия карты")
 }
 
 // ImportClassicMindMap validates the complete tree before opening a write
@@ -1064,6 +1111,57 @@ VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, item.ID, item.Revision, newRevisio
 	return resolveClassicMindMapSourceStates(after, s.entries), change, nil
 }
 
+// EditClassicMindMap updates the card shown in the map library. When a newly
+// created map still has a root label equal to its old title, renaming the map
+// also renames that root; a deliberately customized root label is preserved.
+func (s *Store) EditClassicMindMap(mapRef string, patch ClassicMindMapPatch, expectedRevision int64, actor, comment string) (ClassicMindMapDocument, error) {
+	if patch.Title == nil && patch.Description == nil && patch.Status == nil {
+		return ClassicMindMapDocument{}, fmt.Errorf("не указано ни одного изменения карты")
+	}
+	if patch.Title != nil {
+		value := strings.TrimSpace(*patch.Title)
+		if err := validateClassicMindMapText("название карты", value, MaxClassicMindMapTitleRunes, true); err != nil {
+			return ClassicMindMapDocument{}, err
+		}
+		patch.Title = &value
+	}
+	if patch.Description != nil {
+		value := strings.TrimSpace(*patch.Description)
+		if err := validateClassicMindMapText("описание карты", value, MaxClassicMindMapTextRunes, false); err != nil {
+			return ClassicMindMapDocument{}, err
+		}
+		patch.Description = &value
+	}
+	if patch.Status != nil && !validClassicMindMapStatus(*patch.Status) {
+		return ClassicMindMapDocument{}, fmt.Errorf("неподдерживаемый статус карты %q", *patch.Status)
+	}
+	doc, _, err := s.mutateClassicMindMap(mapRef, expectedRevision, actor, comment, "edit_map", func(tx *sql.Tx, item ClassicMindMap) (string, error) {
+		title, description, status := item.Title, item.Description, item.Status
+		if patch.Title != nil {
+			title = *patch.Title
+		}
+		if patch.Description != nil {
+			description = *patch.Description
+		}
+		if patch.Status != nil {
+			status = *patch.Status
+		}
+		now := time.Now().UTC().Format(time.RFC3339Nano)
+		if patch.Title != nil {
+			if _, err := tx.Exec(`UPDATE mind_map_nodes SET label=?, updated=?
+WHERE id=? AND map_id=? AND deleted_at='' AND label=?`, title, now, item.RootNodeID, item.ID, item.Title); err != nil {
+				return "", fmt.Errorf("rename classic mind map root: %w", err)
+			}
+		}
+		if _, err := tx.Exec(`UPDATE mind_maps SET title=?, description=?, status=? WHERE id=? AND deleted_at=''`,
+			title, description, status, item.ID); err != nil {
+			return "", fmt.Errorf("edit classic mind map: %w", err)
+		}
+		return item.RootNodeID, nil
+	})
+	return doc, err
+}
+
 func (s *Store) AddClassicMindMapNode(mapRef, parentRef, label string, position int, kind ClassicMindMapNodeKind, summary, body string, expectedRevision int64, actor, comment string) (ClassicMindMapDocument, ClassicMindMapNode, error) {
 	label, summary = strings.TrimSpace(label), strings.TrimSpace(summary)
 	if kind == "" {
@@ -1497,6 +1595,114 @@ VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, item.ID, item.Revision, newRevi
 		return ClassicMindMapDocument{}, ClassicMindMapChange{}, err
 	}
 	return resolveClassicMindMapSourceStates(after, s.entries), undo, nil
+}
+
+// RedoClassicMindMapChange reapplies the newest undo which has not already
+// been redone. Redo is itself append-only and can subsequently be undone.
+func (s *Store) RedoClassicMindMapChange(mapRef string, expectedRevision int64, actor, comment string) (ClassicMindMapDocument, ClassicMindMapChange, error) {
+	actor = normalizeClassicMindMapActor(actor)
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	tx, err := s.db.Begin()
+	if err != nil {
+		return ClassicMindMapDocument{}, ClassicMindMapChange{}, err
+	}
+	rollback := func(cause error) (ClassicMindMapDocument, ClassicMindMapChange, error) {
+		_ = tx.Rollback()
+		return ClassicMindMapDocument{}, ClassicMindMapChange{}, cause
+	}
+	item, err := resolveClassicMindMapRef(tx, mapRef)
+	if err != nil {
+		return rollback(err)
+	}
+	if expectedRevision > 0 && item.Revision != expectedRevision {
+		return rollback(fmt.Errorf("%w: ожидалась %d, текущая %d", ErrClassicMindMapRevisionConflict, expectedRevision, item.Revision))
+	}
+	var undo ClassicMindMapChange
+	if err := tx.QueryRow(`SELECT u.id, u.map_id, u.base_revision, u.new_revision, u.action, u.target_node_id,
+u.before_json, u.after_json, u.before_digest, u.after_digest, u.reverts_change_id, u.actor, u.comment, u.created
+FROM mind_map_changes u WHERE u.map_id=? AND u.action LIKE 'undo:%' AND u.reverts_change_id>0
+AND NOT EXISTS (SELECT 1 FROM mind_map_changes r WHERE r.map_id=u.map_id AND r.reverts_change_id=u.id)
+ORDER BY u.id DESC LIMIT 1`, item.ID).Scan(&undo.ID, &undo.MapID, &undo.BaseRevision,
+		&undo.NewRevision, &undo.Action, &undo.TargetNodeID, &undo.beforeJSON, &undo.afterJSON,
+		&undo.BeforeDigest, &undo.AfterDigest, &undo.RevertsChangeID, &undo.Actor,
+		&undo.Comment, &undo.Created); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return rollback(fmt.Errorf("нет доступного изменения для redo"))
+		}
+		return rollback(err)
+	}
+	var original ClassicMindMapChange
+	if err := tx.QueryRow(`SELECT id, map_id, base_revision, new_revision, action, target_node_id,
+before_json, after_json, before_digest, after_digest, reverts_change_id, actor, comment, created
+FROM mind_map_changes WHERE map_id=? AND id=?`, item.ID, undo.RevertsChangeID).Scan(
+		&original.ID, &original.MapID, &original.BaseRevision, &original.NewRevision, &original.Action,
+		&original.TargetNodeID, &original.beforeJSON, &original.afterJSON, &original.BeforeDigest,
+		&original.AfterDigest, &original.RevertsChangeID, &original.Actor, &original.Comment,
+		&original.Created); err != nil {
+		return rollback(err)
+	}
+	current, err := loadClassicMindMapDocument(tx, item.ID)
+	if err != nil {
+		return rollback(err)
+	}
+	current, currentJSON, err := finalizeClassicMindMapDocument(current)
+	if err != nil {
+		return rollback(err)
+	}
+	var undoAfter ClassicMindMapDocument
+	if err := json.Unmarshal([]byte(undo.afterJSON), &undoAfter); err != nil {
+		return rollback(fmt.Errorf("decode undo result for redo: %w", err))
+	}
+	currentContentDigest, err := classicMindMapContentDigest(current)
+	if err != nil {
+		return rollback(err)
+	}
+	undoContentDigest, err := classicMindMapContentDigest(undoAfter)
+	if err != nil {
+		return rollback(err)
+	}
+	if currentContentDigest != undoContentDigest {
+		return rollback(fmt.Errorf("%w: текущее содержимое изменилось после undo %d", ErrClassicMindMapRevisionConflict, undo.ID))
+	}
+	var desired ClassicMindMapDocument
+	if err := json.Unmarshal([]byte(original.afterJSON), &desired); err != nil {
+		return rollback(fmt.Errorf("decode original result for redo: %w", err))
+	}
+	newRevision := item.Revision + 1
+	if err := restoreClassicMindMapDocumentTx(tx, item.ID, desired, newRevision); err != nil {
+		return rollback(err)
+	}
+	after, err := loadClassicMindMapDocument(tx, item.ID)
+	if err != nil {
+		return rollback(err)
+	}
+	after, afterJSON, err := finalizeClassicMindMapDocument(after)
+	if err != nil {
+		return rollback(err)
+	}
+	now := time.Now().UTC().Format(time.RFC3339Nano)
+	redo := ClassicMindMapChange{MapID: item.ID, BaseRevision: item.Revision, NewRevision: newRevision,
+		Action: "redo:" + original.Action, TargetNodeID: original.TargetNodeID,
+		BeforeDigest: current.Digest, AfterDigest: after.Digest, RevertsChangeID: undo.ID,
+		Actor: actor, Comment: strings.TrimSpace(comment), Created: now}
+	insert, err := tx.Exec(`INSERT INTO mind_map_changes
+(map_id, base_revision, new_revision, action, target_node_id, before_json, after_json,
+before_digest, after_digest, reverts_change_id, actor, comment, created)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, item.ID, item.Revision, newRevision,
+		redo.Action, redo.TargetNodeID, string(currentJSON), string(afterJSON), current.Digest,
+		after.Digest, undo.ID, actor, redo.Comment, now)
+	if err != nil {
+		return rollback(err)
+	}
+	redo.ID, err = insert.LastInsertId()
+	if err != nil {
+		return rollback(err)
+	}
+	if err := tx.Commit(); err != nil {
+		return ClassicMindMapDocument{}, ClassicMindMapChange{}, err
+	}
+	return resolveClassicMindMapSourceStates(after, s.entries), redo, nil
 }
 
 func (s *Store) CreateClassicMindMapSnapshot(mapRef, reason string, expectedRevision int64) (string, error) {

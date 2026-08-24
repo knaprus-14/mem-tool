@@ -13,7 +13,8 @@ import (
 	ui "github.com/knaprus-14/mem-tool/pkg/ui"
 )
 
-const mindMapUsage = `использование: mem mindmap <create|list|show|add-node|edit-node|move-node|delete-node|source-add|history|undo|snapshot|snapshots>
+const mindMapUsage = `использование: mem mindmap <open|create|list|show|add-node|edit-node|move-node|delete-node|source-add|history|undo|redo|snapshot|snapshots>
+  mem mindmap open [--port N] [--no-browser]
   mem mindmap create <название> [--description <текст>] [--json]
   mem mindmap list [--all] [--json]
   mem mindmap show <карта> [--json]
@@ -23,7 +24,8 @@ const mindMapUsage = `использование: mem mindmap <create|list|show|
   mem mindmap delete-node <карта> <узел> [--branch|--promote-children] [--expect N] [--json]
   mem mindmap source-add <карта> <узел> --entry N [--excerpt <точный текст>] [--expect N] [--json]
   mem mindmap history <карта> [-limit N] [--json]
-  mem mindmap undo <карта> [--change N] [--expect N] [--json]
+	mem mindmap undo <карта> [--change N] [--expect N] [--json]
+	mem mindmap redo <карта> [--expect N] [--json]
   mem mindmap snapshot <карта> --reason <текст> [--expect N]
   mem mindmap snapshots <карта> [-limit N] [--json]`
 
@@ -56,6 +58,9 @@ type mindMapCLIOptions struct {
 func handleMindMap(store *Store, args []string) error {
 	if len(args) == 0 {
 		return errors.New(mindMapUsage)
+	}
+	if args[0] == "open" {
+		return handleClassicMindMapOpen(store, args[1:])
 	}
 	options, err := parseMindMapCLIOptions(args[1:])
 	if err != nil {
@@ -260,6 +265,23 @@ func handleMindMap(store *Store, args []string) error {
 			}{doc, change})
 		}
 		fmt.Printf("%s Последнее изменение отменено. Новая ревизия: %d.\n", ui.Mark("ok"), doc.Map.Revision)
+		return nil
+	case "redo":
+		if len(options.positional) != 1 {
+			return errors.New("использование: mem mindmap redo <карта> [--expect N] [--json]")
+		}
+		doc, change, err := store.RedoClassicMindMapChange(options.positional[0], options.expect,
+			"cli", options.comment)
+		if err != nil {
+			return err
+		}
+		if options.jsonOutput {
+			return printMindMapJSON(struct {
+				Map    mem.ClassicMindMapDocument `json:"map"`
+				Change mem.ClassicMindMapChange   `json:"change"`
+			}{doc, change})
+		}
+		fmt.Printf("%s Отменённое изменение повторено. Новая ревизия: %d.\n", ui.Mark("ok"), doc.Map.Revision)
 		return nil
 	case "snapshot":
 		if len(options.positional) != 1 || strings.TrimSpace(options.reason) == "" {
@@ -472,6 +494,8 @@ func humanMindMapAction(action string) string {
 		return "добавление узла"
 	case "edit_node":
 		return "редактирование узла"
+	case "edit_map":
+		return "изменение параметров карты"
 	case "move_node":
 		return "перемещение узла"
 	case "delete_node:branch":
@@ -483,6 +507,9 @@ func humanMindMapAction(action string) string {
 	default:
 		if strings.HasPrefix(action, "undo:") {
 			return "отмена: " + humanMindMapAction(strings.TrimPrefix(action, "undo:"))
+		}
+		if strings.HasPrefix(action, "redo:") {
+			return "повтор: " + humanMindMapAction(strings.TrimPrefix(action, "redo:"))
 		}
 		return action
 	}

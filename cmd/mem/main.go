@@ -3806,6 +3806,9 @@ func printUsage() {
       Каждый тезис требует точного citation ID; статусы идут в stderr,
       проверенный ответ и источники — в stdout. mem search не меняется.
 
+  mem mindmap open [--port N] [--no-browser]
+      Открыть отдельную локальную библиотеку и интерактивный редактор классических карт.
+
   mem mindmap create <название> [--description <текст>] [--json]
   mem mindmap list [--all] [--json]
   mem mindmap show <карта> [--json]
@@ -3816,6 +3819,7 @@ func printUsage() {
   mem mindmap source-add <карта> <узел> --entry N [--excerpt <текст>]
   mem mindmap history <карта> [-limit N] [--json]
   mem mindmap undo <карта> [--change N] [--expect N]
+  mem mindmap redo <карта> [--expect N]
   mem mindmap snapshot <карта> --reason <текст> [--expect N]
   mem mindmap snapshots <карта> [-limit N] [--json]
       Отдельные классические карты мыслей: каждая карта — упорядоченное дерево,

@@ -522,6 +522,9 @@ func executeTUICommand(cfg *Config, store *Store, cmd string, args []string) err
 		}
 		return handleMap(cfg, store, args)
 	case "mindmap":
+		if len(args) > 0 && args[0] == "open" {
+			return fmt.Errorf("mindmap open управляет сервером до Ctrl+C; запустите `mem mindmap open` из PowerShell")
+		}
 		return handleMindMap(store, args)
 	case "recent":
 		return handleRecent(store, args)
@@ -689,6 +692,7 @@ func tuiCommandMenuItems() []commandMenuEntry {
 		{"config set-chunk-size <N>", "задать размер chunk"},
 		{"config set-chunk-overlap <N>", "задать перекрытие chunks"},
 		{"config set-chunk-strategy <стратегия>", "задать стратегию chunking"},
+		{"mindmap open [--no-browser]", "открыть библиотеку и редактор классических карт"},
 		{"mindmap create <название>", "создать отдельную классическую карту мыслей"},
 		{"mindmap list [--json]", "показать библиотеку классических карт"},
 		{"mindmap show <карта> [--json]", "показать дерево карты и понятные источники"},
@@ -699,6 +703,7 @@ func tuiCommandMenuItems() []commandMenuEntry {
 		{"mindmap source-add <карта> <узел> --entry N", "привязать точный current-фрагмент базы"},
 		{"mindmap history <карта> [--json]", "показать append-only историю карты"},
 		{"mindmap undo <карта> [--expect N]", "отменить последнее изменение карты"},
+		{"mindmap redo <карта> [--expect N]", "повторить отменённое изменение карты"},
 		{"mindmap snapshot <карта> --reason <текст>", "создать неизменяемую контрольную точку"},
 		{"mindmap snapshots <карта> [--json]", "показать контрольные точки карты"},
 		{"map build <фокус> [флаги]", "построить draft knowledge graph"},

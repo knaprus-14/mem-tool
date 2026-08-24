@@ -43,6 +43,18 @@ func TestMindMapCLIUsesHumanLabelsAndProducesScriptableJSON(t *testing.T) {
 	if err != nil || !strings.Contains(stdout, "добавление узла") || strings.Contains(stdout, "mmn-") {
 		t.Fatalf("human history is not readable: stdout=%q err=%v", stdout, err)
 	}
+	stdout, _, err = captureCLIStreams(func() error {
+		return handleMindMap(store, []string{"undo", "Моя карта"})
+	})
+	if err != nil || !strings.Contains(stdout, "отменено") {
+		t.Fatalf("human undo failed: stdout=%q err=%v", stdout, err)
+	}
+	stdout, _, err = captureCLIStreams(func() error {
+		return handleMindMap(store, []string{"redo", "Моя карта"})
+	})
+	if err != nil || !strings.Contains(stdout, "повторено") {
+		t.Fatalf("human redo failed: stdout=%q err=%v", stdout, err)
+	}
 }
 
 func TestMindMapCLIRejectsUnknownFlagsAndCanClearText(t *testing.T) {

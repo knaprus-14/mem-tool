@@ -83,9 +83,9 @@ func TestTUICommandMenuCoversCLICommandsAndSubcommands(t *testing.T) {
 	}
 
 	for _, subcommand := range []string{
-		"mindmap create", "mindmap list", "mindmap show", "mindmap add-node", "mindmap edit-node",
+		"mindmap open", "mindmap create", "mindmap list", "mindmap show", "mindmap add-node", "mindmap edit-node",
 		"mindmap move-node", "mindmap delete-node", "mindmap source-add", "mindmap history",
-		"mindmap undo", "mindmap snapshot", "mindmap snapshots",
+		"mindmap undo", "mindmap redo", "mindmap snapshot", "mindmap snapshots",
 		"map build", "map coverage", "map diff", "map extract", "map extract-runs", "map extract-run",
 		"map analyze", "map duplicates", "map merge-node", "map merges",
 		"map runs", "map run", "map prune-runs", "map status", "map approve",

@@ -193,7 +193,7 @@ func run() int {
 			return 1
 		}
 	case "mindmap":
-		if err := handleMindMap(store, args); err != nil {
+		if err := handleMindMap(cfg, store, args); err != nil {
 			fmt.Fprintf(os.Stderr, "Ошибка: %v\n", err)
 			return 1
 		}
@@ -3816,17 +3816,34 @@ func printUsage() {
   mem mindmap edit-node <карта> <узел> [флаги]
   mem mindmap move-node <карта> <узел> --parent <родитель> [флаги]
   mem mindmap delete-node <карта> <узел> [--branch|--promote-children]
-  mem mindmap source-add <карта> <узел> --entry N [--excerpt <текст>]
+  mem mindmap source-add <карта> <узел> (--entry N [--excerpt <текст>] | --file <путь> | --url <адрес> | --knowledge-node <ID>)
+  mem mindmap source-remove <карта> <узел> --source <ID>
+  mem mindmap source-move <карта> <узел> --source <ID> --position N
   mem mindmap history <карта> [-limit N] [--json]
   mem mindmap undo <карта> [--change N] [--expect N]
   mem mindmap redo <карта> [--expect N]
   mem mindmap snapshot <карта> --reason <текст> [--expect N]
   mem mindmap snapshots <карта> [-limit N] [--json]
+  mem mindmap ai-new <запрос> [AI scope flags] [--title <название>] [--json]
+  mem mindmap ai-expand <карта> <узел> <запрос> [AI scope flags] [--expect N] [--json]
+  mem mindmap ai-fill <карта> <узел> <запрос> [AI scope flags] [--expect N] [--json]
+  mem mindmap ai-sources <карта> <узел> <запрос> [AI scope flags] [--expect N] [--json]
+  mem mindmap ai-show <preview-id> [--json]
+  mem mindmap ai-apply <preview-id> [--select <id,id>] [--expect N] [--json]
+      AI scope flags: --document <путь|document-id>, --page-from N, --page-to N,
+      --query <текст>, повторяемый --entry N, --node-sources, --without-sources,
+      --limit N (1..10000). Без --limit безопасный автоматический порог — 512
+      current chunks; большая область отклоняется до вызова модели. Явный лимит
+      выбирает первые N chunks после стабильной сортировки и не гарантирует
+      полный корпус. --without-sources нельзя совмещать с evidence-флагами, а
+      ai-sources всегда требует current versioned evidence.
       Отдельные классические карты мыслей: каждая карта — упорядоченное дерево,
       которое можно создать вручную, изменять и связывать с точными фрагментами
       текущих документов. Названия карт и узлов принимаются вместо внутренних ID.
       Каждая операция создаёт новую ревизию и append-only запись истории; --expect
       защищает от конкурентной правки, undo отменяет последнее доступное изменение.
+      AI-команды сначала сохраняют неизменяемый preview. Новая карта или изменения
+      публикуются только отдельной командой ai-apply после проверки предложений.
 
   mem map build <фокус> [-limit N] [-tags "тег1,тег2"] [-tag "категория"] [-from 2026-01-01] [-to 2026-07-01] [-min-score 0.5] [-vector-only] [-context-chars N]
       Извлечь типизированные узлы и связи только из versioned document evidence.

@@ -21,7 +21,7 @@ type mindMapOpenOptions struct {
 
 var launchClassicMindMapBrowser = openBrowserURL
 
-func handleClassicMindMapOpen(store *Store, args []string) error {
+func handleClassicMindMapOpen(cfg *Config, store *Store, args []string) error {
 	options, err := parseMindMapOpenOptions(args)
 	if err != nil {
 		return err
@@ -39,15 +39,32 @@ func handleClassicMindMapOpen(store *Store, args []string) error {
 	if err != nil {
 		return fmt.Errorf("mindmap open: %w", err)
 	}
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
+	defer stop()
+	var assistant *mem.ClassicMindMapAIWorkspace
+	if cfg == nil {
+		fmt.Fprintln(os.Stderr, "[MINDMAP OPEN] AI-помощник отключён: конфигурация недоступна.")
+	} else {
+		answerCfg := cfg.Answer.WithMapGenerationDefaults()
+		provider, providerErr := newAnswerProvider(answerCfg)
+		if providerErr != nil {
+			// The manual editor must remain available even when the optional
+			// answer model is not configured. AI endpoints return 503 until the
+			// user fixes config and restarts this local workspace.
+			fmt.Fprintf(os.Stderr, "[MINDMAP OPEN] AI-помощник отключён: %v\n", providerErr)
+		} else {
+			assistant = mem.NewClassicMindMapAIWorkspace(ctx, &mem.ClassicMindMapAIService{
+				Store: store, Provider: provider, Config: answerCfg,
+			})
+		}
+	}
 	url := fmt.Sprintf("http://127.0.0.1:%d/", address.Port)
 	server := &http.Server{
-		Handler:           mem.NewClassicMindMapWorkspaceHandler(store, sessionToken),
+		Handler:           mem.NewClassicMindMapWorkspaceHandlerWithAI(store, sessionToken, assistant),
 		ReadHeaderTimeout: 5 * time.Second,
 		IdleTimeout:       60 * time.Second,
 		MaxHeaderBytes:    32 << 10,
 	}
-	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
-	defer stop()
 	fmt.Fprintln(os.Stdout, "Библиотека карт мыслей:", url)
 	fmt.Fprintln(os.Stdout, "Редактор работает только с активной локальной базой; Ctrl+C — остановить сервер.")
 	if !options.NoBrowser {

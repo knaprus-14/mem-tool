@@ -519,7 +519,7 @@ FROM mind_maps m WHERE m.deleted_at=''`
 		return nil, fmt.Errorf("list classic mind maps: %w", err)
 	}
 	defer rows.Close()
-	var result []ClassicMindMapSummary
+	result := make([]ClassicMindMapSummary, 0)
 	for rows.Next() {
 		var item ClassicMindMapSummary
 		if err := rows.Scan(&item.ID, &item.Title, &item.Description, &item.Mode, &item.Status,

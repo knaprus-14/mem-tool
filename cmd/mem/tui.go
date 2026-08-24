@@ -525,7 +525,7 @@ func executeTUICommand(cfg *Config, store *Store, cmd string, args []string) err
 		if len(args) > 0 && args[0] == "open" {
 			return fmt.Errorf("mindmap open управляет сервером до Ctrl+C; запустите `mem mindmap open` из PowerShell")
 		}
-		return handleMindMap(store, args)
+		return handleMindMap(cfg, store, args)
 	case "recent":
 		return handleRecent(store, args)
 	case "add-file":
@@ -708,6 +708,12 @@ func tuiCommandMenuItems() []commandMenuEntry {
 		{"mindmap redo <карта> [--expect N]", "повторить отменённое изменение карты"},
 		{"mindmap snapshot <карта> --reason <текст>", "создать неизменяемую контрольную точку"},
 		{"mindmap snapshots <карта> [--json]", "показать контрольные точки карты"},
+		{"mindmap ai-new <запрос> [флаги]", "создать AI-preview новой карты без публикации"},
+		{"mindmap ai-expand <карта> <узел> <запрос> [флаги]", "предложить расширение ветви через preview"},
+		{"mindmap ai-fill <карта> <узел> <запрос> [флаги]", "предложить заполнение узла через preview"},
+		{"mindmap ai-sources <карта> <узел> <запрос> [флаги]", "предложить источники из активной базы"},
+		{"mindmap ai-show <preview-id> [--json]", "показать сохранённый AI-preview"},
+		{"mindmap ai-apply <preview-id> [--select id,id] [--expect N] [--json]", "атомарно применить проверенные предложения"},
 		{"map build <фокус> [флаги]", "построить draft knowledge graph"},
 		{"map coverage [флаги]", "измерить покрытие документов и страниц"},
 		{"map diff [--document путь] [--json]", "сравнить evidence карты с текущими ревизиями"},

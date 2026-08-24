@@ -51,6 +51,23 @@ func TestClassicMindMapLibraryMetadataAndDuplicate(t *testing.T) {
 	}
 }
 
+func TestClassicMindMapWorkspaceEmptyLibraryIsJSONArray(t *testing.T) {
+	store, err := NewStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	handler := NewClassicMindMapWorkspaceHandler(store, "session")
+
+	response := classicMindMapWorkspaceRequest(t, handler, "/api/maps/list", "127.0.0.1:9000", "http://127.0.0.1:9000", "session", map[string]any{})
+	if response.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%q", response.Code, response.Body.String())
+	}
+	if got := strings.TrimSpace(response.Body.String()); got != "[]" {
+		t.Fatalf("empty library JSON=%q, want []", got)
+	}
+}
+
 func TestClassicMindMapWorkspaceRequiresLoopbackAndSession(t *testing.T) {
 	store, err := NewStore(t.TempDir())
 	if err != nil {
@@ -198,6 +215,15 @@ func TestClassicMindMapWorkspaceHasOfflineEditorControls(t *testing.T) {
 		`/api/sources/search`, `/api/sources/evidence/add`, `/api/sources/upload`, `/api/sources/remove`,
 		`Из активной базы`, `Импортировать копию файла`, `Узел графа`, `/api/source/mindmap`,
 		`Number(item.chunk_index||0)+1`, `Number(e.block_index||0)+1`,
+		`id="newMapAI"`, `id="assistantEditor"`, `id="assistantDialog"`, `MEM · AI STUDIO`,
+		`/api/assistant/start`, `/api/assistant/status`, `/api/assistant/cancel`, `/api/assistant/publish`,
+		`new_map`, `expand_branch`, `fill_node`, `find_sources`, `parent_proposal_id`,
+		`Разрешить модельную заготовку без локальных источников`, `Опубликовать выбранное`,
+		`preview_id:preview.run_id`, `expected_preview_digest:preview.proposal_digest||''`,
+		`job.status==='insufficient'`, `renderAssistantInsufficient`, `Подтверждённых предложений нет`,
+		`planned:'План обработки готов'`, `generate:'Генерация структуры'`, `После публикации`,
+		`Дополнительные настройки объёма`, `limit:assistantState.setup.limit`,
+		`'ai:expand_branch':'AI расширил ветвь'`, `action!=='find_sources'`,
 	} {
 		if !strings.Contains(text, expected) {
 			t.Errorf("workspace missing %q", expected)

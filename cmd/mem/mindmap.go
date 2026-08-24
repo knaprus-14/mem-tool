@@ -13,7 +13,7 @@ import (
 	ui "github.com/knaprus-14/mem-tool/pkg/ui"
 )
 
-const mindMapUsage = `использование: mem mindmap <open|create|list|show|add-node|edit-node|move-node|delete-node|source-add|source-remove|source-move|history|undo|redo|snapshot|snapshots>
+const mindMapUsage = `использование: mem mindmap <open|create|list|show|add-node|edit-node|move-node|delete-node|source-add|source-remove|source-move|history|undo|redo|snapshot|snapshots|ai-new|ai-expand|ai-fill|ai-sources|ai-show|ai-apply>
   mem mindmap open [--port N] [--no-browser]
   mem mindmap create <название> [--description <текст>] [--json]
   mem mindmap list [--all] [--json]
@@ -29,7 +29,22 @@ const mindMapUsage = `использование: mem mindmap <open|create|list|
 	mem mindmap undo <карта> [--change N] [--expect N] [--json]
 	mem mindmap redo <карта> [--expect N] [--json]
   mem mindmap snapshot <карта> --reason <текст> [--expect N]
-  mem mindmap snapshots <карта> [-limit N] [--json]`
+  mem mindmap snapshots <карта> [-limit N] [--json]
+  mem mindmap ai-new <запрос> [AI scope flags] [--title <название>] [--json]
+  mem mindmap ai-expand <карта> <узел> <запрос> [AI scope flags] [--expect N] [--json]
+  mem mindmap ai-fill <карта> <узел> <запрос> [AI scope flags] [--expect N] [--json]
+  mem mindmap ai-sources <карта> <узел> <запрос> [AI scope flags] [--expect N] [--json]
+  mem mindmap ai-show <preview-id> [--json]
+  mem mindmap ai-apply <preview-id> [--select <id,id>] [--expect N] [--json]
+
+AI scope flags: --document <путь|document-id> [--page-from N] [--page-to N],
+  --query <текст>, повторяемый --entry N, --node-sources, --without-sources,
+  --limit N (1..10000), --json. Без --limit безопасный автоматический порог —
+  512 current chunks; большая область отклоняется до вызова модели. Явный
+  --limit детерминированно берёт первые N chunks и не гарантирует полный корпус.
+  --without-sources несовместим с выбором evidence; ai-sources всегда требует
+  current versioned evidence. Генерирующие команды сохраняют только preview;
+  карту меняет лишь ai-apply.`
 
 type mindMapCLIOptions struct {
 	positional      []string
@@ -62,12 +77,15 @@ type mindMapCLIOptions struct {
 	lock            *bool
 }
 
-func handleMindMap(store *Store, args []string) error {
+func handleMindMap(cfg *Config, store *Store, args []string) error {
 	if len(args) == 0 {
 		return errors.New(mindMapUsage)
 	}
 	if args[0] == "open" {
-		return handleClassicMindMapOpen(store, args[1:])
+		return handleClassicMindMapOpen(cfg, store, args[1:])
+	}
+	if strings.HasPrefix(args[0], "ai-") {
+		return handleMindMapAI(cfg, store, args)
 	}
 	options, err := parseMindMapCLIOptions(args[1:])
 	if err != nil {

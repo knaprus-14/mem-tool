@@ -19,6 +19,17 @@ const MaxClassicMindMapRequestJSON = 1 << 20
 // editor. Every data request requires the short-lived capability embedded in
 // the page plus a same-origin browser request.
 func NewClassicMindMapWorkspaceHandler(store *Store, sessionToken string) http.Handler {
+	return newClassicMindMapWorkspaceHandler(store, sessionToken, nil)
+}
+
+// NewClassicMindMapWorkspaceHandlerWithAI adds the preview-first assistant to
+// the same loopback/session-protected workspace. The classic constructor stays
+// available for callers and tests that need the manual editor only.
+func NewClassicMindMapWorkspaceHandlerWithAI(store *Store, sessionToken string, assistant *ClassicMindMapAIWorkspace) http.Handler {
+	return newClassicMindMapWorkspaceHandler(store, sessionToken, assistant)
+}
+
+func newClassicMindMapWorkspaceHandler(store *Store, sessionToken string, assistant *ClassicMindMapAIWorkspace) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		setKnowledgeMapSecurityHeaders(w.Header())
 		if !knowledgeMapLoopbackHost(r.Host) {
@@ -103,6 +114,14 @@ func NewClassicMindMapWorkspaceHandler(store *Store, sessionToken string) http.H
 			serveClassicMindMapSnapshots(w, r, store)
 		case "/api/snapshots/create":
 			serveClassicMindMapSnapshotCreate(w, r, store)
+		case "/api/assistant/start":
+			serveClassicMindMapAIStart(w, r, assistant)
+		case "/api/assistant/status":
+			serveClassicMindMapAIStatus(w, r, assistant)
+		case "/api/assistant/cancel":
+			serveClassicMindMapAICancel(w, r, assistant)
+		case "/api/assistant/publish":
+			serveClassicMindMapAIPublish(w, r, assistant)
 		default:
 			http.NotFound(w, r)
 		}

@@ -689,6 +689,7 @@ func tuiCommandMenuItems() []commandMenuEntry {
 		{"config set-chunk-strategy <стратегия>", "задать стратегию chunking"},
 		{"map build <фокус> [флаги]", "построить draft knowledge graph"},
 		{"map coverage [флаги]", "измерить покрытие документов и страниц"},
+		{"map diff [--document путь] [--json]", "сравнить evidence карты с текущими ревизиями"},
 		{"map extract <фокус> [флаги]", "пакетно разобрать непокрытые chunks"},
 		{"map extract-runs [флаги]", "показать задания извлечения"},
 		{"map extract-run <run-id> [--json]", "показать одно задание извлечения"},

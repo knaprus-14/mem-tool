@@ -1308,6 +1308,29 @@ func TestHandleMapAnalyzeBatchFailureLeavesGraphUntouched(t *testing.T) {
 	}
 }
 
+func TestHandleMapDiffPrintsHumanAndJSONReports(t *testing.T) {
+	store, anchor := cliGraphStoreAndAnchor(t)
+	defer store.Close()
+	if err := store.UpsertKnowledgeGraph(mem.KnowledgeGraph{Nodes: []mem.KnowledgeNode{{
+		ID: "cli-diff-claim", Kind: mem.KnowledgeNodeClaim, Label: "Traceable claim",
+		Status: mem.KnowledgeStatusActive, Origin: mem.KnowledgeOriginGenerated, Evidence: []mem.EvidenceAnchor{anchor},
+	}}}); err != nil {
+		t.Fatal(err)
+	}
+	cfg := testCLIConfig(1000, "paragraph")
+	stdout, _, err := captureCLIStreams(func() error { return handleMap(cfg, store, []string{"diff"}) })
+	if err != nil || !strings.Contains(stdout, "Изменения источников и карты") || !strings.Contains(stdout, "без изменений") {
+		t.Fatalf("human map diff is incomplete: stdout=%q err=%v", stdout, err)
+	}
+	stdout, _, err = captureCLIStreams(func() error { return handleMap(cfg, store, []string{"diff", "--json"}) })
+	if err != nil || !strings.Contains(stdout, `"current_documents": 1`) || !strings.Contains(stdout, `"document_id": "single-corpus-doc"`) {
+		t.Fatalf("JSON map diff is incomplete: stdout=%q err=%v", stdout, err)
+	}
+	if err := handleMap(cfg, store, []string{"diff", "--unknown"}); err == nil {
+		t.Fatal("unknown map diff flag was accepted")
+	}
+}
+
 func cliGraphStoreAndAnchor(t *testing.T) (*mem.Store, mem.EvidenceAnchor) {
 	t.Helper()
 	store, err := mem.NewStore(filepath.Join(t.TempDir(), "db"))

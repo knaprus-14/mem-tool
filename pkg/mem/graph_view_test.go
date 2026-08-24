@@ -52,6 +52,7 @@ func TestKnowledgeMapHTMLContainsOfflineInteractiveProvenancePayload(t *testing.
 		t.Fatal(err)
 	}
 	if data.Version != KnowledgeMapViewVersion || len(data.Graph.Nodes) != 2 || len(data.Review.Items) != 3 || data.Merges == nil || data.LatestEdits == nil || data.SelectionReports == nil ||
+		data.RevisionDiff.Summary.Documents != 1 || data.RevisionDiff.Summary.CurrentAnchors != 3 ||
 		data.Layout == nil || data.Layout.Nodes["view-claim"].X != 120 || data.Workspace != nil {
 		t.Fatalf("view payload is incomplete: %#v", data)
 	}
@@ -156,6 +157,8 @@ func TestKnowledgeMapHTMLContainsOfflineInteractiveProvenancePayload(t *testing.
 		`arrangeBtn`, `arrangeClusterFocus`, `restoreClusterFocusLayout`, `clusterFocusSnapshot`,
 		`clusterLaneHeaders`, `ТЕМА И ИСТОЧНИК`, `ОПОРНЫЕ ЗНАНИЯ`, `АНАЛИТИКА И РЕШЕНИЯ`,
 		`const original=clusterFocusSnapshot.get(n.id)`, `const viewportState=clusterFocusViewport`,
+		`data-workspace-mode="revisions"`, `revisionWorkspace`, `revision_diff`, `buildRevisionWorkspace`,
+		`Изменения источников`, `БЫЛО В КАРТЕ`, `ТЕКУЩИЙ CHUNK`, `revisionLimitations`,
 	} {
 		if !strings.Contains(html, marker) {
 			t.Errorf("HTML is missing %q", marker)
@@ -196,6 +199,7 @@ func TestKnowledgeMapHTMLContainsOfflineInteractiveProvenancePayload(t *testing.
 		t.Fatalf("embedded payload is not valid JSON: %v", err)
 	}
 	if len(decoded.Graph.Nodes) != 2 || decoded.Graph.Nodes[0].Label != attack || decoded.Review.Items[0].Evidence[0].Anchor.SourcePath == "" ||
+		decoded.RevisionDiff.Summary.Documents != 1 || decoded.RevisionDiff.Summary.CurrentAnchors != 3 ||
 		decoded.Layout == nil || decoded.Layout.Nodes["view-claim"].Pinned != true || decoded.Layout.State == nil ||
 		decoded.Layout.State.Focus.NodeID != "view-claim" || !decoded.Layout.State.ClusterLayout ||
 		decoded.Layout.State.Representation != KnowledgeMapRepresentationDocumentTree || decoded.Workspace != nil {

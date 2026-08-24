@@ -833,7 +833,7 @@ func parseAskArgs(args []string) ([]string, int, error) {
 
 func handleMap(cfg *Config, store *Store, args []string) error {
 	if len(args) == 0 {
-		return errors.New("использование: mem map <open|build|coverage|extract|extract-runs|extract-run|analyze|duplicates|merge-node|merges|runs|run|prune-runs|status|approve|approve-batch|reviews|edits|export|export-html>\n  mem map open [--port N] [--title <текст>] [--no-browser]\n  mem map build <фокус> [-limit N] [-context-chars N]\n  mem map coverage [--document <путь|document-id>] [--pages N|N-M] [--tag <тег>] [--json]\n  mem map extract <фокус> [--document <путь|document-id>] [--pages N|N-M] [--tag <тег>] [-context-chars N] [-batches N] [-resume <run-id>] [--dry-run]\n  mem map extract-runs [--json] [-limit N]\n  mem map extract-run <run-id> [--json]\n  mem map analyze <фокус> [-context-chars N] [-batches N] [-resume <run-id>]\n  mem map duplicates [--json] [-threshold 0.92] [-kind claim] [-nodes N] [-limit N]\n  mem map merge-node <manifest.json>\n  mem map merges [--json] [-limit N]\n  mem map runs [--json] [-limit N] [-status running|completed]\n  mem map run <run-id> [--json]\n  mem map prune-runs -older-than <duration> [-keep N] [--dry-run|--yes] [--json]\n  mem map status [--json]\n  mem map approve <node|edge> <id> --reviewer <имя> [--comment <текст>] [--evidence-digest <sha256>]\n  mem map approve-batch <manifest.json>\n  mem map reviews [--json] [-limit N]\n  mem map edits [--json] [-limit N]\n  mem map export\n  mem map export-html <output.html> [--title <текст>] [--force]")
+		return errors.New("использование: mem map <open|build|coverage|diff|extract|extract-runs|extract-run|analyze|duplicates|merge-node|merges|runs|run|prune-runs|status|approve|approve-batch|reviews|edits|export|export-html>\n  mem map open [--port N] [--title <текст>] [--no-browser]\n  mem map build <фокус> [-limit N] [-context-chars N]\n  mem map coverage [--document <путь|document-id>] [--pages N|N-M] [--tag <тег>] [--json]\n  mem map diff [--document <путь|document-id>] [--json]\n  mem map extract <фокус> [--document <путь|document-id>] [--pages N|N-M] [--tag <тег>] [-context-chars N] [-batches N] [-resume <run-id>] [--dry-run]\n  mem map extract-runs [--json] [-limit N]\n  mem map extract-run <run-id> [--json]\n  mem map analyze <фокус> [-context-chars N] [-batches N] [-resume <run-id>]\n  mem map duplicates [--json] [-threshold 0.92] [-kind claim] [-nodes N] [-limit N]\n  mem map merge-node <manifest.json>\n  mem map merges [--json] [-limit N]\n  mem map runs [--json] [-limit N] [-status running|completed]\n  mem map run <run-id> [--json]\n  mem map prune-runs -older-than <duration> [-keep N] [--dry-run|--yes] [--json]\n  mem map status [--json]\n  mem map approve <node|edge> <id> --reviewer <имя> [--comment <текст>] [--evidence-digest <sha256>]\n  mem map approve-batch <manifest.json>\n  mem map reviews [--json] [-limit N]\n  mem map edits [--json] [-limit N]\n  mem map export\n  mem map export-html <output.html> [--title <текст>] [--force]")
 	}
 	switch args[0] {
 	case "open":
@@ -858,6 +858,8 @@ func handleMap(cfg *Config, store *Store, args []string) error {
 		return handleMapStatus(store, args[1:])
 	case "coverage":
 		return handleMapCoverage(cfg, store, args[1:])
+	case "diff":
+		return handleMapDiff(store, args[1:])
 	case "extract":
 		return handleMapExtract(cfg, store, args[1:])
 	case "extract-runs":
@@ -889,7 +891,7 @@ func handleMap(cfg *Config, store *Store, args []string) error {
 	case "build":
 		return handleMapBuild(cfg, store, args[1:])
 	default:
-		return fmt.Errorf("неизвестная подкоманда map: %s (доступны open, build, coverage, extract, extract-runs, extract-run, analyze, duplicates, merge-node, merges, runs, run, prune-runs, status, approve, approve-batch, reviews, edits, export, export-html)", args[0])
+		return fmt.Errorf("неизвестная подкоманда map: %s (доступны open, build, coverage, diff, extract, extract-runs, extract-run, analyze, duplicates, merge-node, merges, runs, run, prune-runs, status, approve, approve-batch, reviews, edits, export, export-html)", args[0])
 	}
 }
 
@@ -940,6 +942,80 @@ func handleMapCoverage(cfg *Config, store *Store, args []string) error {
 	}
 	printKnowledgeCoverageReport(report)
 	return nil
+}
+
+func handleMapDiff(store *Store, args []string) error {
+	options := mem.KnowledgeRevisionDiffOptions{}
+	jsonOutput := false
+	for i := 0; i < len(args); i++ {
+		switch args[i] {
+		case "--json":
+			jsonOutput = true
+		case "--document":
+			if i+1 >= len(args) || strings.TrimSpace(args[i+1]) == "" {
+				return errors.New("использование: mem map diff [--document <путь|document-id>] [--json]")
+			}
+			i++
+			options.Document = strings.TrimSpace(args[i])
+		default:
+			return fmt.Errorf("неизвестный аргумент map diff: %s", args[i])
+		}
+	}
+	report, err := store.BuildKnowledgeRevisionDiff(options)
+	if err != nil {
+		return fmt.Errorf("map diff: %w", err)
+	}
+	if jsonOutput {
+		encoded, err := json.MarshalIndent(report, "", "  ")
+		if err != nil {
+			return fmt.Errorf("map diff: encode report: %w", err)
+		}
+		fmt.Fprintln(os.Stdout, string(encoded))
+		return nil
+	}
+	printKnowledgeRevisionDiff(report)
+	return nil
+}
+
+func printKnowledgeRevisionDiff(report mem.KnowledgeRevisionDiffReport) {
+	fmt.Fprintln(os.Stdout, "Изменения источников и карты")
+	fmt.Fprintln(os.Stdout, "----------------------------")
+	fmt.Fprintf(os.Stdout, "Документы: %d; изменены: %d; с исчезнувшими фрагментами: %d; без изменений: %d\n",
+		report.Summary.Documents, report.Summary.ChangedDocuments, report.Summary.MissingDocuments, report.Summary.CurrentDocuments)
+	fmt.Fprintf(os.Stdout, "Затронуто: узлов %d, связей %d; evidence изменено %d, исчезло %d\n",
+		report.Summary.AffectedNodes, report.Summary.AffectedEdges, report.Summary.ChangedAnchors, report.Summary.MissingAnchors)
+	if len(report.Documents) == 0 {
+		fmt.Fprintln(os.Stdout, "\nВ карте пока нет versioned evidence для сравнения.")
+	}
+	for _, document := range report.Documents {
+		state := "без изменений"
+		if document.State == mem.EvidenceStale {
+			state = "изменён"
+		} else if document.State == mem.EvidenceMissing {
+			state = "есть исчезнувшие фрагменты"
+		}
+		fmt.Fprintf(os.Stdout, "\n- %s [%s]\n", document.SourcePath, state)
+		fmt.Fprintf(os.Stdout, "  Затронуто: узлов %d, связей %d; изменено %d, исчезло %d\n",
+			document.AffectedNodes, document.AffectedEdges, document.ChangedAnchors, document.MissingAnchors)
+		for _, object := range document.Objects {
+			if object.EvidenceState == mem.EvidenceCurrent {
+				continue
+			}
+			fmt.Fprintf(os.Stdout, "  - %s: %s [%s]\n", object.ObjectType, object.Label, object.EvidenceState)
+			for _, evidence := range object.Evidence {
+				if evidence.State != mem.EvidenceCurrent {
+					fmt.Fprintf(os.Stdout, "    стр. %d, блок %d, фрагмент %d: %s\n",
+						evidence.Page, evidence.BlockIndex+1, evidence.BlockChunkIndex+1, evidence.State)
+				}
+			}
+		}
+	}
+	if len(report.Limitations) > 0 {
+		fmt.Fprintln(os.Stdout, "\nГраницы отчёта:")
+		for _, limitation := range report.Limitations {
+			fmt.Fprintln(os.Stdout, "- "+limitation)
+		}
+	}
 }
 
 func handleMapExtract(cfg *Config, store *Store, args []string) error {
@@ -3452,6 +3528,11 @@ func printUsage() {
       Показывает полностью/частично/непокрытые страницы, слабый OCR, предупреждения,
       статусы объектов и stale/missing evidence. JSON включает стабильный snapshot.
 
+  mem map diff [--document <путь|document-id>] [--json]
+      Сравнить сохранённые evidence-снимки карты с текущими versioned chunks базы.
+      Показывает изменённые/исчезнувшие фрагменты и затронутые узлы/связи. Полный
+      построчный diff старого файла невозможен, если его chunks не были evidence карты.
+
   mem map extract <фокус> [--document <путь|document-id>] [--pages N|N-M] [--tag <тег>] [-context-chars N] [-batches N] [-resume <run-id>] [--dry-run]
       Пакетно обработать только новые непокрытые chunks выбранной области. Каждый
       строгий batch-result сохраняется как checkpoint; -resume продолжает точный run.
@@ -3665,6 +3746,7 @@ func printUsage() {
   mem ask "каков порядок запуска?" -limit 5
   mem map build "архитектура импорта" -limit 10
   mem map coverage --document "D:/Books/manual.pdf" --pages 20-45
+  mem map diff --document "D:/Books/manual.pdf"
   mem map extract "полный разбор документа" --document "D:/Books/manual.pdf" -batches 16
   mem map analyze "требования к рабочему давлению"
   mem map analyze "требования к рабочему давлению" -batches 8 -resume kar-0123456789abcdef0123456789abcdef

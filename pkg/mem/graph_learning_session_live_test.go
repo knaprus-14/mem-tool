@@ -3,6 +3,7 @@ package mem
 import (
 	"encoding/json"
 	"net/http"
+	"strings"
 	"testing"
 )
 
@@ -52,8 +53,20 @@ func TestKnowledgeMapLearningSessionAPIsAreAuthorizedAndFunctional(t *testing.T)
 		t.Fatalf("learning history response is invalid: history=%#v err=%v", history, err)
 	}
 
+	exportRequest := KnowledgeLearningExportRequest{Selection: selection, ExpectedManifestDigest: manifest.Digest, ExpectedRouteDigest: history.RouteDigest, Format: KnowledgeLearningExportAnki, Title: "API learning"}
+	raw, _ = json.Marshal(exportRequest)
+	if got := requestKnowledgeMapMutation(t, handler, "/api/selection/learning/export", host, "http://"+host, "wrong", "same-origin", raw); got.Code != http.StatusForbidden {
+		t.Fatalf("unauthorized learning export returned %d", got.Code)
+	}
+	exported := requestKnowledgeMapMutation(t, handler, "/api/selection/learning/export", host, "http://"+host, token, "same-origin", raw)
+	if exported.Code != http.StatusOK || !strings.Contains(exported.Body.String(), "#deck:API learning") ||
+		exported.Header().Get("Content-Type") != "text/plain; charset=utf-8" ||
+		!strings.Contains(exported.Header().Get("Content-Disposition"), "mem-learning-anki.txt") {
+		t.Fatalf("learning export failed: status=%d type=%q disposition=%q body=%q", exported.Code, exported.Header().Get("Content-Type"), exported.Header().Get("Content-Disposition"), exported.Body.String())
+	}
+
 	readOnly := NewKnowledgeMapLiveHandler(store, "")
-	for _, path := range []string{"/api/selection/learning/session/start", "/api/selection/learning/session/grade", "/api/selection/learning/history"} {
+	for _, path := range []string{"/api/selection/learning/session/start", "/api/selection/learning/session/grade", "/api/selection/learning/history", "/api/selection/learning/export"} {
 		if got := requestKnowledgeMapMutation(t, readOnly, path, host, "http://"+host, token, "same-origin", raw); got.Code != http.StatusNotFound {
 			t.Fatalf("read-only map exposed %s: %d", path, got.Code)
 		}

@@ -97,6 +97,8 @@ func newKnowledgeMapHandler(store *Store, title string, workspace *KnowledgeMapW
 			serveKnowledgeMapLearningSessionGrade(w, r, store, workspace)
 		case "/api/selection/learning/history":
 			serveKnowledgeMapLearningHistory(w, r, store, workspace)
+		case "/api/selection/learning/export":
+			serveKnowledgeMapLearningExport(w, r, store, workspace)
 		default:
 			http.NotFound(w, r)
 		}
@@ -546,6 +548,44 @@ func serveKnowledgeMapLearningHistory(w http.ResponseWriter, r *http.Request, st
 	}
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
 	_ = json.NewEncoder(w).Encode(result)
+}
+
+func serveKnowledgeMapLearningExport(w http.ResponseWriter, r *http.Request, store *Store, workspace *KnowledgeMapWorkspace) {
+	if workspace == nil {
+		http.NotFound(w, r)
+		return
+	}
+	if r.Method != http.MethodPost {
+		w.Header().Set("Allow", "POST")
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	if store == nil {
+		http.Error(w, "knowledge map store is unavailable", http.StatusServiceUnavailable)
+		return
+	}
+	if !knowledgeMapWorkspaceAuthorized(r, workspace.SessionToken) {
+		http.Error(w, "forbidden knowledge learning export request", http.StatusForbidden)
+		return
+	}
+	var request KnowledgeLearningExportRequest
+	if !decodeKnowledgeMapSelectionJSON(w, r, &request) {
+		return
+	}
+	result, err := store.ExportKnowledgeLearning(request)
+	if err != nil {
+		if errors.Is(err, ErrKnowledgeSelectionChanged) || errors.Is(err, ErrKnowledgeLearningItemChanged) {
+			http.Error(w, "learning route or evidence changed; rebuild the route before exporting", http.StatusConflict)
+			return
+		}
+		http.Error(w, "knowledge learning export request was rejected", http.StatusBadRequest)
+		return
+	}
+	w.Header().Set("Content-Type", result.ContentType)
+	w.Header().Set("Content-Disposition", mime.FormatMediaType("attachment", map[string]string{"filename": result.Filename}))
+	w.Header().Set("Content-Length", fmt.Sprint(len(result.Content)))
+	w.WriteHeader(http.StatusOK)
+	_, _ = w.Write(result.Content)
 }
 
 func decodeKnowledgeMapSelectionJSON(w http.ResponseWriter, r *http.Request, target any) bool {

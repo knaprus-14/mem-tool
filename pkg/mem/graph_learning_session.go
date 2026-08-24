@@ -543,6 +543,10 @@ func (s *Store) buildKnowledgeLearningHistoryAt(request KnowledgeLearningHistory
 	if request.ExpectedRouteDigest != "" && request.ExpectedRouteDigest != route.Digest {
 		return KnowledgeLearningHistory{}, ErrKnowledgeSelectionChanged
 	}
+	return s.buildKnowledgeLearningHistoryForRouteAt(route, now)
+}
+
+func (s *Store) buildKnowledgeLearningHistoryForRouteAt(route KnowledgeLearningRoute, now time.Time) (KnowledgeLearningHistory, error) {
 	report, err := s.ReviewKnowledgeGraph()
 	if err != nil {
 		return KnowledgeLearningHistory{}, err

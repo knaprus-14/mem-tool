@@ -93,6 +93,8 @@ VALUES ('Legacy', 'legacy text', '[]', '2026-01-01T00:00:00Z', 'test', 1, x'0000
 		"document_import_runs": false, "document_import_run_pages": false,
 		"knowledge_graph_snapshots": false, "document_history_snapshots": false,
 		"document_history_chunks": false, "knowledge_restore_runs": false,
+		"mind_maps": false, "mind_map_nodes": false, "mind_map_node_sources": false,
+		"mind_map_changes": false, "mind_map_snapshots": false, "mind_map_generation_runs": false,
 	}
 	tableRows, err := store.db.Query(`SELECT name FROM sqlite_master WHERE type = 'table'`)
 	if err != nil {

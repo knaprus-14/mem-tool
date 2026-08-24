@@ -73,7 +73,7 @@ func TestTUICommandMenuCoversCLICommandsAndSubcommands(t *testing.T) {
 	// `repl` is a mode switch, but it is deliberately available too. Aliases
 	// such as get/view/rm/imp/current remain accepted without cluttering help.
 	for _, command := range []string{
-		"init", "version", "help", "open", "add", "search", "ask", "map",
+		"init", "version", "help", "open", "add", "search", "ask", "map", "mindmap",
 		"recent", "add-file", "import", "import-status", "import-runs", "import-run", "config", "stats", "index", "source",
 		"sources", "show", "delete", "edit", "retag", "important", "repl", "where",
 	} {
@@ -83,6 +83,9 @@ func TestTUICommandMenuCoversCLICommandsAndSubcommands(t *testing.T) {
 	}
 
 	for _, subcommand := range []string{
+		"mindmap create", "mindmap list", "mindmap show", "mindmap add-node", "mindmap edit-node",
+		"mindmap move-node", "mindmap delete-node", "mindmap source-add", "mindmap history",
+		"mindmap undo", "mindmap snapshot", "mindmap snapshots",
 		"map build", "map coverage", "map diff", "map extract", "map extract-runs", "map extract-run",
 		"map analyze", "map duplicates", "map merge-node", "map merges",
 		"map runs", "map run", "map prune-runs", "map status", "map approve",

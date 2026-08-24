@@ -67,7 +67,7 @@ var cmdRequiresDB = map[string]bool{
 	"add": true, "add-file": true, "import": true, "import-status": true,
 	"import-runs": true, "import-run": true, "index": true,
 	"config": true,
-	"search": true, "ask": true, "map": true, "recent": true, "stats": true,
+	"search": true, "ask": true, "map": true, "mindmap": true, "recent": true, "stats": true,
 	"source": true, "sources": true,
 	"show": true, "get": true, "view": true,
 	"delete": true, "rm": true,
@@ -189,6 +189,11 @@ func run() int {
 		}
 	case "map":
 		if err := handleMap(cfg, store, args); err != nil {
+			fmt.Fprintf(os.Stderr, "Ошибка: %v\n", err)
+			return 1
+		}
+	case "mindmap":
+		if err := handleMindMap(store, args); err != nil {
 			fmt.Fprintf(os.Stderr, "Ошибка: %v\n", err)
 			return 1
 		}
@@ -3800,6 +3805,24 @@ func printUsage() {
       Сформировать локальный ответ только по найденным evidence-фрагментам.
       Каждый тезис требует точного citation ID; статусы идут в stderr,
       проверенный ответ и источники — в stdout. mem search не меняется.
+
+  mem mindmap create <название> [--description <текст>] [--json]
+  mem mindmap list [--all] [--json]
+  mem mindmap show <карта> [--json]
+  mem mindmap add-node <карта> <родитель> <название> [флаги]
+  mem mindmap edit-node <карта> <узел> [флаги]
+  mem mindmap move-node <карта> <узел> --parent <родитель> [флаги]
+  mem mindmap delete-node <карта> <узел> [--branch|--promote-children]
+  mem mindmap source-add <карта> <узел> --entry N [--excerpt <текст>]
+  mem mindmap history <карта> [-limit N] [--json]
+  mem mindmap undo <карта> [--change N] [--expect N]
+  mem mindmap snapshot <карта> --reason <текст> [--expect N]
+  mem mindmap snapshots <карта> [-limit N] [--json]
+      Отдельные классические карты мыслей: каждая карта — упорядоченное дерево,
+      которое можно создать вручную, изменять и связывать с точными фрагментами
+      текущих документов. Названия карт и узлов принимаются вместо внутренних ID.
+      Каждая операция создаёт новую ревизию и append-only запись истории; --expect
+      защищает от конкурентной правки, undo отменяет последнее доступное изменение.
 
   mem map build <фокус> [-limit N] [-tags "тег1,тег2"] [-tag "категория"] [-from 2026-01-01] [-to 2026-07-01] [-min-score 0.5] [-vector-only] [-context-chars N]
       Извлечь типизированные узлы и связи только из versioned document evidence.

@@ -266,6 +266,10 @@ func initSchema(db *sql.DB) error {
 		_ = tx.Rollback()
 		return err
 	}
+	if _, err := tx.Exec(classicMindMapSchema); err != nil {
+		_ = tx.Rollback()
+		return err
+	}
 	if err := migrateEntrySchema(tx); err != nil {
 		_ = tx.Rollback()
 		return err
@@ -304,6 +308,9 @@ func initSchema(db *sql.DB) error {
 			return err
 		}
 		if _, err := db.Exec(documentHistorySchema); err != nil {
+			return err
+		}
+		if _, err := db.Exec(classicMindMapSchema); err != nil {
 			return err
 		}
 		if err := migrateEntrySchemaDB(db); err != nil {

@@ -55,10 +55,16 @@ func NewKnowledgeMapWorkspaceHandlerWithSelectionContext(ctx context.Context, st
 
 func newKnowledgeMapHandler(ctx context.Context, store *Store, title string, workspace *KnowledgeMapWorkspace, selection *KnowledgeSelectionAnswerService) http.Handler {
 	var exportJobs *knowledgeMapExportManager
+	var learningJobs *knowledgeLearningJobManager
 	if workspace != nil {
 		exportJobs = newKnowledgeMapExportManager(ctx, func(jobCtx context.Context, request KnowledgeGraphExportRequest, progress knowledgeGraphExportProgressFunc) (KnowledgeGraphExportArtifact, error) {
 			return store.exportKnowledgeGraph(jobCtx, request, progress)
 		})
+		if selection != nil && selection.Provider != nil {
+			learningJobs = newKnowledgeLearningJobManager(ctx, func(jobCtx context.Context, request KnowledgeLearningGenerateRequest, progress knowledgeLearningProgressFunc) (KnowledgeLearningRun, error) {
+				return store.generateKnowledgeLearningCandidates(jobCtx, selection, request, progress)
+			})
+		}
 	}
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		setKnowledgeMapSecurityHeaders(w.Header())
@@ -111,6 +117,14 @@ func newKnowledgeMapHandler(ctx context.Context, store *Store, title string, wor
 			serveKnowledgeMapExportJobDownload(w, r, workspace, exportJobs)
 		case "/api/selection/learning/generate":
 			serveKnowledgeMapLearningGenerate(w, r, store, workspace, selection)
+		case "/api/selection/learning/jobs/start":
+			serveKnowledgeMapLearningJobStart(w, r, store, workspace, selection, learningJobs)
+		case "/api/selection/learning/jobs/status":
+			serveKnowledgeMapLearningJobStatus(w, r, workspace, learningJobs)
+		case "/api/selection/learning/jobs/cancel":
+			serveKnowledgeMapLearningJobCancel(w, r, workspace, learningJobs)
+		case "/api/selection/learning/jobs/result":
+			serveKnowledgeMapLearningJobResult(w, r, workspace, learningJobs)
 		case "/api/selection/learning/save":
 			serveKnowledgeMapLearningSave(w, r, store, workspace)
 		case "/api/selection/learning/route":
@@ -570,6 +584,143 @@ func serveKnowledgeMapLearningGenerate(w http.ResponseWriter, r *http.Request, s
 		default:
 			http.Error(w, "knowledge learning generation was rejected", http.StatusBadRequest)
 		}
+		return
+	}
+	w.Header().Set("Content-Type", "application/json; charset=utf-8")
+	_ = json.NewEncoder(w).Encode(result)
+}
+
+type knowledgeLearningJobRequest struct {
+	JobID string `json:"job_id"`
+}
+
+func serveKnowledgeMapLearningJobStart(w http.ResponseWriter, r *http.Request, store *Store, workspace *KnowledgeMapWorkspace, service *KnowledgeSelectionAnswerService, manager *knowledgeLearningJobManager) {
+	if workspace == nil {
+		http.NotFound(w, r)
+		return
+	}
+	if r.Method != http.MethodPost {
+		w.Header().Set("Allow", "POST")
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	if store == nil {
+		http.Error(w, "knowledge map store is unavailable", http.StatusServiceUnavailable)
+		return
+	}
+	if !knowledgeMapWorkspaceAuthorized(r, workspace.SessionToken) {
+		http.Error(w, "forbidden knowledge learning job request", http.StatusForbidden)
+		return
+	}
+	if service == nil || service.Provider == nil || manager == nil {
+		http.Error(w, "knowledge learning model is unavailable", http.StatusServiceUnavailable)
+		return
+	}
+	var request KnowledgeLearningGenerateRequest
+	if !decodeKnowledgeMapSelectionJSON(w, r, &request) {
+		return
+	}
+	job, err := manager.start(request)
+	if err != nil {
+		switch {
+		case errors.Is(err, ErrKnowledgeLearningQueueFull):
+			w.Header().Set("Retry-After", "2")
+			http.Error(w, "knowledge learning queue is full", http.StatusTooManyRequests)
+		case errors.Is(err, context.Canceled), errors.Is(err, context.DeadlineExceeded):
+			http.Error(w, "knowledge learning worker is stopping", http.StatusServiceUnavailable)
+		default:
+			http.Error(w, "knowledge learning job request was rejected", http.StatusBadRequest)
+		}
+		return
+	}
+	w.Header().Set("Content-Type", "application/json; charset=utf-8")
+	w.WriteHeader(http.StatusAccepted)
+	_ = json.NewEncoder(w).Encode(job)
+}
+
+func serveKnowledgeMapLearningJobStatus(w http.ResponseWriter, r *http.Request, workspace *KnowledgeMapWorkspace, manager *knowledgeLearningJobManager) {
+	if workspace == nil || manager == nil {
+		http.NotFound(w, r)
+		return
+	}
+	if r.Method != http.MethodPost {
+		w.Header().Set("Allow", "POST")
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	if !knowledgeMapWorkspaceAuthorized(r, workspace.SessionToken) {
+		http.Error(w, "forbidden knowledge learning job status request", http.StatusForbidden)
+		return
+	}
+	var request knowledgeLearningJobRequest
+	if !decodeKnowledgeMapSelectionJSON(w, r, &request) {
+		return
+	}
+	job, err := manager.status(strings.TrimSpace(request.JobID))
+	if err != nil {
+		http.Error(w, "knowledge learning job not found", http.StatusNotFound)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json; charset=utf-8")
+	_ = json.NewEncoder(w).Encode(job)
+}
+
+func serveKnowledgeMapLearningJobCancel(w http.ResponseWriter, r *http.Request, workspace *KnowledgeMapWorkspace, manager *knowledgeLearningJobManager) {
+	if workspace == nil || manager == nil {
+		http.NotFound(w, r)
+		return
+	}
+	if r.Method != http.MethodPost {
+		w.Header().Set("Allow", "POST")
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	if !knowledgeMapWorkspaceAuthorized(r, workspace.SessionToken) {
+		http.Error(w, "forbidden knowledge learning job cancel request", http.StatusForbidden)
+		return
+	}
+	var request knowledgeLearningJobRequest
+	if !decodeKnowledgeMapSelectionJSON(w, r, &request) {
+		return
+	}
+	job, err := manager.cancelJob(strings.TrimSpace(request.JobID))
+	if err != nil {
+		if errors.Is(err, ErrKnowledgeLearningJobNotCancelable) {
+			http.Error(w, "knowledge learning job cannot be cancelled", http.StatusConflict)
+			return
+		}
+		http.Error(w, "knowledge learning job not found", http.StatusNotFound)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json; charset=utf-8")
+	_ = json.NewEncoder(w).Encode(job)
+}
+
+func serveKnowledgeMapLearningJobResult(w http.ResponseWriter, r *http.Request, workspace *KnowledgeMapWorkspace, manager *knowledgeLearningJobManager) {
+	if workspace == nil || manager == nil {
+		http.NotFound(w, r)
+		return
+	}
+	if r.Method != http.MethodPost {
+		w.Header().Set("Allow", "POST")
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	if !knowledgeMapWorkspaceAuthorized(r, workspace.SessionToken) {
+		http.Error(w, "forbidden knowledge learning job result request", http.StatusForbidden)
+		return
+	}
+	var request knowledgeLearningJobRequest
+	if !decodeKnowledgeMapSelectionJSON(w, r, &request) {
+		return
+	}
+	result, err := manager.result(strings.TrimSpace(request.JobID))
+	if err != nil {
+		if errors.Is(err, ErrKnowledgeLearningJobNotReady) {
+			http.Error(w, "knowledge learning job is not ready", http.StatusConflict)
+			return
+		}
+		http.Error(w, "knowledge learning job not found", http.StatusNotFound)
 		return
 	}
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")

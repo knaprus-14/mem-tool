@@ -96,32 +96,28 @@ type knowledgeLearningEnvelope struct {
 	} `json:"items"`
 }
 
+type knowledgeLearningProgressFunc func(phase string, percent, completed, total int)
+
 func (s *Store) GenerateKnowledgeLearningCandidates(ctx context.Context, service *KnowledgeSelectionAnswerService, request KnowledgeLearningGenerateRequest) (KnowledgeLearningRun, error) {
+	return s.generateKnowledgeLearningCandidates(ctx, service, request, nil)
+}
+
+func (s *Store) generateKnowledgeLearningCandidates(ctx context.Context, service *KnowledgeSelectionAnswerService, request KnowledgeLearningGenerateRequest, progress knowledgeLearningProgressFunc) (KnowledgeLearningRun, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	reportKnowledgeLearningProgress(progress, "validating", 5, 0, 0)
+	if err := ctx.Err(); err != nil {
+		return KnowledgeLearningRun{}, err
+	}
 	if service == nil || service.Provider == nil {
 		return KnowledgeLearningRun{}, ErrKnowledgeSelectionUnavailable
 	}
-	nodeIDs, err := normalizeKnowledgeSelectionIDs(request.Selection.NodeIDs, MaxKnowledgeSelectionNodes, "node")
+	request, err := normalizeKnowledgeLearningGenerateRequest(request)
 	if err != nil {
 		return KnowledgeLearningRun{}, err
 	}
-	edgeIDs, err := normalizeKnowledgeSelectionIDs(request.Selection.EdgeIDs, MaxKnowledgeSelectionEdges, "edge")
-	if err != nil {
-		return KnowledgeLearningRun{}, err
-	}
-	if len(nodeIDs) == 0 {
-		return KnowledgeLearningRun{}, errors.New("knowledge learning generation requires at least one selected node")
-	}
-	request.Selection = KnowledgeSelectionRequest{NodeIDs: nodeIDs, EdgeIDs: edgeIDs}
-	if request.Count == 0 {
-		request.Count = DefaultKnowledgeLearningCandidates
-	}
-	if request.Count < 1 || request.Count > MaxKnowledgeLearningCandidates {
-		return KnowledgeLearningRun{}, fmt.Errorf("knowledge learning candidate count must be between 1 and %d", MaxKnowledgeLearningCandidates)
-	}
-	request.Focus = strings.TrimSpace(request.Focus)
-	if !utf8.ValidString(request.Focus) || utf8.RuneCountInString(request.Focus) > MaxKnowledgeLearningFocusRunes {
-		return KnowledgeLearningRun{}, fmt.Errorf("knowledge learning focus exceeds %d runes", MaxKnowledgeLearningFocusRunes)
-	}
+	reportKnowledgeLearningProgress(progress, "grounding", 20, 0, 0)
 	manifest, err := s.BuildKnowledgeSelectionManifest(request.Selection)
 	if err != nil {
 		return KnowledgeLearningRun{}, err
@@ -131,6 +127,9 @@ func (s *Store) GenerateKnowledgeLearningCandidates(ctx context.Context, service
 	}
 	if !manifest.Ready {
 		return KnowledgeLearningRun{}, ErrKnowledgeSelectionNotCurrent
+	}
+	if err := ctx.Err(); err != nil {
+		return KnowledgeLearningRun{}, err
 	}
 	cfg := service.Config.WithMapGenerationDefaults()
 	instruction := fmt.Sprintf("Create up to %d distinct learning candidates in the language of the evidence.", request.Count)
@@ -155,14 +154,17 @@ func (s *Store) GenerateKnowledgeLearningCandidates(ctx context.Context, service
 			return KnowledgeLearningRun{}, err
 		}
 	}
+	reportKnowledgeLearningProgress(progress, "generating", 40, len(prompt.Evidence), len(manifest.Evidence))
 	raw, err := service.Provider.Generate(ctx, answerRequest)
 	if err != nil {
 		return KnowledgeLearningRun{}, fmt.Errorf("knowledge learning generation: %w", err)
 	}
+	reportKnowledgeLearningProgress(progress, "validating-response", 70, 0, request.Count)
 	candidates, validationErr := validateKnowledgeLearningCandidates(raw, prompt.Evidence, manifest.Evidence, request.Count)
 	retries := 0
 	if validationErr != nil {
 		retries = 1
+		reportKnowledgeLearningProgress(progress, "correcting", 76, 0, request.Count)
 		answerRequest.System = knowledgeLearningSystemPrompt + "\nThe previous response failed strict validation. Return a fresh complete object matching the contract exactly."
 		raw, err = service.Provider.Generate(ctx, answerRequest)
 		if err != nil {
@@ -173,6 +175,10 @@ func (s *Store) GenerateKnowledgeLearningCandidates(ctx context.Context, service
 	if validationErr != nil {
 		return KnowledgeLearningRun{}, fmt.Errorf("knowledge learning response rejected after correction retry: %w", validationErr)
 	}
+	if err := ctx.Err(); err != nil {
+		return KnowledgeLearningRun{}, err
+	}
+	reportKnowledgeLearningProgress(progress, "verifying", 90, len(candidates), request.Count)
 	run := KnowledgeLearningRun{
 		Selection: request.Selection, ManifestDigest: manifest.Digest, Candidates: candidates,
 		Model: cfg.Model, CorrectionRetries: retries, Created: time.Now().UTC().Format(time.RFC3339Nano),
@@ -189,10 +195,47 @@ func (s *Store) GenerateKnowledgeLearningCandidates(ctx context.Context, service
 	if err != nil || current.Digest != manifest.Digest || !current.Ready {
 		return KnowledgeLearningRun{}, fmt.Errorf("%w: selection changed while learning candidates were generated", ErrKnowledgeSelectionChanged)
 	}
-	if err := s.insertKnowledgeLearningRun(run); err != nil {
+	if err := s.insertKnowledgeLearningRunContext(ctx, run); err != nil {
 		return KnowledgeLearningRun{}, err
 	}
+	reportKnowledgeLearningProgress(progress, "completed", 100, len(candidates), len(candidates))
 	return run, nil
+}
+
+func normalizeKnowledgeLearningGenerateRequest(request KnowledgeLearningGenerateRequest) (KnowledgeLearningGenerateRequest, error) {
+	nodeIDs, err := normalizeKnowledgeSelectionIDs(request.Selection.NodeIDs, MaxKnowledgeSelectionNodes, "node")
+	if err != nil {
+		return KnowledgeLearningGenerateRequest{}, err
+	}
+	edgeIDs, err := normalizeKnowledgeSelectionIDs(request.Selection.EdgeIDs, MaxKnowledgeSelectionEdges, "edge")
+	if err != nil {
+		return KnowledgeLearningGenerateRequest{}, err
+	}
+	if len(nodeIDs) == 0 {
+		return KnowledgeLearningGenerateRequest{}, errors.New("knowledge learning generation requires at least one selected node")
+	}
+	request.Selection = KnowledgeSelectionRequest{NodeIDs: nodeIDs, EdgeIDs: edgeIDs}
+	request.ExpectedManifestDigest = strings.TrimSpace(request.ExpectedManifestDigest)
+	if request.ExpectedManifestDigest == "" {
+		return KnowledgeLearningGenerateRequest{}, errors.New("knowledge learning generation requires a pinned manifest digest")
+	}
+	if request.Count == 0 {
+		request.Count = DefaultKnowledgeLearningCandidates
+	}
+	if request.Count < 1 || request.Count > MaxKnowledgeLearningCandidates {
+		return KnowledgeLearningGenerateRequest{}, fmt.Errorf("knowledge learning candidate count must be between 1 and %d", MaxKnowledgeLearningCandidates)
+	}
+	request.Focus = strings.TrimSpace(request.Focus)
+	if !utf8.ValidString(request.Focus) || utf8.RuneCountInString(request.Focus) > MaxKnowledgeLearningFocusRunes {
+		return KnowledgeLearningGenerateRequest{}, fmt.Errorf("knowledge learning focus exceeds %d runes", MaxKnowledgeLearningFocusRunes)
+	}
+	return request, nil
+}
+
+func reportKnowledgeLearningProgress(progress knowledgeLearningProgressFunc, phase string, percent, completed, total int) {
+	if progress != nil {
+		progress(phase, percent, completed, total)
+	}
 }
 
 func buildKnowledgeLearningPrompt(instruction string, evidence []GroundedEvidence, contextBudget int) (GroundedPrompt, error) {
@@ -346,6 +389,10 @@ func newKnowledgeLearningID(prefix string) (string, error) {
 }
 
 func (s *Store) insertKnowledgeLearningRun(run KnowledgeLearningRun) error {
+	return s.insertKnowledgeLearningRunContext(context.Background(), run)
+}
+
+func (s *Store) insertKnowledgeLearningRunContext(ctx context.Context, run KnowledgeLearningRun) error {
 	selectionJSON, err := json.Marshal(run.Selection)
 	if err != nil {
 		return err
@@ -356,7 +403,7 @@ func (s *Store) insertKnowledgeLearningRun(run KnowledgeLearningRun) error {
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	_, err = s.db.Exec(`INSERT INTO knowledge_learning_runs
+	_, err = s.db.ExecContext(ctx, `INSERT INTO knowledge_learning_runs
 (id, selection_json, manifest_digest, candidates_json, generation_digest, model, correction_retries, created)
 VALUES (?, ?, ?, ?, ?, ?, ?, ?)`, run.ID, string(selectionJSON), run.ManifestDigest, string(candidatesJSON), run.GenerationDigest, run.Model, run.CorrectionRetries, run.Created)
 	if err != nil {

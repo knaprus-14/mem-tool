@@ -181,6 +181,136 @@ func TestClassicMindMapAIExistingActionsApplyOneRevision(t *testing.T) {
 	}
 }
 
+func TestClassicMindMapAIUsesBranchAndNearestAncestorEvidence(t *testing.T) {
+	tests := []struct {
+		name       string
+		attachTo   string
+		targetNode string
+	}{
+		{name: "descendant evidence grounds branch", attachTo: "leaf", targetNode: "branch"},
+		{name: "nearest ancestor evidence grounds leaf", attachTo: "root", targetNode: "leaf"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			store, entries := newClassicMindMapAITestStore(t)
+			doc, err := store.CreateClassicMindMap("Контекст ветви", "")
+			if err != nil {
+				t.Fatal(err)
+			}
+			doc, branch, err := store.AddClassicMindMapNode(doc.Map.ID, doc.Map.RootNodeID, "Ветка", -1,
+				ClassicMindMapNodeSubtopic, "", "", doc.Map.Revision, "test", "branch")
+			if err != nil {
+				t.Fatal(err)
+			}
+			doc, leaf, err := store.AddClassicMindMapNode(doc.Map.ID, branch.ID, "Лист", -1,
+				ClassicMindMapNodeFact, "", "", doc.Map.Revision, "test", "leaf")
+			if err != nil {
+				t.Fatal(err)
+			}
+			nodes := map[string]string{"root": doc.Map.RootNodeID, "branch": branch.ID, "leaf": leaf.ID}
+			anchor, err := EvidenceAnchorForEntry(entries[0], entries[0].Text)
+			if err != nil {
+				t.Fatal(err)
+			}
+			doc, _, err = store.AttachClassicMindMapEvidence(doc.Map.ID, nodes[test.attachTo], anchor,
+				doc.Map.Revision, "test", "ground branch")
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			provider := &classicMindMapAIFakeProvider{answers: []string{`{"nodes":[{"ref":"n1","parent_ref":"","label":"Продолжение","summary":"Факт","body_markdown":"","kind":"subtopic","citations":["E1"]}]}`}}
+			preview, err := PrepareClassicMindMapAIPreview(context.Background(), classicMindMapAITestService(store, provider), ClassicMindMapAIPreviewRequest{
+				Action: ClassicMindMapAIExpand, Prompt: "Расширь", MapRef: doc.Map.ID, NodeRef: nodes[test.targetNode],
+				ExpectedRevision: doc.Map.Revision, Scope: ClassicMindMapAIScope{UseNodeSources: true},
+			}, nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !preview.Grounded || preview.EvidenceCount != 1 || len(provider.requests) != 1 {
+				t.Fatalf("branch evidence was not inherited: preview=%#v requests=%d", preview, len(provider.requests))
+			}
+			if !strings.Contains(provider.requests[0].Prompt, entries[0].Text) {
+				t.Fatalf("inherited evidence text was not sent to the model: %q", provider.requests[0].Prompt)
+			}
+		})
+	}
+}
+
+func TestClassicMindMapAIUsesEvidenceFromLinkedKnowledgeNode(t *testing.T) {
+	store, entries := newClassicMindMapAITestStore(t)
+	anchor, err := EvidenceAnchorForEntry(entries[0], entries[0].Text)
+	if err != nil {
+		t.Fatal(err)
+	}
+	const knowledgeNodeID = "kn-ai-branch-source"
+	if err := store.UpsertKnowledgeGraph(KnowledgeGraph{Nodes: []KnowledgeNode{{
+		ID: knowledgeNodeID, Kind: KnowledgeNodeClaim, Label: "Подтверждённый тезис",
+		Status: KnowledgeStatusActive, Origin: KnowledgeOriginGenerated, Evidence: []EvidenceAnchor{anchor},
+	}}}); err != nil {
+		t.Fatal(err)
+	}
+	doc, err := store.CreateClassicMindMap("Связь с knowledge map", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	doc, _, err = store.AttachClassicMindMapSource(doc.Map.ID, doc.Map.RootNodeID, ClassicMindMapSource{
+		Kind: ClassicMindMapSourceKnowledgeNode, KnowledgeNodeID: knowledgeNodeID,
+	}, doc.Map.Revision, "test", "knowledge source")
+	if err != nil {
+		t.Fatal(err)
+	}
+	graph, err := store.LoadKnowledgeGraph()
+	if err != nil || len(graph.Nodes) != 1 || len(graph.Nodes[0].Evidence) != 1 {
+		t.Fatalf("knowledge source fixture was not stored: graph=%#v err=%v", graph, err)
+	}
+	if len(doc.Nodes) != 1 || len(doc.Nodes[0].Sources) != 1 || doc.Nodes[0].Sources[0].Kind != ClassicMindMapSourceKnowledgeNode {
+		t.Fatalf("classic map knowledge source fixture was not attached: %#v", doc.Nodes)
+	}
+	storedAnchors, err := loadKnowledgeEvidence(store.db, "knowledge_node_evidence", "node_id", knowledgeNodeID)
+	if err != nil || len(storedAnchors) != 1 || resolveEvidenceAnchorFromEntries(storedAnchors[0], store.entries).State != EvidenceCurrent {
+		t.Fatalf("knowledge source evidence is not current: anchors=%#v err=%v", storedAnchors, err)
+	}
+	provider := &classicMindMapAIFakeProvider{answers: []string{`{"nodes":[{"ref":"n1","parent_ref":"","label":"Продолжение","summary":"Факт","body_markdown":"","kind":"subtopic","citations":["E1"]}]}`}}
+	preview, err := PrepareClassicMindMapAIPreview(context.Background(), classicMindMapAITestService(store, provider), ClassicMindMapAIPreviewRequest{
+		Action: ClassicMindMapAIExpand, Prompt: "Расширь", MapRef: doc.Map.ID, NodeRef: doc.Map.RootNodeID,
+		ExpectedRevision: doc.Map.Revision, Scope: ClassicMindMapAIScope{UseNodeSources: true},
+	}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !preview.Grounded || preview.EvidenceCount != 1 || len(provider.requests) != 1 || !strings.Contains(provider.requests[0].Prompt, entries[0].Text) {
+		t.Fatalf("knowledge-node evidence was not inherited: preview=%#v requests=%#v", preview, provider.requests)
+	}
+}
+
+func TestClassicMindMapAINoEvidenceErrorIsActionableRussian(t *testing.T) {
+	store, _ := newClassicMindMapAITestStore(t)
+	doc, err := store.CreateClassicMindMap("Без источников", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	provider := &classicMindMapAIFakeProvider{}
+	_, err = PrepareClassicMindMapAIPreview(context.Background(), classicMindMapAITestService(store, provider), ClassicMindMapAIPreviewRequest{
+		Action: ClassicMindMapAIExpand, Prompt: "Расширь", MapRef: doc.Map.ID, NodeRef: doc.Map.RootNodeID,
+		ExpectedRevision: doc.Map.Revision, Scope: ClassicMindMapAIScope{UseNodeSources: true},
+	}, nil)
+	if err == nil {
+		t.Fatal("empty grounded scope unexpectedly reached the model")
+	}
+	message := err.Error()
+	if !strings.Contains(message, "актуальные фрагменты") || !strings.Contains(message, "выберите документ") {
+		t.Fatalf("error is not actionable: %q", message)
+	}
+	for _, technical := range []string{"grounded", "current versioned evidence", "entry_ids", "use_node_sources"} {
+		if strings.Contains(message, technical) {
+			t.Fatalf("technical implementation detail %q leaked in error: %q", technical, message)
+		}
+	}
+	if len(provider.requests) != 0 {
+		t.Fatalf("model was called without evidence: %d", len(provider.requests))
+	}
+}
+
 func TestClassicMindMapAIStrictValidationAndTokenRetry(t *testing.T) {
 	store, _ := newClassicMindMapAITestStore(t)
 	valid := `{"nodes":[{"ref":"n1","parent_ref":"","label":"Idea","summary":"","body_markdown":"","kind":"topic","citations":[]}]}`
@@ -330,7 +460,8 @@ func TestClassicMindMapAIEvidenceManifestHardCapIsExplicit(t *testing.T) {
 		Action: ClassicMindMapAINewMap, Prompt: "wide",
 		Scope: ClassicMindMapAIScope{Document: "doc-wide"},
 	}
-	if selected, err := selectClassicMindMapAIEntriesLocked(entries, request, ClassicMindMapNode{}, ClassicMindMapDocument{}); err == nil || selected != nil ||
+	selector := &Store{}
+	if selected, err := selector.selectClassicMindMapAIEntriesLocked(entries, request, ClassicMindMapNode{}, ClassicMindMapDocument{}); err == nil || selected != nil ||
 		!strings.Contains(err.Error(), fmt.Sprintf("matched %d", DefaultClassicMindMapAIEvidenceLimit+1)) ||
 		!strings.Contains(err.Error(), fmt.Sprintf("threshold %d", DefaultClassicMindMapAIEvidenceLimit)) ||
 		!strings.Contains(err.Error(), "--limit") {
@@ -338,13 +469,13 @@ func TestClassicMindMapAIEvidenceManifestHardCapIsExplicit(t *testing.T) {
 	}
 
 	request.Scope.Limit = 0
-	selected, err := selectClassicMindMapAIEntriesLocked(entries[:DefaultClassicMindMapAIEvidenceLimit], request, ClassicMindMapNode{}, ClassicMindMapDocument{})
+	selected, err := selector.selectClassicMindMapAIEntriesLocked(entries[:DefaultClassicMindMapAIEvidenceLimit], request, ClassicMindMapNode{}, ClassicMindMapDocument{})
 	if err != nil || len(selected) != DefaultClassicMindMapAIEvidenceLimit {
 		t.Fatalf("exact automatic boundary count=%d err=%v", len(selected), err)
 	}
 
 	request.Scope.Limit = DefaultClassicMindMapAIEvidenceLimit
-	selected, err = selectClassicMindMapAIEntriesLocked(entries, request, ClassicMindMapNode{}, ClassicMindMapDocument{})
+	selected, err = selector.selectClassicMindMapAIEntriesLocked(entries, request, ClassicMindMapNode{}, ClassicMindMapDocument{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -353,7 +484,7 @@ func TestClassicMindMapAIEvidenceManifestHardCapIsExplicit(t *testing.T) {
 	}
 
 	request.Scope.Limit = MaxClassicMindMapAIEvidence
-	selected, err = selectClassicMindMapAIEntriesLocked(entries, request, ClassicMindMapNode{}, ClassicMindMapDocument{})
+	selected, err = selector.selectClassicMindMapAIEntriesLocked(entries, request, ClassicMindMapNode{}, ClassicMindMapDocument{})
 	if err != nil || len(selected) != len(entries) {
 		t.Fatalf("explicit limit up to hard maximum should be accepted: count=%d err=%v", len(selected), err)
 	}

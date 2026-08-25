@@ -278,11 +278,11 @@ func (s *Store) prepareClassicMindMapAIPreview(ctx context.Context, service *Cla
 		return ClassicMindMapAIPreview{}, err
 	}
 	grounded := len(evidence) > 0
-	if !grounded && !request.Scope.AllowUngrounded {
-		return ClassicMindMapAIPreview{}, errors.New("для grounded preview не найдено current versioned evidence; укажите document, query, entry_ids или use_node_sources")
-	}
 	if request.Action == ClassicMindMapAIFindSources && !grounded {
-		return ClassicMindMapAIPreview{}, errors.New("find_sources требует current versioned evidence")
+		return ClassicMindMapAIPreview{}, errors.New("для поиска источников нужны актуальные фрагменты базы; выберите документ, диапазон страниц или точные фрагменты")
+	}
+	if !grounded && !request.Scope.AllowUngrounded {
+		return ClassicMindMapAIPreview{}, errors.New("не найдены актуальные фрагменты для проверяемого предпросмотра; выберите документ, страницы или точные фрагменты либо включите источники ветви")
 	}
 
 	answerCfg := service.Config.WithMapGenerationDefaults()
@@ -493,7 +493,7 @@ func (s *Store) normalizeClassicMindMapAIRequest(request ClassicMindMapAIPreview
 		}
 	}
 
-	entries, err := selectClassicMindMapAIEntriesLocked(s.entries, request, target, base)
+	entries, err := s.selectClassicMindMapAIEntriesLocked(s.entries, request, target, base)
 	if err != nil {
 		return request, base, target, nil, err
 	}
@@ -526,7 +526,7 @@ func validClassicMindMapAIVersionedEntry(entry Entry) bool {
 		entry.ChunkHash == ChunkContentHash(entry.Text)
 }
 
-func selectClassicMindMapAIEntriesLocked(entries []Entry, request ClassicMindMapAIPreviewRequest, target ClassicMindMapNode, base ClassicMindMapDocument) ([]Entry, error) {
+func (s *Store) selectClassicMindMapAIEntriesLocked(entries []Entry, request ClassicMindMapAIPreviewRequest, target ClassicMindMapNode, base ClassicMindMapDocument) ([]Entry, error) {
 	byID := make(map[int64]Entry, len(entries))
 	byCitation := make(map[string]Entry, len(entries))
 	for _, source := range entries {
@@ -583,22 +583,29 @@ func selectClassicMindMapAIEntriesLocked(entries []Entry, request ClassicMindMap
 		selected[id] = entry
 	}
 	if request.Scope.UseNodeSources {
-		var current ClassicMindMapNode
-		for _, node := range base.Nodes {
-			if node.ID == target.ID {
-				current = node
+		// A structural/manual node often has no direct citation even though its
+		// branch is grounded. Prefer the exact selected subtree and, only when it
+		// contains no current evidence, inherit the nearest grounded ancestor.
+		// This keeps expansion useful without widening the scope to sibling
+		// branches or the whole map.
+		nodes, ancestors := classicMindMapAISourceContext(base, target)
+		sourceCount, currentCount, err := s.addClassicMindMapAINodeSources(selected, byCitation, entries, nodes)
+		if err != nil {
+			return nil, err
+		}
+		for _, ancestor := range ancestors {
+			if currentCount > 0 {
 				break
 			}
+			seen, added, sourceErr := s.addClassicMindMapAINodeSources(selected, byCitation, entries, []ClassicMindMapNode{ancestor})
+			if sourceErr != nil {
+				return nil, sourceErr
+			}
+			sourceCount += seen
+			currentCount += added
 		}
-		for _, source := range current.Sources {
-			if source.Kind != ClassicMindMapSourceEvidence || source.Evidence == nil {
-				continue
-			}
-			entry, ok := byCitation[source.Evidence.CitationID]
-			if !ok || resolveEvidenceAnchorFromEntries(*source.Evidence, entries).State != EvidenceCurrent {
-				return nil, fmt.Errorf("%w: node source %q is no longer current", ErrClassicMindMapAIChanged, source.Title)
-			}
-			selected[entry.ID] = entry
+		if currentCount == 0 && sourceCount > 0 && len(selected) == 0 {
+			return nil, fmt.Errorf("%w: источники выбранной ветви устарели; перепривяжите их к актуальной версии документа", ErrClassicMindMapAIChanged)
 		}
 	}
 	result := make([]Entry, 0, len(selected))
@@ -627,6 +634,93 @@ func selectClassicMindMapAIEntriesLocked(entries []Entry, request ClassicMindMap
 		result = result[:request.Scope.Limit]
 	}
 	return result, nil
+}
+
+// classicMindMapAISourceContext returns the selected node and its descendants
+// in stable breadth-first order, followed by ancestors from nearest to root.
+// Siblings are deliberately excluded: using them would silently change the
+// semantic scope of "expand this branch".
+func classicMindMapAISourceContext(base ClassicMindMapDocument, target ClassicMindMapNode) ([]ClassicMindMapNode, []ClassicMindMapNode) {
+	byID := make(map[string]ClassicMindMapNode, len(base.Nodes))
+	children := make(map[string][]ClassicMindMapNode)
+	for _, node := range base.Nodes {
+		byID[node.ID] = node
+		children[node.ParentID] = append(children[node.ParentID], node)
+	}
+	for parentID := range children {
+		sort.SliceStable(children[parentID], func(i, j int) bool {
+			return children[parentID][i].Position < children[parentID][j].Position
+		})
+	}
+
+	subtreeRoot := target
+	if stored, ok := byID[target.ID]; ok {
+		// resolveClassicMindMapNodeRef returns node metadata without attached
+		// sources; the fully loaded document owns the source list.
+		subtreeRoot = stored
+	}
+	subtree := make([]ClassicMindMapNode, 0, len(base.Nodes))
+	queue := []ClassicMindMapNode{subtreeRoot}
+	for len(queue) > 0 {
+		current := queue[0]
+		queue = queue[1:]
+		subtree = append(subtree, current)
+		queue = append(queue, children[current.ID]...)
+	}
+
+	ancestors := make([]ClassicMindMapNode, 0)
+	parentID := target.ParentID
+	for parentID != "" {
+		parent, ok := byID[parentID]
+		if !ok {
+			break
+		}
+		ancestors = append(ancestors, parent)
+		parentID = parent.ParentID
+	}
+	return subtree, ancestors
+}
+
+// addClassicMindMapAINodeSources adds only current, versioned evidence. Direct
+// evidence links and evidence owned by a linked knowledge-map node are both
+// resolved host-side; external files and URLs are never treated as grounded
+// document chunks. The counts let callers distinguish "no sources" from "all
+// sources stale".
+func (s *Store) addClassicMindMapAINodeSources(selected map[int64]Entry, byCitation map[string]Entry, entries []Entry, nodes []ClassicMindMapNode) (int, int, error) {
+	seenSources := 0
+	current := 0
+	for _, node := range nodes {
+		for _, source := range node.Sources {
+			var anchors []EvidenceAnchor
+			switch source.Kind {
+			case ClassicMindMapSourceEvidence:
+				if source.Evidence != nil {
+					anchors = []EvidenceAnchor{*source.Evidence}
+				}
+			case ClassicMindMapSourceKnowledgeNode:
+				var err error
+				anchors, err = loadKnowledgeEvidence(s.db, "knowledge_node_evidence", "node_id", source.KnowledgeNodeID)
+				if err != nil {
+					return seenSources, current, fmt.Errorf("загрузить evidence связанного узла knowledge map %q: %w", source.Title, err)
+				}
+			}
+			for _, anchor := range anchors {
+				seenSources++
+				if resolveEvidenceAnchorFromEntries(anchor, entries).State != EvidenceCurrent {
+					continue
+				}
+				entry, ok := byCitation[anchor.CitationID]
+				if !ok {
+					continue
+				}
+				if _, exists := selected[entry.ID]; !exists {
+					selected[entry.ID] = entry
+				}
+				current++
+			}
+		}
+	}
+	return seenSources, current, nil
 }
 
 const classicMindMapAISystemBase = `You are a classic mind-map drafting assistant.

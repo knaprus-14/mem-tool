@@ -417,7 +417,7 @@ func TestClassicMindMapWorkspaceHasOfflineEditorControls(t *testing.T) {
 		`Number(item.chunk_index||0)+1`, `Number(e.block_index||0)+1`,
 		`id="newMapAI"`, `id="assistantEditor"`, `id="assistantDialog"`, `MEM · AI STUDIO`,
 		`/api/assistant/start`, `/api/assistant/status`, `/api/assistant/cancel`, `/api/assistant/publish`,
-		`new_map`, `expand_branch`, `fill_node`, `find_sources`, `parent_proposal_id`,
+		`new_map`, `expand_branch`, `fill_node`, `find_sources`, `parent_proposal_id`, `Использовать актуальные источники выбранной ветви`,
 		`Разрешить модельную заготовку без локальных источников`, `Опубликовать выбранное`,
 		`preview_id:preview.run_id`, `expected_preview_digest:preview.proposal_digest||''`,
 		`job.status==='insufficient'`, `renderAssistantInsufficient`, `Подтверждённых предложений нет`,

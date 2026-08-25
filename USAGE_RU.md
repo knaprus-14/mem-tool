@@ -1440,8 +1440,7 @@ mem map eval-labeled .\labeled-benchmark.json --json
 эталоне нет объектов, recall принимается равной 100% (нет FN). При пропущенном
 непустом эталоне recall и F1 всё равно становятся нулевыми. Human-отчёт
 перечисляет FP/FN и для найденных объектов показывает файл и страницу. JSON
-дополнительно содержит
-matches, текущие evidence, `manifest_digest`, `graph_digest`,
+дополнительно содержит matches, текущие evidence, `manifest_digest`, `graph_digest`,
 `evidence_state_digest` и `snapshot_digest`.
 
 Manifest ограничен 8 MiB и 2000 claims / 5000 contradictions. Неизвестные поля,
@@ -1449,6 +1448,66 @@ Manifest ограничен 8 MiB и 2000 claims / 5000 contradictions. Неиз
 некорректные пороги отклоняются до оценки. Команда read-only, не вызывает модель
 и не изменяет статусы карты. Непройденный gate печатает полный отчёт, затем
 возвращает код процесса 1 — это подходит для PowerShell и CI.
+
+### Профиль SQLite и генерации live-карты
+
+Чтобы измерить, где именно тратится время при открытии большой knowledge map,
+выполните:
+
+```powershell
+mem map profile
+mem map profile -iterations 5
+mem map profile -iterations 5 --view "основной" --json
+```
+
+По умолчанию выполняются три итерации, допустимо от 1 до 20. `--view` выбирает
+сохранённое представление; без него измеряется основной вид. Команда последовательно
+профилирует четыре стадии:
+
+- `sqlite_graph_load` — чтение узлов, связей и их evidence из SQLite;
+- `pinned_evidence_snapshot` — повторное чтение графа и разрешение каждого
+  evidence как current/stale/missing;
+- `live_view_assembly` — сборка полного payload живой карты: review, edits,
+  revision diff, layout, выбранный view и portable-export pin;
+- `html_serialization` — JSON-сериализация payload и запись встроенных HTML/CSS/JS
+  без запуска браузера.
+
+Human-отчёт показывает median и p95, а также min/max. JSON содержит исходные
+`samples_ns` и mean для собственного анализа. Дополнительно фиксируются:
+
+- абсолютный путь и размеры `store.db`, `store.db-wal`, `store.db-shm`;
+- SQLite page count, page size, freelist, journal mode и `data_version`;
+- число entries, документов, узлов, связей и current/stale/missing evidence;
+- размер и digest полученного HTML;
+- GOOS, GOARCH, версия Go и число логических CPU;
+- graph, evidence-state и нормализованный view digest.
+
+Перед измерением mem строит content/state pin. Каждая итерация сверяется с ним,
+а view дополнительно сравнивается без полей текущего времени. Если другой процесс
+изменил граф, evidence, review или layout во время серии, команда завершится
+ошибкой `knowledge map changed during profile`, а смешанные timings не будут
+выданы как корректный результат. База остаётся неизменной, модель не вызывается.
+
+Это профиль **прогретого host-side пути**: предварительный pin уже прочитал
+часть страниц SQLite. Команда не измеряет запуск процесса, браузерный JavaScript,
+layout, paint, GPU, FPS и задержку кликов. Поэтому сравнивайте результаты только:
+
+1. на одном компьютере и накопителе;
+2. с одинаковым числом итераций и view;
+3. при совпадающих graph/evidence/view digests;
+4. без тяжёлой параллельной нагрузки.
+
+На пустой базе очень быстрая стадия может получить sample `0 ns`: это означает,
+что операция оказалась быстрее разрешения monotonic timer ОС, а не то, что работа
+не выполнялась. Оценивать производительность следует на содержательной карте и
+по серии итераций, а пустую базу использовать только как smoke-test команды.
+
+Сначала снимите baseline, затем повторите ту же команду после оптимизации. Если
+`sqlite_graph_load` мал, но `live_view_assembly` велик, оптимизировать нужно
+агрегацию review/diff/layout, а не SQLite. Если велик `html_serialization`,
+смотрите объём payload и `html_bytes`. Медленный браузер при быстрых четырёх
+стадиях означает отдельную проблему client-side layout/paint, которую этот
+отчёт честно не покрывает.
 
 Сравнить сохранённые выдержки карты с текущей ревизией базы:
 

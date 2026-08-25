@@ -838,7 +838,7 @@ func parseAskArgs(args []string) ([]string, int, error) {
 
 func handleMap(cfg *Config, store *Store, args []string) error {
 	if len(args) == 0 {
-		return errors.New("использование: mem map <open|build|coverage|eval|eval-labeled|diff|snapshots|corpus-diff|restore|restore-runs|extract|extract-runs|extract-run|analyze|duplicates|merge-node|merges|runs|run|prune-runs|status|approve|approve-batch|reviews|edits|export|export-html>\n  mem map open [--port N] [--title <текст>] [--no-browser]\n  mem map build <фокус> [-limit N] [-context-chars N]\n  mem map coverage [--document <путь|document-id>] [--pages N|N-M] [--tag <тег>] [--json]\n  mem map eval <manifest.json> [--json]\n  mem map eval-labeled <manifest.json> [--json]\n  mem map diff [--document <путь|document-id>] [--json]\n  mem map snapshots [--document <путь|document-id>] [--json]\n  mem map corpus-diff --document <путь|document-id> [--from <revision>] [--to <revision|current>] [--json]\n  mem map restore --document <путь|document-id> --revision <revision> [--confirm <plan-digest>] [--json]\n  mem map restore --rollback <run-id> [--confirm <plan-digest>] [--json]\n  mem map restore-runs [--json] [-limit N]\n  mem map extract <фокус> [--document <путь|document-id>] [--pages N|N-M] [--tag <тег>] [-context-chars N] [-batches N] [-resume <run-id>] [--dry-run]\n  mem map extract-runs [--json] [-limit N]\n  mem map extract-run <run-id> [--json]\n  mem map analyze <фокус> [-context-chars N] [-batches N] [-resume <run-id>]\n  mem map duplicates [--json] [-threshold 0.92] [-kind claim] [-nodes N] [-limit N]\n  mem map merge-node <manifest.json>\n  mem map merges [--json] [-limit N]\n  mem map runs [--json] [-limit N] [-status running|completed]\n  mem map run <run-id> [--json]\n  mem map prune-runs -older-than <duration> [-keep N] [--dry-run|--yes] [--json]\n  mem map status [--json]\n  mem map approve <node|edge> <id> --reviewer <имя> [--comment <текст>] [--evidence-digest <sha256>]\n  mem map approve-batch <manifest.json>\n  mem map reviews [--json] [-limit N]\n  mem map edits [--json] [-limit N]\n  mem map export\n  mem map export --format markdown|outline|opml|graphml|gexf|mermaid|obsidian --output <путь> [--title <текст>] [--force]\n  mem map export-html <output.html> [--title <текст>] [--force]")
+		return errors.New("использование: mem map <open|build|coverage|eval|eval-labeled|profile|diff|snapshots|corpus-diff|restore|restore-runs|extract|extract-runs|extract-run|analyze|duplicates|merge-node|merges|runs|run|prune-runs|status|approve|approve-batch|reviews|edits|export|export-html>\n  mem map open [--port N] [--title <текст>] [--no-browser]\n  mem map build <фокус> [-limit N] [-context-chars N]\n  mem map coverage [--document <путь|document-id>] [--pages N|N-M] [--tag <тег>] [--json]\n  mem map eval <manifest.json> [--json]\n  mem map eval-labeled <manifest.json> [--json]\n  mem map profile [-iterations N] [--view <имя>] [--json]\n  mem map diff [--document <путь|document-id>] [--json]\n  mem map snapshots [--document <путь|document-id>] [--json]\n  mem map corpus-diff --document <путь|document-id> [--from <revision>] [--to <revision|current>] [--json]\n  mem map restore --document <путь|document-id> --revision <revision> [--confirm <plan-digest>] [--json]\n  mem map restore --rollback <run-id> [--confirm <plan-digest>] [--json]\n  mem map restore-runs [--json] [-limit N]\n  mem map extract <фокус> [--document <путь|document-id>] [--pages N|N-M] [--tag <тег>] [-context-chars N] [-batches N] [-resume <run-id>] [--dry-run]\n  mem map extract-runs [--json] [-limit N]\n  mem map extract-run <run-id> [--json]\n  mem map analyze <фокус> [-context-chars N] [-batches N] [-resume <run-id>]\n  mem map duplicates [--json] [-threshold 0.92] [-kind claim] [-nodes N] [-limit N]\n  mem map merge-node <manifest.json>\n  mem map merges [--json] [-limit N]\n  mem map runs [--json] [-limit N] [-status running|completed]\n  mem map run <run-id> [--json]\n  mem map prune-runs -older-than <duration> [-keep N] [--dry-run|--yes] [--json]\n  mem map status [--json]\n  mem map approve <node|edge> <id> --reviewer <имя> [--comment <текст>] [--evidence-digest <sha256>]\n  mem map approve-batch <manifest.json>\n  mem map reviews [--json] [-limit N]\n  mem map edits [--json] [-limit N]\n  mem map export\n  mem map export --format markdown|outline|opml|graphml|gexf|mermaid|obsidian --output <путь> [--title <текст>] [--force]\n  mem map export-html <output.html> [--title <текст>] [--force]")
 	}
 	switch args[0] {
 	case "open":
@@ -867,6 +867,8 @@ func handleMap(cfg *Config, store *Store, args []string) error {
 		return handleMapEval(cfg, store, args[1:])
 	case "eval-labeled":
 		return handleMapEvalLabeled(store, args[1:])
+	case "profile":
+		return handleMapProfile(store, args[1:])
 	case "diff":
 		return handleMapDiff(store, args[1:])
 	case "snapshots":
@@ -908,7 +910,7 @@ func handleMap(cfg *Config, store *Store, args []string) error {
 	case "build":
 		return handleMapBuild(cfg, store, args[1:])
 	default:
-		return fmt.Errorf("неизвестная подкоманда map: %s (доступны open, build, coverage, eval, eval-labeled, diff, snapshots, corpus-diff, restore, restore-runs, extract, extract-runs, extract-run, analyze, duplicates, merge-node, merges, runs, run, prune-runs, status, approve, approve-batch, reviews, edits, export, export-html)", args[0])
+		return fmt.Errorf("неизвестная подкоманда map: %s (доступны open, build, coverage, eval, eval-labeled, profile, diff, snapshots, corpus-diff, restore, restore-runs, extract, extract-runs, extract-run, analyze, duplicates, merge-node, merges, runs, run, prune-runs, status, approve, approve-batch, reviews, edits, export, export-html)", args[0])
 	}
 }
 
@@ -3884,6 +3886,12 @@ func printUsage() {
       уточнить алиасами, точным node_id и допустимыми citation_id. Проверка
       read-only, не вызывает модель, а непройденный gate возвращает код 1.
 
+  mem map profile [-iterations N] [--view <имя>] [--json]
+      Измерить прогретый host-side путь карты: загрузку SQLite-графа, построение
+      pinned evidence snapshot, сборку live-view и сериализацию HTML. Отчёт
+      содержит median/p95, размеры БД/HTML и content/state digests. Браузерный
+      JavaScript, layout, paint, GPU и FPS этой командой не измеряются.
+
   mem map diff [--document <путь|document-id>] [--json]
       Сравнить сохранённые evidence-снимки карты с текущими versioned chunks базы.
       Показывает изменённые/исчезнувшие фрагменты и затронутые узлы/связи. Если
@@ -4132,6 +4140,7 @@ func printUsage() {
   mem map coverage --document "D:/Books/manual.pdf" --pages 20-45
   mem map eval .\quality-baseline.json --json
   mem map eval-labeled .\labeled-benchmark.json --json
+  mem map profile -iterations 5 --json
   mem map diff --document "D:/Books/manual.pdf"
   mem map snapshots --document "D:/Books/manual.pdf"
   mem map corpus-diff --document "D:/Books/manual.pdf"

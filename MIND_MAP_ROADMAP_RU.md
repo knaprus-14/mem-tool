@@ -526,6 +526,12 @@ precision/recall/F1. Проверка выполняется в одном read-
 показывает лишние/пропущенные объекты и фиксирует graph/evidence/snapshot
 digests без вызова модели.
 
+**Готово в 1.68.0 — третий срез:** `mem map profile` измеряет отдельные стадии
+SQLite graph load, pinned evidence snapshot, live-view assembly и host-side HTML
+serialization. Отчёт содержит raw samples, median/p95, размеры DB/WAL/HTML,
+окружение и content/state/view digests; конкурентно изменившийся снимок
+отклоняется. Ограничение browser JS/layout/paint/FPS показано явно.
+
 ## 5. Порядок ближайших реализаций
 
 1. **Готово:** этап 1.1 — loopback live-server и `mem map open`.
@@ -616,7 +622,9 @@ digests без вызова модели.
     состояниям evidence и размерам карты со строгим manifest и машинным JSON.
 43. **Готово в 1.67.0:** размеченные precision/recall/F1 evals claims и
     contradictions с детальным аудитом FP/FN и reproducible digests.
-44. **Следующий шаг:** профиль SQLite/рендера на больших картах, затем фоновые
+44. **Готово в 1.68.0:** измеримый профиль SQLite, evidence, live-view и
+    host-side HTML с snapshot pins и машинным JSON.
+45. **Следующий шаг:** адресные оптимизации по измеренным профилям, затем фоновые
     jobs и backup пользовательских views.
 
 ## 6. Стоп-условия для каждого этапа

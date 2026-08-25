@@ -724,6 +724,7 @@ func tuiCommandMenuItems() []commandMenuEntry {
 		{"map coverage [флаги]", "измерить покрытие документов и страниц"},
 		{"map eval <manifest.json> [--json]", "проверить воспроизводимые пороги качества"},
 		{"map eval-labeled <manifest.json> [--json]", "измерить precision/recall по размеченному эталону"},
+		{"map profile [-iterations N] [--view <имя>] [--json]", "измерить SQLite, evidence, view и HTML стадии"},
 		{"map diff [--document путь] [--json]", "сравнить evidence карты с текущими ревизиями"},
 		{"map snapshots [--document путь] [--json]", "показать неизменяемые снимки ревизий"},
 		{"map corpus-diff --document путь [флаги]", "полный diff chunks между ревизиями"},

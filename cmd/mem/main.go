@@ -3830,7 +3830,12 @@ func printUsage() {
   mem mindmap ai-sources <карта> <узел> <запрос> [AI scope flags] [--expect N] [--json]
   mem mindmap ai-show <preview-id> [--json]
   mem mindmap ai-apply <preview-id> [--select <id,id>] [--expect N] [--json]
-  mem mindmap export <карта> --format html|svg|png|json|opml --output <путь> [--force]
+  mem mindmap templates [--json]
+  mem mindmap template-create <шаблон> <название> [--description <текст>] [--json]
+  mem mindmap ask-branch <карта> <узел> <вопрос> [--json]
+  mem mindmap compare <левая-карта> <правая-карта> [--json]
+  mem mindmap study <карта> <узел> [--output <путь>] [--force] [--json]
+  mem mindmap export <карта> --format html|svg|png|json|opml|markdown|mermaid|obsidian --output <путь> [--force]
       AI scope flags: --document <путь|document-id>, --page-from N, --page-to N,
       --query <текст>, повторяемый --entry N, --node-sources, --without-sources,
       --limit N (1..10000). Без --limit безопасный автоматический порог — 512
@@ -3845,6 +3850,8 @@ func printUsage() {
       защищает от конкурентной правки, undo отменяет последнее доступное изменение.
       AI-команды сначала сохраняют неизменяемый preview. Новая карта или изменения
       публикуются только отдельной командой ai-apply после проверки предложений.
+      Расширенная работа задаёт grounded-вопрос по current evidence ветви, создаёт
+      ручные карты из шаблонов, сравнивает два дерева и собирает учебный Markdown.
       export всегда снимает полное дерево независимо от свёрнутых ветвей. По
       умолчанию существующий файл не перезаписывается; это разрешает только --force.
 

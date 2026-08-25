@@ -13,7 +13,7 @@ import (
 	ui "github.com/knaprus-14/mem-tool/pkg/ui"
 )
 
-const mindMapUsage = `использование: mem mindmap <open|create|list|show|add-node|edit-node|move-node|delete-node|source-add|source-remove|source-move|history|undo|redo|snapshot|snapshots|ai-new|ai-expand|ai-fill|ai-sources|ai-show|ai-apply|export>
+const mindMapUsage = `использование: mem mindmap <open|create|list|show|add-node|edit-node|move-node|delete-node|source-add|source-remove|source-move|history|undo|redo|snapshot|snapshots|ai-new|ai-expand|ai-fill|ai-sources|ai-show|ai-apply|templates|template-create|ask-branch|compare|study|export>
   mem mindmap open [--port N] [--no-browser]
   mem mindmap create <название> [--description <текст>] [--json]
   mem mindmap list [--all] [--json]
@@ -36,7 +36,12 @@ const mindMapUsage = `использование: mem mindmap <open|create|list|
   mem mindmap ai-sources <карта> <узел> <запрос> [AI scope flags] [--expect N] [--json]
   mem mindmap ai-show <preview-id> [--json]
   mem mindmap ai-apply <preview-id> [--select <id,id>] [--expect N] [--json]
-  mem mindmap export <карта> --format html|svg|png|json|opml --output <путь> [--force]
+  mem mindmap templates [--json]
+  mem mindmap template-create <шаблон> <название> [--description <текст>] [--json]
+  mem mindmap ask-branch <карта> <узел> <вопрос> [--json]
+  mem mindmap compare <левая-карта> <правая-карта> [--json]
+  mem mindmap study <карта> <узел> [--output <путь>] [--force] [--json]
+  mem mindmap export <карта> --format html|svg|png|json|opml|markdown|mermaid|obsidian --output <путь> [--force]
 
 AI scope flags: --document <путь|document-id> [--page-from N] [--page-to N],
   --query <текст>, повторяемый --entry N, --node-sources, --without-sources,
@@ -87,6 +92,9 @@ func handleMindMap(cfg *Config, store *Store, args []string) error {
 	}
 	if strings.HasPrefix(args[0], "ai-") {
 		return handleMindMapAI(cfg, store, args)
+	}
+	if isMindMapWorkbenchCommand(args[0]) {
+		return handleMindMapWorkbench(cfg, store, args)
 	}
 	if args[0] == "export" {
 		return handleClassicMindMapExport(store, args[1:])

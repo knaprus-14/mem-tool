@@ -216,6 +216,60 @@ func TestClassicMindMapWorkspaceExportsPinnedAttachment(t *testing.T) {
 	}
 }
 
+func TestClassicMindMapWorkspaceExtendedWorkbenchFlow(t *testing.T) {
+	store, entries := newClassicMindMapAITestStore(t)
+	evidence := groundedEvidenceForEntry(entries[0], entries[0].Text, DefaultAnswerLowConfidence)
+	anchor, err := evidenceAnchorFromGrounded(evidence)
+	if err != nil {
+		t.Fatal(err)
+	}
+	doc, err := store.ImportClassicMindMap(ClassicMindMapDraft{Title: "Workbench", Mode: ClassicMindMapModeHybrid, Nodes: []ClassicMindMapNodeDraft{
+		{Ref: "root", Label: "Workbench", Kind: ClassicMindMapNodeTopic, Origin: ClassicMindMapNodeManual},
+		{Ref: "branch", ParentRef: "root", Label: "Ветка", Summary: "Материал", Kind: ClassicMindMapNodeFact, Origin: ClassicMindMapNodeManual,
+			Sources: []ClassicMindMapSource{{Kind: ClassicMindMapSourceEvidence, Evidence: &anchor}}},
+	}}, "test", "workspace workbench")
+	if err != nil {
+		t.Fatal(err)
+	}
+	provider := &selectionAnswerProvider{answers: []string{`{"claims":[{"text":"Ответ","citations":["E1"]}]}`}}
+	assistant := NewClassicMindMapAIWorkspace(context.Background(), classicMindMapAITestService(store, provider))
+	handler := NewClassicMindMapWorkspaceHandlerWithAI(store, "session", assistant)
+
+	templates := classicMindMapWorkspaceRequest(t, handler, "/api/workbench/templates", "127.0.0.1:9000", "http://127.0.0.1:9000", "session", map[string]any{})
+	if templates.Code != http.StatusOK || !strings.Contains(templates.Body.String(), `"study"`) {
+		t.Fatalf("templates status=%d body=%q", templates.Code, templates.Body.String())
+	}
+	created := classicMindMapWorkspaceRequest(t, handler, "/api/workbench/template/create", "127.0.0.1:9000", "http://127.0.0.1:9000", "session", map[string]any{"template_id": "project", "title": "Проект"})
+	if created.Code != http.StatusOK || !strings.Contains(created.Body.String(), `"Проект"`) {
+		t.Fatalf("template create status=%d body=%q", created.Code, created.Body.String())
+	}
+	payload := map[string]any{"map_id": doc.Map.ID, "node_id": "Ветка", "expected_revision": doc.Map.Revision, "expected_digest": doc.Digest, "expected_state_digest": doc.StateDigest}
+	manifestResponse := classicMindMapWorkspaceRequest(t, handler, "/api/workbench/branch", "127.0.0.1:9000", "http://127.0.0.1:9000", "session", payload)
+	if manifestResponse.Code != http.StatusOK {
+		t.Fatalf("manifest status=%d body=%q", manifestResponse.Code, manifestResponse.Body.String())
+	}
+	var manifest ClassicMindMapBranchManifest
+	if err := json.Unmarshal(manifestResponse.Body.Bytes(), &manifest); err != nil || manifest.Digest == "" {
+		t.Fatalf("manifest=%#v err=%v", manifest, err)
+	}
+	payload["question"] = "Что известно?"
+	payload["expected_manifest_digest"] = manifest.Digest
+	answer := classicMindMapWorkspaceRequest(t, handler, "/api/workbench/ask", "127.0.0.1:9000", "http://127.0.0.1:9000", "session", payload)
+	if answer.Code != http.StatusOK || !strings.Contains(answer.Body.String(), "Ответ") {
+		t.Fatalf("answer status=%d body=%q", answer.Code, answer.Body.String())
+	}
+	study := classicMindMapWorkspaceRequest(t, handler, "/api/workbench/study", "127.0.0.1:9000", "http://127.0.0.1:9000", "session", map[string]any{
+		"map_id": doc.Map.ID, "node_id": "Ветка", "expected_revision": doc.Map.Revision, "expected_digest": doc.Digest, "expected_state_digest": doc.StateDigest,
+	})
+	if study.Code != http.StatusOK || !strings.Contains(study.Body.String(), `"cards"`) {
+		t.Fatalf("study status=%d body=%q", study.Code, study.Body.String())
+	}
+	comparison := classicMindMapWorkspaceRequest(t, handler, "/api/workbench/compare", "127.0.0.1:9000", "http://127.0.0.1:9000", "session", map[string]any{"left_map_id": doc.Map.ID, "right_map_id": "Проект"})
+	if comparison.Code != http.StatusOK || !strings.Contains(comparison.Body.String(), `"items"`) {
+		t.Fatalf("compare status=%d body=%q", comparison.Code, comparison.Body.String())
+	}
+}
+
 func TestClassicMindMapWorkspacePNGExportConcurrencyGuard(t *testing.T) {
 	slots := make(chan struct{}, 1)
 	started := make(chan struct{})
@@ -372,7 +426,10 @@ func TestClassicMindMapWorkspaceHasOfflineEditorControls(t *testing.T) {
 		`'ai:expand_branch':'AI расширил ветвь'`, `action!=='find_sources'`,
 		`id="exportMap"`, `id="exportDialog"`, `id="exportForm"`, `/api/maps/export`,
 		`Интерактивный HTML`, `value="svg"`, `value="png"`, `value="json"`, `value="opml"`,
+		`value="markdown"`, `value="mermaid"`, `value="obsidian"`, `Obsidian`,
 		`expected_revision:doc.map.revision`, `expected_digest:doc.digest`, `expected_state_digest:doc.state_digest`, `Все ветви войдут в файл`,
+		`id="workbenchEditor"`, `id="workbenchDialog"`, `MEM · WORKBENCH`, `Вопрос по ветви`, `Учебный набор`, `Сравнение карт`, `Шаблоны`,
+		`/api/workbench/branch`, `/api/workbench/ask`, `/api/workbench/study`, `/api/workbench/compare`, `/api/workbench/templates`, `/api/workbench/template/create`,
 		`function safeWebSourceURL(value)`, `parsed.protocol!=='http:'`, `parsed.protocol!=='https:'`,
 		`parsed.username`, `link.href=webURL`,
 	} {

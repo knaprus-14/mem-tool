@@ -12,7 +12,7 @@ import (
 	ui "github.com/knaprus-14/mem-tool/pkg/ui"
 )
 
-const classicMindMapExportUsage = "использование: mem mindmap export <карта> --format html|svg|png|json|opml --output <путь> [--force]"
+const classicMindMapExportUsage = "использование: mem mindmap export <карта> --format html|svg|png|json|opml|markdown|mermaid|obsidian --output <путь> [--force]"
 
 type classicMindMapExportCLIOptions struct {
 	mapRef     string
@@ -160,10 +160,11 @@ func parseClassicMindMapExportCLIOptions(args []string) (classicMindMapExportCLI
 	}
 	switch options.format {
 	case mem.ClassicMindMapExportHTML, mem.ClassicMindMapExportSVG, mem.ClassicMindMapExportPNG,
-		mem.ClassicMindMapExportJSON, mem.ClassicMindMapExportOPML:
+		mem.ClassicMindMapExportJSON, mem.ClassicMindMapExportOPML, mem.ClassicMindMapExportMarkdown,
+		mem.ClassicMindMapExportMermaid, mem.ClassicMindMapExportObsidian:
 		return options, nil
 	default:
-		return options, fmt.Errorf("неподдерживаемый формат mindmap export %q; доступны html, svg, png, json, opml", options.format)
+		return options, fmt.Errorf("неподдерживаемый формат mindmap export %q; доступны html, svg, png, json, opml, markdown, mermaid, obsidian", options.format)
 	}
 }
 

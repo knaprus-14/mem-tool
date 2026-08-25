@@ -52,6 +52,9 @@ func TestExportClassicMindMapPortableFormatsAreDeterministicAndGrounded(t *testi
 		{ClassicMindMapExportPNG, ".png", "image/png"},
 		{ClassicMindMapExportJSON, ".json", "application/json; charset=utf-8"},
 		{ClassicMindMapExportOPML, ".opml", "text/x-opml; charset=utf-8"},
+		{ClassicMindMapExportMarkdown, ".md", "text/markdown; charset=utf-8"},
+		{ClassicMindMapExportMermaid, ".mmd", "text/plain; charset=utf-8"},
+		{ClassicMindMapExportObsidian, ".obsidian.md", "text/markdown; charset=utf-8"},
 	}
 	artifacts := make(map[ClassicMindMapExportFormat]ClassicMindMapExportArtifact)
 	for _, test := range tests {
@@ -118,6 +121,20 @@ func TestExportClassicMindMapPortableFormatsAreDeterministicAndGrounded(t *testi
 	}
 	if !foundAnchor {
 		t.Fatal("OPML source JSON did not round-trip the evidence anchor")
+	}
+	markdown := string(artifacts[ClassicMindMapExportMarkdown].Data)
+	mermaid := string(artifacts[ClassicMindMapExportMermaid].Data)
+	obsidian := string(artifacts[ClassicMindMapExportObsidian].Data)
+	for name, output := range map[string]string{"markdown": markdown, "mermaid": mermaid, "obsidian": obsidian} {
+		if !strings.Contains(output, sentinelPath) && name != "mermaid" {
+			t.Fatalf("%s export lost human-readable provenance", name)
+		}
+		if !strings.Contains(output, "mem-provenance-base64-raw-std-v1") {
+			t.Fatalf("%s export lost canonical provenance envelope", name)
+		}
+	}
+	if !strings.Contains(mermaid, "mindmap\n") || !strings.Contains(obsidian, "```mermaid") || !strings.Contains(obsidian, "mem_map_id:") {
+		t.Fatal("Mermaid/Obsidian structure is incomplete")
 	}
 	opmlMetadata, opmlNodes, err := classicMindMapTestOPMLMetadata(opmlExport)
 	if err != nil {

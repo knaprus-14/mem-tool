@@ -82,6 +82,18 @@ func newClassicMindMapWorkspaceHandler(store *Store, sessionToken string, assist
 			serveClassicMindMapDuplicate(w, r, store)
 		case "/api/maps/export":
 			serveClassicMindMapExport(w, r, store)
+		case "/api/workbench/templates":
+			serveClassicMindMapTemplates(w, r)
+		case "/api/workbench/template/create":
+			serveClassicMindMapTemplateCreate(w, r, store)
+		case "/api/workbench/branch":
+			serveClassicMindMapBranchManifest(w, r, store)
+		case "/api/workbench/ask":
+			serveClassicMindMapBranchQuestion(w, r, store, assistant)
+		case "/api/workbench/compare":
+			serveClassicMindMapCompare(w, r, store)
+		case "/api/workbench/study":
+			serveClassicMindMapStudy(w, r, store)
 		case "/api/nodes/add":
 			serveClassicMindMapNodeAdd(w, r, store)
 		case "/api/nodes/edit":
@@ -162,6 +174,23 @@ type classicMindMapExportRequest struct {
 	ExpectedRevision    int64                      `json:"expected_revision"`
 	ExpectedDigest      string                     `json:"expected_digest"`
 	ExpectedStateDigest string                     `json:"expected_state_digest"`
+}
+
+type classicMindMapWorkbenchBranchRequest struct {
+	MapID                  string `json:"map_id"`
+	NodeID                 string `json:"node_id"`
+	Question               string `json:"question,omitempty"`
+	ExpectedRevision       int64  `json:"expected_revision,omitempty"`
+	ExpectedDigest         string `json:"expected_digest,omitempty"`
+	ExpectedStateDigest    string `json:"expected_state_digest,omitempty"`
+	ExpectedManifestDigest string `json:"expected_manifest_digest,omitempty"`
+}
+
+type classicMindMapWorkbenchCompareRequest struct {
+	LeftMapID           string `json:"left_map_id"`
+	RightMapID          string `json:"right_map_id"`
+	LeftExpectedDigest  string `json:"left_expected_digest,omitempty"`
+	RightExpectedDigest string `json:"right_expected_digest,omitempty"`
 }
 
 type classicMindMapExportFunc func(ClassicMindMapExportRequest) (ClassicMindMapExportArtifact, error)
@@ -375,6 +404,75 @@ func classicMindMapExportRequestCancelled(w http.ResponseWriter, r *http.Request
 	default:
 		return false
 	}
+}
+
+func serveClassicMindMapTemplates(w http.ResponseWriter, r *http.Request) {
+	var request struct{}
+	if !decodeClassicMindMapJSON(w, r, &request) {
+		return
+	}
+	writeClassicMindMapResult(w, ListClassicMindMapTemplates(), nil)
+}
+
+func serveClassicMindMapTemplateCreate(w http.ResponseWriter, r *http.Request, store *Store) {
+	var request ClassicMindMapTemplateRequest
+	if !decodeClassicMindMapJSON(w, r, &request) {
+		return
+	}
+	doc, err := store.CreateClassicMindMapFromTemplate(request, "browser")
+	writeClassicMindMapResult(w, doc, err)
+}
+
+func serveClassicMindMapBranchManifest(w http.ResponseWriter, r *http.Request, store *Store) {
+	var request classicMindMapWorkbenchBranchRequest
+	if !decodeClassicMindMapJSON(w, r, &request) {
+		return
+	}
+	manifest, err := store.BuildClassicMindMapBranchManifest(classicMindMapBranchRequest(request))
+	writeClassicMindMapResult(w, manifest, err)
+}
+
+func serveClassicMindMapBranchQuestion(w http.ResponseWriter, r *http.Request, store *Store, assistant *ClassicMindMapAIWorkspace) {
+	var request classicMindMapWorkbenchBranchRequest
+	if !decodeClassicMindMapJSON(w, r, &request) {
+		return
+	}
+	if assistant == nil || assistant.Service == nil {
+		http.Error(w, "answer-модель для вопроса по ветви недоступна", http.StatusServiceUnavailable)
+		return
+	}
+	answer, err := store.AnswerClassicMindMapBranch(r.Context(), assistant.Service, ClassicMindMapBranchQuestionRequest{
+		ClassicMindMapBranchRequest: classicMindMapBranchRequest(request), Question: request.Question,
+		ExpectedManifestDigest: request.ExpectedManifestDigest,
+	})
+	writeClassicMindMapResult(w, answer, err)
+}
+
+func serveClassicMindMapCompare(w http.ResponseWriter, r *http.Request, store *Store) {
+	var request classicMindMapWorkbenchCompareRequest
+	if !decodeClassicMindMapJSON(w, r, &request) {
+		return
+	}
+	comparison, err := store.CompareClassicMindMaps(ClassicMindMapCompareRequest{
+		LeftMapRef: request.LeftMapID, RightMapRef: request.RightMapID,
+		LeftExpectedDigest: request.LeftExpectedDigest, RightExpectedDigest: request.RightExpectedDigest,
+	})
+	writeClassicMindMapResult(w, comparison, err)
+}
+
+func serveClassicMindMapStudy(w http.ResponseWriter, r *http.Request, store *Store) {
+	var request classicMindMapWorkbenchBranchRequest
+	if !decodeClassicMindMapJSON(w, r, &request) {
+		return
+	}
+	pack, err := store.BuildClassicMindMapStudyPack(classicMindMapBranchRequest(request))
+	writeClassicMindMapResult(w, pack, err)
+}
+
+func classicMindMapBranchRequest(request classicMindMapWorkbenchBranchRequest) ClassicMindMapBranchRequest {
+	return ClassicMindMapBranchRequest{MapRef: request.MapID, NodeRef: request.NodeID,
+		ExpectedRevision: request.ExpectedRevision, ExpectedDigest: request.ExpectedDigest,
+		ExpectedStateDigest: request.ExpectedStateDigest}
 }
 
 func serveClassicMindMapNodeAdd(w http.ResponseWriter, r *http.Request, store *Store) {

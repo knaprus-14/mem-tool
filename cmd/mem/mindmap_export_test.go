@@ -29,7 +29,8 @@ func TestMindMapExportCLIWritesEveryPortableFormat(t *testing.T) {
 
 	for _, format := range []mem.ClassicMindMapExportFormat{
 		mem.ClassicMindMapExportHTML, mem.ClassicMindMapExportSVG, mem.ClassicMindMapExportPNG,
-		mem.ClassicMindMapExportJSON, mem.ClassicMindMapExportOPML,
+		mem.ClassicMindMapExportJSON, mem.ClassicMindMapExportOPML, mem.ClassicMindMapExportMarkdown,
+		mem.ClassicMindMapExportMermaid, mem.ClassicMindMapExportObsidian,
 	} {
 		t.Run(string(format), func(t *testing.T) {
 			output := filepath.Join(t.TempDir(), "map."+string(format))

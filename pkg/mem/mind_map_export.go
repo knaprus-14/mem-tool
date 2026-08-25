@@ -2,7 +2,9 @@ package mem
 
 import (
 	"bytes"
+	"crypto/sha256"
 	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"encoding/xml"
 	"errors"
@@ -25,11 +27,14 @@ const (
 type ClassicMindMapExportFormat string
 
 const (
-	ClassicMindMapExportHTML ClassicMindMapExportFormat = "html"
-	ClassicMindMapExportSVG  ClassicMindMapExportFormat = "svg"
-	ClassicMindMapExportPNG  ClassicMindMapExportFormat = "png"
-	ClassicMindMapExportJSON ClassicMindMapExportFormat = "json"
-	ClassicMindMapExportOPML ClassicMindMapExportFormat = "opml"
+	ClassicMindMapExportHTML     ClassicMindMapExportFormat = "html"
+	ClassicMindMapExportSVG      ClassicMindMapExportFormat = "svg"
+	ClassicMindMapExportPNG      ClassicMindMapExportFormat = "png"
+	ClassicMindMapExportJSON     ClassicMindMapExportFormat = "json"
+	ClassicMindMapExportOPML     ClassicMindMapExportFormat = "opml"
+	ClassicMindMapExportMarkdown ClassicMindMapExportFormat = "markdown"
+	ClassicMindMapExportMermaid  ClassicMindMapExportFormat = "mermaid"
+	ClassicMindMapExportObsidian ClassicMindMapExportFormat = "obsidian"
 )
 
 type ClassicMindMapExportRequest struct {
@@ -142,6 +147,15 @@ func (s *Store) ExportClassicMindMap(request ClassicMindMapExportRequest) (Class
 	case ClassicMindMapExportOPML:
 		data, err = renderClassicMindMapOPML(model)
 		mediaType = "text/x-opml; charset=utf-8"
+	case ClassicMindMapExportMarkdown:
+		data, err = renderClassicMindMapMarkdown(model, false)
+		mediaType = "text/markdown; charset=utf-8"
+	case ClassicMindMapExportMermaid:
+		data, err = renderClassicMindMapMermaid(model)
+		mediaType = "text/plain; charset=utf-8"
+	case ClassicMindMapExportObsidian:
+		data, err = renderClassicMindMapMarkdown(model, true)
+		mediaType = "text/markdown; charset=utf-8"
 	}
 	if err != nil {
 		return ClassicMindMapExportArtifact{}, err
@@ -158,7 +172,8 @@ func (s *Store) ExportClassicMindMap(request ClassicMindMapExportRequest) (Class
 
 func validClassicMindMapExportFormat(format ClassicMindMapExportFormat) bool {
 	switch format {
-	case ClassicMindMapExportHTML, ClassicMindMapExportSVG, ClassicMindMapExportPNG, ClassicMindMapExportJSON, ClassicMindMapExportOPML:
+	case ClassicMindMapExportHTML, ClassicMindMapExportSVG, ClassicMindMapExportPNG, ClassicMindMapExportJSON, ClassicMindMapExportOPML,
+		ClassicMindMapExportMarkdown, ClassicMindMapExportMermaid, ClassicMindMapExportObsidian:
 		return true
 	default:
 		return false
@@ -262,6 +277,142 @@ func renderClassicMindMapJSON(model classicMindMapExportModel) ([]byte, error) {
 		return nil, fmt.Errorf("encode classic mind map JSON export: %w", err)
 	}
 	return append(data, '\n'), nil
+}
+
+func renderClassicMindMapMarkdown(model classicMindMapExportModel, obsidian bool) ([]byte, error) {
+	var body strings.Builder
+	if obsidian {
+		body.WriteString("---\n")
+		fmt.Fprintf(&body, "title: %s\n", classicMindMapYAMLString(model.Portable.Document.Map.Title))
+		body.WriteString("aliases: [\"MEM Mind Map\"]\n")
+		body.WriteString("tags: [mem-tool, mind-map]\n")
+		fmt.Fprintf(&body, "mem_map_id: %s\nmem_revision: %d\nmem_digest: %s\nmem_state_digest: %s\n---\n\n",
+			classicMindMapYAMLString(model.Portable.Document.Map.ID), model.Portable.Document.Map.Revision,
+			classicMindMapYAMLString(model.Portable.MapDigest), classicMindMapYAMLString(model.Portable.StateDigest))
+	} else {
+		fmt.Fprintf(&body, "<!-- mem-map-id: %s; revision: %d; digest: %s; state-digest: %s -->\n\n",
+			model.Portable.Document.Map.ID, model.Portable.Document.Map.Revision, model.Portable.MapDigest, model.Portable.StateDigest)
+	}
+	fmt.Fprintf(&body, "# %s\n\n", model.Portable.Document.Map.Title)
+	if description := strings.TrimSpace(model.Portable.Document.Map.Description); description != "" {
+		body.WriteString(description)
+		body.WriteString("\n\n")
+	}
+	if obsidian {
+		body.WriteString("## Интерактивная схема\n\n```mermaid\n")
+		mermaid, err := renderClassicMindMapMermaidDiagram(model)
+		if err != nil {
+			return nil, err
+		}
+		body.Write(mermaid)
+		body.WriteString("```\n\n## Полное содержание\n\n")
+	}
+	for _, item := range model.Ordered {
+		level := item.Depth + 2
+		if level > 6 {
+			level = 6
+		}
+		fmt.Fprintf(&body, "%s %s", strings.Repeat("#", level), item.Node.Label)
+		if obsidian {
+			fmt.Fprintf(&body, " ^%s", classicMindMapObsidianBlockID(item.Node.ID))
+		}
+		body.WriteString("\n\n")
+		fmt.Fprintf(&body, "`%s` · `%s` · %d источников\n\n", item.Node.Kind, item.Node.Origin, len(item.Node.Sources))
+		if summary := strings.TrimSpace(item.Node.Summary); summary != "" {
+			fmt.Fprintf(&body, "**Кратко:** %s\n\n", summary)
+		}
+		if content := strings.TrimSpace(item.Node.BodyMarkdown); content != "" {
+			body.WriteString(content)
+			body.WriteString("\n\n")
+		}
+		writeClassicMindMapMarkdownSources(&body, item.Node.Sources)
+	}
+	portable, err := json.Marshal(model.Portable)
+	if err != nil {
+		return nil, fmt.Errorf("encode classic mind map Markdown provenance: %w", err)
+	}
+	body.WriteString("<!-- mem-provenance-base64-raw-std-v1:\n")
+	encoded := base64.RawStdEncoding.EncodeToString(portable)
+	for len(encoded) > 120 {
+		body.WriteString(encoded[:120])
+		body.WriteByte('\n')
+		encoded = encoded[120:]
+	}
+	body.WriteString(encoded)
+	body.WriteString("\n-->\n")
+	return []byte(body.String()), nil
+}
+
+func renderClassicMindMapMermaid(model classicMindMapExportModel) ([]byte, error) {
+	diagram, err := renderClassicMindMapMermaidDiagram(model)
+	if err != nil {
+		return nil, err
+	}
+	portable, err := json.Marshal(model.Portable)
+	if err != nil {
+		return nil, fmt.Errorf("encode classic mind map Mermaid provenance: %w", err)
+	}
+	var body strings.Builder
+	fmt.Fprintf(&body, "%%%% MEM map %s · revision %d · digest %s · state %s\n", model.Portable.Document.Map.ID,
+		model.Portable.Document.Map.Revision, model.Portable.MapDigest, model.Portable.StateDigest)
+	body.WriteString("%% mem-provenance-base64-raw-std-v1:")
+	body.WriteString(base64.RawStdEncoding.EncodeToString(portable))
+	body.WriteByte('\n')
+	body.Write(diagram)
+	return []byte(body.String()), nil
+}
+
+func renderClassicMindMapMermaidDiagram(model classicMindMapExportModel) ([]byte, error) {
+	if model.Root == nil {
+		return nil, errors.New("classic mind map Mermaid export has no root")
+	}
+	var body strings.Builder
+	body.WriteString("mindmap\n")
+	stack := []*classicMindMapExportNode{model.Root}
+	for len(stack) > 0 {
+		item := stack[len(stack)-1]
+		stack = stack[:len(stack)-1]
+		label := classicMindMapMermaidLabel(item.Node.Label)
+		fmt.Fprintf(&body, "%s%s[\"%s\"]\n", strings.Repeat("  ", item.Depth+1), classicMindMapMermaidID(item.Node.ID), label)
+		for i := len(item.Children) - 1; i >= 0; i-- {
+			stack = append(stack, item.Children[i])
+		}
+	}
+	return []byte(body.String()), nil
+}
+
+func classicMindMapMermaidID(value string) string {
+	sum := sha256.Sum256([]byte(value))
+	return "n" + hex.EncodeToString(sum[:6])
+}
+
+func classicMindMapMermaidLabel(value string) string {
+	value = strings.Join(strings.Fields(value), " ")
+	value = strings.ReplaceAll(value, "\\", "\\\\")
+	value = strings.ReplaceAll(value, "\"", "\\\"")
+	value = strings.ReplaceAll(value, "`", "'")
+	return value
+}
+
+func classicMindMapObsidianBlockID(value string) string {
+	var result []rune
+	for _, r := range strings.ToLower(value) {
+		if unicode.IsLetter(r) || unicode.IsDigit(r) || r == '-' {
+			result = append(result, r)
+		}
+		if len(result) >= 60 {
+			break
+		}
+	}
+	if len(result) == 0 {
+		return classicMindMapMermaidID(value)
+	}
+	return string(result)
+}
+
+func classicMindMapYAMLString(value string) string {
+	encoded, _ := json.Marshal(value)
+	return string(encoded)
 }
 
 func renderClassicMindMapHTML(model classicMindMapExportModel) ([]byte, error) {
@@ -498,7 +649,16 @@ func classicMindMapExportFilename(title string, format ClassicMindMapExportForma
 	if len(slug) == 0 {
 		slug = []rune("map")
 	}
-	return "mem-mindmap-" + string(slug) + "." + string(format)
+	extension := string(format)
+	switch format {
+	case ClassicMindMapExportMarkdown:
+		extension = "md"
+	case ClassicMindMapExportMermaid:
+		extension = "mmd"
+	case ClassicMindMapExportObsidian:
+		extension = "obsidian.md"
+	}
+	return "mem-mindmap-" + string(slug) + "." + extension
 }
 
 func classicMindMapExportXMLEscape(value string) string {

@@ -161,7 +161,7 @@ func TestKnowledgeGraphPortableExportWorkspaceHTTPFlow(t *testing.T) {
 	if page.Code != http.StatusOK || !strings.Contains(page.Body.String(), `"portable_export"`) || !strings.Contains(page.Body.String(), `"state_digest":"sha256:`) {
 		t.Fatalf("workspace page has no export pins: status=%d body=%q", page.Code, page.Body.String())
 	}
-	for _, marker := range []string{"portableExportBtn", "portableExportBackdrop", "submitPortableExport", "'/api/export'", `value="graphml"`, `value="gexf"`, `value="obsidian"`, "Экспортируется весь граф"} {
+	for _, marker := range []string{"portableExportBtn", "portableExportBackdrop", "portableExportProgress", "submitPortableExport", "'/api/export/jobs/start'", `value="graphml"`, `value="gexf"`, `value="obsidian"`, "Экспортируется весь граф"} {
 		if !strings.Contains(page.Body.String(), marker) {
 			t.Fatalf("workspace export UI is missing %q", marker)
 		}

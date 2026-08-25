@@ -2,6 +2,7 @@ package mem
 
 import (
 	"bytes"
+	"context"
 	"crypto/sha256"
 	"crypto/subtle"
 	"encoding/json"
@@ -20,7 +21,7 @@ import (
 // current graph directly from store on every request. Network binding and
 // process lifetime remain the caller's responsibility.
 func NewKnowledgeMapLiveHandler(store *Store, title string) http.Handler {
-	return newKnowledgeMapHandler(store, title, nil, nil)
+	return newKnowledgeMapHandler(context.Background(), store, title, nil, nil)
 }
 
 // NewKnowledgeMapWorkspaceHandler returns a live handler for local source
@@ -35,17 +36,30 @@ func NewKnowledgeMapWorkspaceHandler(store *Store, title, sessionToken, viewName
 // workspace plus pinned selected-subgraph manifests and, when configured, local
 // grounded answer operations over only that selected evidence.
 func NewKnowledgeMapWorkspaceHandlerWithSelection(store *Store, title, sessionToken, viewName string, selection *KnowledgeSelectionAnswerService) http.Handler {
+	return NewKnowledgeMapWorkspaceHandlerWithSelectionContext(context.Background(), store, title, sessionToken, viewName, selection)
+}
+
+// NewKnowledgeMapWorkspaceHandlerWithSelectionContext ties queued background
+// work to the live server lifetime. Cancelling ctx safely cancels queued and
+// running exports without publishing partial artifacts.
+func NewKnowledgeMapWorkspaceHandlerWithSelectionContext(ctx context.Context, store *Store, title, sessionToken, viewName string, selection *KnowledgeSelectionAnswerService) http.Handler {
 	if strings.TrimSpace(viewName) == "" {
 		viewName = DefaultKnowledgeMapView
 	}
-	return newKnowledgeMapHandler(store, title, &KnowledgeMapWorkspace{
+	return newKnowledgeMapHandler(ctx, store, title, &KnowledgeMapWorkspace{
 		SessionToken:    sessionToken,
 		ViewName:        viewName,
 		SelectionAnswer: selection != nil && selection.Provider != nil,
 	}, selection)
 }
 
-func newKnowledgeMapHandler(store *Store, title string, workspace *KnowledgeMapWorkspace, selection *KnowledgeSelectionAnswerService) http.Handler {
+func newKnowledgeMapHandler(ctx context.Context, store *Store, title string, workspace *KnowledgeMapWorkspace, selection *KnowledgeSelectionAnswerService) http.Handler {
+	var exportJobs *knowledgeMapExportManager
+	if workspace != nil {
+		exportJobs = newKnowledgeMapExportManager(ctx, func(jobCtx context.Context, request KnowledgeGraphExportRequest, progress knowledgeGraphExportProgressFunc) (KnowledgeGraphExportArtifact, error) {
+			return store.exportKnowledgeGraph(jobCtx, request, progress)
+		})
+	}
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		setKnowledgeMapSecurityHeaders(w.Header())
 		if !knowledgeMapLoopbackHost(r.Host) {
@@ -87,6 +101,14 @@ func newKnowledgeMapHandler(store *Store, title string, workspace *KnowledgeMapW
 			serveKnowledgeMapSelectionExport(w, r, store, workspace)
 		case "/api/export":
 			serveKnowledgeMapPortableExport(w, r, store, workspace)
+		case "/api/export/jobs/start":
+			serveKnowledgeMapExportJobStart(w, r, store, workspace, exportJobs)
+		case "/api/export/jobs/status":
+			serveKnowledgeMapExportJobStatus(w, r, workspace, exportJobs)
+		case "/api/export/jobs/cancel":
+			serveKnowledgeMapExportJobCancel(w, r, workspace, exportJobs)
+		case "/api/export/jobs/download":
+			serveKnowledgeMapExportJobDownload(w, r, workspace, exportJobs)
 		case "/api/selection/learning/generate":
 			serveKnowledgeMapLearningGenerate(w, r, store, workspace, selection)
 		case "/api/selection/learning/save":
@@ -105,6 +127,146 @@ func newKnowledgeMapHandler(store *Store, title string, workspace *KnowledgeMapW
 			http.NotFound(w, r)
 		}
 	})
+}
+
+type knowledgeMapExportJobRequest struct {
+	JobID string `json:"job_id"`
+}
+
+func serveKnowledgeMapExportJobStart(w http.ResponseWriter, r *http.Request, store *Store, workspace *KnowledgeMapWorkspace, manager *knowledgeMapExportManager) {
+	if workspace == nil || manager == nil {
+		http.NotFound(w, r)
+		return
+	}
+	if r.Method != http.MethodPost {
+		w.Header().Set("Allow", "POST")
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	if store == nil {
+		http.Error(w, "knowledge map store is unavailable", http.StatusServiceUnavailable)
+		return
+	}
+	if !knowledgeMapWorkspaceAuthorized(r, workspace.SessionToken) {
+		http.Error(w, "forbidden knowledge graph export job request", http.StatusForbidden)
+		return
+	}
+	var request KnowledgeGraphExportRequest
+	if !decodeKnowledgeMapSelectionJSON(w, r, &request) {
+		return
+	}
+	job, err := manager.start(request)
+	if err != nil {
+		switch {
+		case errors.Is(err, ErrKnowledgeMapExportQueueFull):
+			w.Header().Set("Retry-After", "2")
+			http.Error(w, "knowledge graph export queue is full", http.StatusTooManyRequests)
+		case errors.Is(err, context.Canceled), errors.Is(err, context.DeadlineExceeded):
+			http.Error(w, "knowledge graph export worker is stopping", http.StatusServiceUnavailable)
+		default:
+			http.Error(w, "knowledge graph export job request was rejected", http.StatusBadRequest)
+		}
+		return
+	}
+	w.Header().Set("Content-Type", "application/json; charset=utf-8")
+	w.WriteHeader(http.StatusAccepted)
+	_ = json.NewEncoder(w).Encode(job)
+}
+
+func serveKnowledgeMapExportJobStatus(w http.ResponseWriter, r *http.Request, workspace *KnowledgeMapWorkspace, manager *knowledgeMapExportManager) {
+	if workspace == nil || manager == nil {
+		http.NotFound(w, r)
+		return
+	}
+	if r.Method != http.MethodPost {
+		w.Header().Set("Allow", "POST")
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	if !knowledgeMapWorkspaceAuthorized(r, workspace.SessionToken) {
+		http.Error(w, "forbidden knowledge graph export job status request", http.StatusForbidden)
+		return
+	}
+	var request knowledgeMapExportJobRequest
+	if !decodeKnowledgeMapSelectionJSON(w, r, &request) {
+		return
+	}
+	job, err := manager.status(strings.TrimSpace(request.JobID))
+	if err != nil {
+		http.Error(w, "knowledge graph export job not found", http.StatusNotFound)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json; charset=utf-8")
+	_ = json.NewEncoder(w).Encode(job)
+}
+
+func serveKnowledgeMapExportJobCancel(w http.ResponseWriter, r *http.Request, workspace *KnowledgeMapWorkspace, manager *knowledgeMapExportManager) {
+	if workspace == nil || manager == nil {
+		http.NotFound(w, r)
+		return
+	}
+	if r.Method != http.MethodPost {
+		w.Header().Set("Allow", "POST")
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	if !knowledgeMapWorkspaceAuthorized(r, workspace.SessionToken) {
+		http.Error(w, "forbidden knowledge graph export job cancel request", http.StatusForbidden)
+		return
+	}
+	var request knowledgeMapExportJobRequest
+	if !decodeKnowledgeMapSelectionJSON(w, r, &request) {
+		return
+	}
+	job, err := manager.cancelJob(strings.TrimSpace(request.JobID))
+	if err != nil {
+		if errors.Is(err, ErrKnowledgeMapExportJobNotCancelable) {
+			http.Error(w, "knowledge graph export job cannot be cancelled", http.StatusConflict)
+			return
+		}
+		http.Error(w, "knowledge graph export job not found", http.StatusNotFound)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json; charset=utf-8")
+	_ = json.NewEncoder(w).Encode(job)
+}
+
+func serveKnowledgeMapExportJobDownload(w http.ResponseWriter, r *http.Request, workspace *KnowledgeMapWorkspace, manager *knowledgeMapExportManager) {
+	if workspace == nil || manager == nil {
+		http.NotFound(w, r)
+		return
+	}
+	if r.Method != http.MethodPost {
+		w.Header().Set("Allow", "POST")
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	if !knowledgeMapWorkspaceAuthorized(r, workspace.SessionToken) {
+		http.Error(w, "forbidden knowledge graph export job download request", http.StatusForbidden)
+		return
+	}
+	var request knowledgeMapExportJobRequest
+	if !decodeKnowledgeMapSelectionJSON(w, r, &request) {
+		return
+	}
+	id := strings.TrimSpace(request.JobID)
+	artifact, err := manager.artifact(id)
+	if err != nil {
+		if errors.Is(err, ErrKnowledgeMapExportJobNotReady) {
+			http.Error(w, "knowledge graph export job is not ready", http.StatusConflict)
+			return
+		}
+		http.Error(w, "knowledge graph export job not found", http.StatusNotFound)
+		return
+	}
+	w.Header().Set("Content-Type", artifact.ContentType)
+	w.Header().Set("Content-Disposition", mime.FormatMediaType("attachment", map[string]string{"filename": artifact.Filename}))
+	w.Header().Set("Content-Length", fmt.Sprint(len(artifact.Data)))
+	w.WriteHeader(http.StatusOK)
+	n, writeErr := w.Write(artifact.Data)
+	if writeErr == nil && n == len(artifact.Data) {
+		manager.markDownloaded(id)
+	}
 }
 
 const MaxKnowledgeMapSelectionJSON = 128 << 10

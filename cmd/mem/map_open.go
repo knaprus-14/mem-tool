@@ -58,15 +58,15 @@ func handleMapOpen(cfg *Config, store *Store, args []string) error {
 			}
 		}
 	}
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
+	defer stop()
 	server := &http.Server{
-		Handler:           mem.NewKnowledgeMapWorkspaceHandlerWithSelection(store, options.Title, sessionToken, mem.DefaultKnowledgeMapView, selectionService),
+		Handler:           mem.NewKnowledgeMapWorkspaceHandlerWithSelectionContext(ctx, store, options.Title, sessionToken, mem.DefaultKnowledgeMapView, selectionService),
 		ReadHeaderTimeout: 5 * time.Second,
 		IdleTimeout:       60 * time.Second,
 		MaxHeaderBytes:    32 << 10,
 	}
 
-	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
-	defer stop()
 	fmt.Fprintf(os.Stdout, "Живая карта: %s\n", url)
 	fmt.Fprintln(os.Stdout, "Источник данных: активная локальная база; расположение узлов и масштаб сохраняются автоматически; Ctrl+C — остановить сервер.")
 	if !options.NoBrowser {

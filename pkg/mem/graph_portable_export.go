@@ -99,21 +99,44 @@ func (s *Store) BuildKnowledgeGraphExportPin() (KnowledgeGraphExportPin, error) 
 // model or mutation. Optional digests pin both graph content and the dynamic
 // current/stale/missing state of every evidence anchor.
 func (s *Store) ExportKnowledgeGraph(request KnowledgeGraphExportRequest) (KnowledgeGraphExportArtifact, error) {
-	request.Format = KnowledgeGraphExportFormat(strings.ToLower(strings.TrimSpace(string(request.Format))))
-	request.Title = strings.TrimSpace(request.Title)
-	if request.Title == "" {
-		request.Title = "Карта знаний mem-tool"
+	return s.exportKnowledgeGraph(context.Background(), request, nil)
+}
+
+type knowledgeGraphExportProgressFunc func(phase string, percent, completed, total int)
+
+func (s *Store) exportKnowledgeGraph(ctx context.Context, request KnowledgeGraphExportRequest, progress knowledgeGraphExportProgressFunc) (KnowledgeGraphExportArtifact, error) {
+	if ctx == nil {
+		ctx = context.Background()
 	}
-	if !utf8.ValidString(request.Title) || utf8.RuneCountInString(request.Title) > MaxKnowledgeGraphExportTitleRunes || strings.ContainsAny(request.Title, "\r\n\t") {
-		return KnowledgeGraphExportArtifact{}, fmt.Errorf("knowledge graph export title must be one line containing 1..%d runes", MaxKnowledgeGraphExportTitleRunes)
+	report := func(phase string, percent, completed, total int) {
+		if progress != nil {
+			progress(phase, percent, completed, total)
+		}
 	}
-	if !supportedKnowledgeGraphExportFormat(request.Format) {
-		return KnowledgeGraphExportArtifact{}, fmt.Errorf("unsupported knowledge graph export format %q", request.Format)
+	if err := ctx.Err(); err != nil {
+		return KnowledgeGraphExportArtifact{}, err
 	}
-	snapshot, err := s.buildKnowledgeGraphExportSnapshot()
+	var err error
+	request, err = normalizeKnowledgeGraphExportRequest(request)
 	if err != nil {
 		return KnowledgeGraphExportArtifact{}, err
 	}
+	report("validating", 5, 0, 0)
+	report("pinning", 10, 0, 0)
+	snapshot, err := s.buildKnowledgeGraphSnapshotContext(ctx, true, false, func(completed, total int) {
+		percent := 45
+		if total > 0 {
+			percent = 10 + completed*35/total
+		}
+		report("pinning", percent, completed, total)
+	})
+	if err != nil {
+		return KnowledgeGraphExportArtifact{}, err
+	}
+	if err := ctx.Err(); err != nil {
+		return KnowledgeGraphExportArtifact{}, err
+	}
+	report("rendering", 55, snapshot.Pin.NodeCount+snapshot.Pin.EdgeCount, snapshot.Pin.NodeCount+snapshot.Pin.EdgeCount)
 	if request.ExpectedDigest != "" && request.ExpectedDigest != snapshot.Pin.Digest {
 		return KnowledgeGraphExportArtifact{}, fmt.Errorf("%w: content digest mismatch", ErrKnowledgeGraphExportChanged)
 	}
@@ -128,19 +151,44 @@ func (s *Store) ExportKnowledgeGraph(request KnowledgeGraphExportRequest) (Knowl
 	if err != nil {
 		return KnowledgeGraphExportArtifact{}, fmt.Errorf("encode knowledge graph export envelope: %w", err)
 	}
+	if err := ctx.Err(); err != nil {
+		return KnowledgeGraphExportArtifact{}, err
+	}
+	report("rendering", 70, snapshot.Pin.NodeCount+snapshot.Pin.EdgeCount, snapshot.Pin.NodeCount+snapshot.Pin.EdgeCount)
 	data, filename, contentType, err := renderKnowledgeGraphExport(request.Format, envelope, canonical)
 	if err != nil {
 		return KnowledgeGraphExportArtifact{}, err
 	}
+	if err := ctx.Err(); err != nil {
+		return KnowledgeGraphExportArtifact{}, err
+	}
+	report("finalizing", 90, len(data), len(data))
 	if len(data) > MaxKnowledgeGraphExportBytes {
 		return KnowledgeGraphExportArtifact{}, fmt.Errorf("knowledge graph export exceeds %d bytes", MaxKnowledgeGraphExportBytes)
 	}
-	return KnowledgeGraphExportArtifact{
+	artifact := KnowledgeGraphExportArtifact{
 		Format: request.Format, Filename: filename, ContentType: contentType, Data: data,
 		Digest: snapshot.Pin.Digest, StateDigest: snapshot.Pin.StateDigest,
 		NodeCount: snapshot.Pin.NodeCount, EdgeCount: snapshot.Pin.EdgeCount, Evidence: snapshot.Pin.Evidence,
 		Current: snapshot.Pin.Current, Stale: snapshot.Pin.Stale, Missing: snapshot.Pin.Missing,
-	}, nil
+	}
+	report("completed", 100, len(data), len(data))
+	return artifact, nil
+}
+
+func normalizeKnowledgeGraphExportRequest(request KnowledgeGraphExportRequest) (KnowledgeGraphExportRequest, error) {
+	request.Format = KnowledgeGraphExportFormat(strings.ToLower(strings.TrimSpace(string(request.Format))))
+	request.Title = strings.TrimSpace(request.Title)
+	if request.Title == "" {
+		request.Title = "Карта знаний mem-tool"
+	}
+	if !utf8.ValidString(request.Title) || utf8.RuneCountInString(request.Title) > MaxKnowledgeGraphExportTitleRunes || strings.ContainsAny(request.Title, "\r\n\t") {
+		return KnowledgeGraphExportRequest{}, fmt.Errorf("knowledge graph export title must be one line containing 1..%d runes", MaxKnowledgeGraphExportTitleRunes)
+	}
+	if !supportedKnowledgeGraphExportFormat(request.Format) {
+		return KnowledgeGraphExportRequest{}, fmt.Errorf("unsupported knowledge graph export format %q", request.Format)
+	}
+	return request, nil
 }
 
 func supportedKnowledgeGraphExportFormat(format KnowledgeGraphExportFormat) bool {
@@ -158,18 +206,31 @@ func (s *Store) buildKnowledgeGraphExportSnapshot() (knowledgeGraphExportSnapsho
 }
 
 func (s *Store) buildKnowledgeGraphSnapshot(enforceExportLimits, includeCurrentEntries bool) (knowledgeGraphExportSnapshot, error) {
+	return s.buildKnowledgeGraphSnapshotContext(context.Background(), enforceExportLimits, includeCurrentEntries, nil)
+}
+
+func (s *Store) buildKnowledgeGraphSnapshotContext(ctx context.Context, enforceExportLimits, includeCurrentEntries bool, progress func(completed, total int)) (knowledgeGraphExportSnapshot, error) {
 	if s == nil || s.db == nil {
 		return knowledgeGraphExportSnapshot{}, errors.New("knowledge graph store is unavailable")
 	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := ctx.Err(); err != nil {
+		return knowledgeGraphExportSnapshot{}, err
+	}
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	tx, err := s.db.BeginTx(context.Background(), &sql.TxOptions{ReadOnly: true})
+	tx, err := s.db.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
 	if err != nil {
 		return knowledgeGraphExportSnapshot{}, fmt.Errorf("begin knowledge graph export snapshot: %w", err)
 	}
 	defer tx.Rollback()
 	graph, err := loadKnowledgeGraphFromQuerier(tx)
 	if err != nil {
+		return knowledgeGraphExportSnapshot{}, err
+	}
+	if err := ctx.Err(); err != nil {
 		return knowledgeGraphExportSnapshot{}, err
 	}
 	if enforceExportLimits && (len(graph.Nodes) > MaxKnowledgeGraphExportNodes || len(graph.Edges) > MaxKnowledgeGraphExportEdges) {
@@ -201,7 +262,7 @@ func (s *Store) buildKnowledgeGraphSnapshot(enforceExportLimits, includeCurrentE
 			allAnchors = append(allAnchors, edge.Evidence...)
 		}
 	}
-	resolutions, err := resolveEvidenceAnchorsWithQuery(tx, allAnchors)
+	resolutions, err := resolveEvidenceAnchorsWithQueryContext(ctx, tx, allAnchors, progress)
 	if err != nil {
 		return knowledgeGraphExportSnapshot{}, fmt.Errorf("resolve knowledge graph export evidence batch: %w", err)
 	}
@@ -232,6 +293,9 @@ func (s *Store) buildKnowledgeGraphSnapshot(enforceExportLimits, includeCurrentE
 	}
 	snapshot.Pin.StateDigest = prefixedSHA256(stateJSON)
 	if includeCurrentEntries {
+		if err := ctx.Err(); err != nil {
+			return knowledgeGraphExportSnapshot{}, err
+		}
 		snapshot.CurrentEntries, err = loadKnowledgeGraphCurrentEntries(tx)
 		if err != nil {
 			return knowledgeGraphExportSnapshot{}, fmt.Errorf("load knowledge graph current entries: %w", err)

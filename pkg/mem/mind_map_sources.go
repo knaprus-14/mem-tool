@@ -1,6 +1,7 @@
 package mem
 
 import (
+	"context"
 	"crypto/sha256"
 	"database/sql"
 	"encoding/hex"
@@ -167,6 +168,13 @@ type evidenceResolutionCoordinate struct {
 // semantics while resolving repeated coordinates in bounded batches. It is
 // used by whole-graph snapshots to avoid one SQLite round trip per anchor.
 func resolveEvidenceAnchorsWithQuery(q knowledgeEvidenceQuerier, anchors []EvidenceAnchor) ([]EvidenceResolution, error) {
+	return resolveEvidenceAnchorsWithQueryContext(context.Background(), q, anchors, nil)
+}
+
+func resolveEvidenceAnchorsWithQueryContext(ctx context.Context, q knowledgeEvidenceQuerier, anchors []EvidenceAnchor, progress func(completed, total int)) ([]EvidenceResolution, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	coordinates := make([]evidenceResolutionCoordinate, 0, len(anchors))
 	seen := make(map[evidenceResolutionCoordinate]struct{}, len(anchors))
 	for i, anchor := range anchors {
@@ -182,7 +190,13 @@ func resolveEvidenceAnchorsWithQuery(q knowledgeEvidenceQuerier, anchors []Evide
 		}
 	}
 	entriesByCoordinate := make(map[evidenceResolutionCoordinate][]Entry, len(coordinates))
+	if progress != nil {
+		progress(0, len(coordinates))
+	}
 	for offset := 0; offset < len(coordinates); offset += evidenceResolutionCoordinateBatchSize {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
 		end := offset + evidenceResolutionCoordinateBatchSize
 		if end > len(coordinates) {
 			end = len(coordinates)
@@ -222,6 +236,12 @@ FROM entries WHERE `+where.String()+` ORDER BY id`, args...)
 		if err := rows.Close(); err != nil {
 			return nil, err
 		}
+		if progress != nil {
+			progress(end, len(coordinates))
+		}
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
 	}
 	result := make([]EvidenceResolution, 0, len(anchors))
 	for _, anchor := range anchors {

@@ -722,6 +722,7 @@ func tuiCommandMenuItems() []commandMenuEntry {
 		{"mindmap export <карта> --format html|svg|png|json|opml|markdown|mermaid|obsidian --output <путь> [--force]", "создать переносимый снимок полного дерева"},
 		{"map build <фокус> [флаги]", "построить draft knowledge graph"},
 		{"map coverage [флаги]", "измерить покрытие документов и страниц"},
+		{"map eval <manifest.json> [--json]", "проверить воспроизводимые пороги качества"},
 		{"map diff [--document путь] [--json]", "сравнить evidence карты с текущими ревизиями"},
 		{"map snapshots [--document путь] [--json]", "показать неизменяемые снимки ревизий"},
 		{"map corpus-diff --document путь [флаги]", "полный diff chunks между ревизиями"},

@@ -1287,6 +1287,53 @@ chunk. Поэтому запрос диапазона из одной пусто
 ограничение и рекомендация повторного импорта. JSON содержит стабильный
 `snapshot_digest`, учитывающий и выбранные chunks, и статусы физических страниц.
 
+Зафиксировать воспроизводимый quality gate для этого отчёта можно строгим
+JSON-манифестом. Например, `quality-baseline.json`:
+
+```json
+{
+  "schema_version": 1,
+  "name": "SP10 — базовая проверка",
+  "scope": {
+    "document": "E:\\temp\\mem-test4\\SP10.pdf",
+    "page_from": 1,
+    "page_to": 129,
+    "low_confidence_threshold": 65
+  },
+  "requirements": {
+    "min_import_coverage_percent": 100,
+    "min_processing_percent": 100,
+    "min_knowledge_coverage_percent": 80,
+    "max_unprocessed_chunks": 0,
+    "max_uncovered_chunks": 30,
+    "max_low_confidence_ocr_chunks": 5,
+    "max_warning_chunks": 5,
+    "min_extracted_nodes": 20,
+    "min_extracted_relations": 10,
+    "max_draft_objects": 100,
+    "max_stale_evidence_objects": 0,
+    "max_missing_evidence_objects": 0
+  }
+}
+```
+
+Запуск:
+
+```powershell
+mem map eval .\quality-baseline.json
+mem map eval .\quality-baseline.json --json
+```
+
+Каждое поле `requirements` необязательно, но должен присутствовать хотя бы один
+порог. Проценты находятся в диапазоне 0–100, счётчики не могут быть
+отрицательными. Значение `0` является настоящим строгим порогом, а не
+«отключением». Если проверка не пройдена, mem показывает все `[OK]`/`[FAIL]`,
+возвращает код процесса 1 и не меняет базу. JSON также печатается полностью до
+ненулевого завершения, поэтому отчёт можно сохранить и разобрать автоматически.
+`manifest_digest` закрепляет нормализованные правила, `snapshot_digest` —
+фактический coverage-снимок. Сравнивать результаты нужно только при совпадающем
+manifest digest.
+
 Сравнить сохранённые выдержки карты с текущей ревизией базы:
 
 ```powershell

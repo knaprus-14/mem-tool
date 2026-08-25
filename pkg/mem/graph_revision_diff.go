@@ -83,26 +83,19 @@ type KnowledgeRevisionDiffReport struct {
 // read-only and never calls a model. The report deliberately does not claim a
 // complete textual diff: old non-cited chunks are not retained by Store.
 func (s *Store) BuildKnowledgeRevisionDiff(options KnowledgeRevisionDiffOptions) (KnowledgeRevisionDiffReport, error) {
-	graph, err := s.LoadKnowledgeGraph()
+	snapshot, err := s.buildKnowledgeGraphSnapshot(false, true)
 	if err != nil {
 		return KnowledgeRevisionDiffReport{}, err
 	}
-	review, err := s.ReviewKnowledgeGraph()
+	review, err := reviewKnowledgeGraph(snapshot.Graph, snapshot.Resolved)
 	if err != nil {
 		return KnowledgeRevisionDiffReport{}, err
 	}
-	return s.buildKnowledgeRevisionDiff(options, graph, review)
+	return s.buildKnowledgeRevisionDiff(options, snapshot.Graph, review, snapshot.CurrentEntries)
 }
 
-func (s *Store) buildKnowledgeRevisionDiff(options KnowledgeRevisionDiffOptions, graph KnowledgeGraph, review KnowledgeReviewReport) (KnowledgeRevisionDiffReport, error) {
+func (s *Store) buildKnowledgeRevisionDiff(options KnowledgeRevisionDiffOptions, graph KnowledgeGraph, review KnowledgeReviewReport, entries []Entry) (KnowledgeRevisionDiffReport, error) {
 	options.Document = strings.TrimSpace(options.Document)
-	s.mu.RLock()
-	entries := make([]Entry, len(s.entries))
-	for i := range s.entries {
-		entries[i] = cloneEntry(s.entries[i])
-	}
-	s.mu.RUnlock()
-
 	currentByCitation := make(map[string]Entry, len(entries))
 	currentByDocument := make(map[string][]Entry)
 	for _, entry := range entries {

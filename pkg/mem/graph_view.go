@@ -49,12 +49,12 @@ func (s *Store) BuildKnowledgeMapViewDataForView(viewName string) (KnowledgeMapV
 	if err != nil {
 		return KnowledgeMapViewData{}, err
 	}
-	exportSnapshot, err := s.buildKnowledgeGraphExportSnapshot()
+	exportSnapshot, err := s.buildKnowledgeGraphSnapshot(true, true)
 	if err != nil {
 		return KnowledgeMapViewData{}, err
 	}
 	graph := exportSnapshot.Graph
-	review, err := s.ReviewKnowledgeGraph()
+	review, err := reviewKnowledgeGraph(graph, exportSnapshot.Resolved)
 	if err != nil {
 		return KnowledgeMapViewData{}, err
 	}
@@ -78,7 +78,7 @@ func (s *Store) BuildKnowledgeMapViewDataForView(viewName string) (KnowledgeMapV
 	if err != nil {
 		return KnowledgeMapViewData{}, err
 	}
-	revisionDiff, err := s.buildKnowledgeRevisionDiff(KnowledgeRevisionDiffOptions{}, graph, review)
+	revisionDiff, err := s.buildKnowledgeRevisionDiff(KnowledgeRevisionDiffOptions{}, graph, review, exportSnapshot.CurrentEntries)
 	if err != nil {
 		return KnowledgeMapViewData{}, err
 	}

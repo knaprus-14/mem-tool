@@ -1076,17 +1076,19 @@ FROM knowledge_edges ORDER BY id`)
 	if err := rows.Close(); err != nil {
 		return graph, err
 	}
+	nodeEvidence, err := loadAllKnowledgeEvidence(q, "knowledge_node_evidence", "node_id")
+	if err != nil {
+		return KnowledgeGraph{}, err
+	}
+	edgeEvidence, err := loadAllKnowledgeEvidence(q, "knowledge_edge_evidence", "edge_id")
+	if err != nil {
+		return KnowledgeGraph{}, err
+	}
 	for i := range graph.Nodes {
-		graph.Nodes[i].Evidence, err = loadKnowledgeEvidence(q, "knowledge_node_evidence", "node_id", graph.Nodes[i].ID)
-		if err != nil {
-			return KnowledgeGraph{}, err
-		}
+		graph.Nodes[i].Evidence = nodeEvidence[graph.Nodes[i].ID]
 	}
 	for i := range graph.Edges {
-		graph.Edges[i].Evidence, err = loadKnowledgeEvidence(q, "knowledge_edge_evidence", "edge_id", graph.Edges[i].ID)
-		if err != nil {
-			return KnowledgeGraph{}, err
-		}
+		graph.Edges[i].Evidence = edgeEvidence[graph.Edges[i].ID]
 	}
 	if err := ValidateKnowledgeGraph(graph); err != nil {
 		return KnowledgeGraph{}, fmt.Errorf("stored knowledge graph is invalid: %w", err)
@@ -1101,6 +1103,31 @@ FROM knowledge_edges ORDER BY id`)
 		}
 	}
 	return graph, nil
+}
+
+func loadAllKnowledgeEvidence(q knowledgeEvidenceQuerier, table, ownerColumn string) (map[string][]EvidenceAnchor, error) {
+	query := fmt.Sprintf(`SELECT %s, citation_id, document_id, document_revision, chunk_hash, evidence_hash,
+source_path, page, block_index, block_chunk_index, excerpt FROM %s ORDER BY %s, ordinal`, ownerColumn, table, ownerColumn)
+	rows, err := q.Query(query)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	result := make(map[string][]EvidenceAnchor)
+	for rows.Next() {
+		var ownerID string
+		var anchor EvidenceAnchor
+		if err := rows.Scan(&ownerID, &anchor.CitationID, &anchor.DocumentID, &anchor.DocumentRevision,
+			&anchor.ChunkHash, &anchor.EvidenceHash, &anchor.SourcePath, &anchor.Page,
+			&anchor.BlockIndex, &anchor.BlockChunkIndex, &anchor.Excerpt); err != nil {
+			return nil, err
+		}
+		result[ownerID] = append(result[ownerID], anchor)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return result, nil
 }
 
 type knowledgeEvidenceQuerier interface {

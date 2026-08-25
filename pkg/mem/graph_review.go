@@ -169,22 +169,32 @@ func KnowledgeEvidenceDigest(anchors []EvidenceAnchor) (string, error) {
 // ReviewKnowledgeGraph reports the freshness of every source anchor. It does
 // not mutate graph state; callers can use ReadyForApproval as a review queue.
 func (s *Store) ReviewKnowledgeGraph() (KnowledgeReviewReport, error) {
-	graph, err := s.LoadKnowledgeGraph()
+	snapshot, err := s.buildKnowledgeGraphSnapshot(false, false)
 	if err != nil {
 		return KnowledgeReviewReport{}, err
+	}
+	return reviewKnowledgeGraph(snapshot.Graph, snapshot.Resolved)
+}
+
+func reviewKnowledgeGraph(graph KnowledgeGraph, resolved []KnowledgeGraphExportEvidence) (KnowledgeReviewReport, error) {
+	resolvedByObject := make(map[string][]EvidenceResolution, len(resolved))
+	for _, object := range resolved {
+		resolvedByObject[string(object.ObjectType)+"\x00"+object.ObjectID] = object.Items
 	}
 	report := KnowledgeReviewReport{Items: make([]KnowledgeReviewItem, 0, len(graph.Nodes)+len(graph.Edges))}
 	nodeStatuses := make(map[string]KnowledgeStatus, len(graph.Nodes))
 	for _, node := range graph.Nodes {
 		nodeStatuses[node.ID] = node.Status
-		item, err := s.reviewKnowledgeItem(KnowledgeObjectNode, node.ID, string(node.Kind), node.Label, node.Body, node.Status, node.Origin, node.Evidence)
+		item, err := reviewKnowledgeItem(KnowledgeObjectNode, node.ID, string(node.Kind), node.Label, node.Body, node.Status, node.Origin,
+			node.Evidence, resolvedByObject[string(KnowledgeObjectNode)+"\x00"+node.ID])
 		if err != nil {
 			return KnowledgeReviewReport{}, err
 		}
 		report.Items = append(report.Items, item)
 	}
 	for _, edge := range graph.Edges {
-		item, err := s.reviewKnowledgeItem(KnowledgeObjectEdge, edge.ID, string(edge.Kind), edge.Label, "", edge.Status, edge.Origin, edge.Evidence)
+		item, err := reviewKnowledgeItem(KnowledgeObjectEdge, edge.ID, string(edge.Kind), edge.Label, "", edge.Status, edge.Origin,
+			edge.Evidence, resolvedByObject[string(KnowledgeObjectEdge)+"\x00"+edge.ID])
 		if err != nil {
 			return KnowledgeReviewReport{}, err
 		}
@@ -220,7 +230,9 @@ func (s *Store) ReviewKnowledgeGraph() (KnowledgeReviewReport, error) {
 	return report, nil
 }
 
-func (s *Store) reviewKnowledgeItem(objectType KnowledgeObjectType, id, kind, label, body string, status KnowledgeStatus, origin KnowledgeOrigin, anchors []EvidenceAnchor) (KnowledgeReviewItem, error) {
+func reviewKnowledgeItem(objectType KnowledgeObjectType, id, kind, label, body string, status KnowledgeStatus, origin KnowledgeOrigin,
+	anchors []EvidenceAnchor, resolutions []EvidenceResolution,
+) (KnowledgeReviewItem, error) {
 	digest, err := KnowledgeEvidenceDigest(anchors)
 	if err != nil {
 		return KnowledgeReviewItem{}, fmt.Errorf("digest knowledge %s %q evidence: %w", objectType, id, err)
@@ -234,8 +246,14 @@ func (s *Store) reviewKnowledgeItem(objectType KnowledgeObjectType, id, kind, la
 		EvidenceState: EvidenceCurrent, EvidenceDigest: digest, ContentDigest: contentDigest,
 		Evidence: make([]EvidenceResolution, 0, len(anchors)),
 	}
-	for _, anchor := range anchors {
-		resolution := s.ResolveEvidenceAnchor(anchor)
+	if len(resolutions) != len(anchors) {
+		return KnowledgeReviewItem{}, fmt.Errorf("resolved evidence count for knowledge %s %q is %d, want %d", objectType, id, len(resolutions), len(anchors))
+	}
+	for i, anchor := range anchors {
+		resolution := resolutions[i]
+		if resolution.Anchor != anchor {
+			return KnowledgeReviewItem{}, fmt.Errorf("resolved evidence order for knowledge %s %q changed at anchor %d", objectType, id, i)
+		}
 		item.Evidence = append(item.Evidence, resolution)
 		if resolution.State == EvidenceMissing || (resolution.State == EvidenceStale && item.EvidenceState != EvidenceMissing) {
 			item.EvidenceState = resolution.State

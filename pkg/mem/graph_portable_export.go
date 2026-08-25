@@ -84,9 +84,10 @@ type knowledgeGraphExportEnvelope struct {
 }
 
 type knowledgeGraphExportSnapshot struct {
-	Graph    KnowledgeGraph
-	Resolved []KnowledgeGraphExportEvidence
-	Pin      KnowledgeGraphExportPin
+	Graph          KnowledgeGraph
+	Resolved       []KnowledgeGraphExportEvidence
+	CurrentEntries []Entry
+	Pin            KnowledgeGraphExportPin
 }
 
 func (s *Store) BuildKnowledgeGraphExportPin() (KnowledgeGraphExportPin, error) {
@@ -153,6 +154,10 @@ func supportedKnowledgeGraphExportFormat(format KnowledgeGraphExportFormat) bool
 }
 
 func (s *Store) buildKnowledgeGraphExportSnapshot() (knowledgeGraphExportSnapshot, error) {
+	return s.buildKnowledgeGraphSnapshot(true, false)
+}
+
+func (s *Store) buildKnowledgeGraphSnapshot(enforceExportLimits, includeCurrentEntries bool) (knowledgeGraphExportSnapshot, error) {
 	if s == nil || s.db == nil {
 		return knowledgeGraphExportSnapshot{}, errors.New("knowledge graph store is unavailable")
 	}
@@ -167,7 +172,7 @@ func (s *Store) buildKnowledgeGraphExportSnapshot() (knowledgeGraphExportSnapsho
 	if err != nil {
 		return knowledgeGraphExportSnapshot{}, err
 	}
-	if len(graph.Nodes) > MaxKnowledgeGraphExportNodes || len(graph.Edges) > MaxKnowledgeGraphExportEdges {
+	if enforceExportLimits && (len(graph.Nodes) > MaxKnowledgeGraphExportNodes || len(graph.Edges) > MaxKnowledgeGraphExportEdges) {
 		return knowledgeGraphExportSnapshot{}, fmt.Errorf("knowledge graph export exceeds node/edge limits %d/%d", MaxKnowledgeGraphExportNodes, MaxKnowledgeGraphExportEdges)
 	}
 	graphJSON, err := json.Marshal(graph)
@@ -177,14 +182,39 @@ func (s *Store) buildKnowledgeGraphExportSnapshot() (knowledgeGraphExportSnapsho
 	snapshot := knowledgeGraphExportSnapshot{Graph: graph}
 	snapshot.Pin.Digest = prefixedSHA256(graphJSON)
 	snapshot.Pin.NodeCount, snapshot.Pin.EdgeCount = len(graph.Nodes), len(graph.Edges)
-	resolve := func(objectType KnowledgeObjectType, objectID string, anchors []EvidenceAnchor) error {
-		object := KnowledgeGraphExportEvidence{ObjectType: objectType, ObjectID: objectID, Items: make([]EvidenceResolution, 0, len(anchors))}
-		for _, anchor := range anchors {
-			resolution, resolveErr := resolveClassicMindMapEvidenceWithQuery(tx, anchor)
-			if resolveErr != nil {
-				return fmt.Errorf("resolve knowledge graph export evidence %s %q: %w", objectType, objectID, resolveErr)
-			}
-			object.Items = append(object.Items, resolution)
+	type evidenceOwner struct {
+		objectType KnowledgeObjectType
+		objectID   string
+		anchors    []EvidenceAnchor
+	}
+	owners := make([]evidenceOwner, 0, len(graph.Nodes)+len(graph.Edges))
+	allAnchors := make([]EvidenceAnchor, 0)
+	for _, node := range graph.Nodes {
+		if len(node.Evidence) > 0 {
+			owners = append(owners, evidenceOwner{objectType: KnowledgeObjectNode, objectID: node.ID, anchors: node.Evidence})
+			allAnchors = append(allAnchors, node.Evidence...)
+		}
+	}
+	for _, edge := range graph.Edges {
+		if len(edge.Evidence) > 0 {
+			owners = append(owners, evidenceOwner{objectType: KnowledgeObjectEdge, objectID: edge.ID, anchors: edge.Evidence})
+			allAnchors = append(allAnchors, edge.Evidence...)
+		}
+	}
+	resolutions, err := resolveEvidenceAnchorsWithQuery(tx, allAnchors)
+	if err != nil {
+		return knowledgeGraphExportSnapshot{}, fmt.Errorf("resolve knowledge graph export evidence batch: %w", err)
+	}
+	resolutionIndex := 0
+	for _, owner := range owners {
+		end := resolutionIndex + len(owner.anchors)
+		object := KnowledgeGraphExportEvidence{
+			ObjectType: owner.objectType, ObjectID: owner.objectID,
+			Items: append([]EvidenceResolution(nil), resolutions[resolutionIndex:end]...),
+		}
+		resolutionIndex = end
+		snapshot.Resolved = append(snapshot.Resolved, object)
+		for _, resolution := range object.Items {
 			snapshot.Pin.Evidence++
 			switch resolution.State {
 			case EvidenceCurrent:
@@ -195,30 +225,45 @@ func (s *Store) buildKnowledgeGraphExportSnapshot() (knowledgeGraphExportSnapsho
 				snapshot.Pin.Missing++
 			}
 		}
-		if len(object.Items) > 0 {
-			snapshot.Resolved = append(snapshot.Resolved, object)
-		}
-		return nil
-	}
-	for _, node := range graph.Nodes {
-		if err := resolve(KnowledgeObjectNode, node.ID, node.Evidence); err != nil {
-			return knowledgeGraphExportSnapshot{}, err
-		}
-	}
-	for _, edge := range graph.Edges {
-		if err := resolve(KnowledgeObjectEdge, edge.ID, edge.Evidence); err != nil {
-			return knowledgeGraphExportSnapshot{}, err
-		}
 	}
 	stateJSON, err := json.Marshal(snapshot.Resolved)
 	if err != nil {
 		return knowledgeGraphExportSnapshot{}, fmt.Errorf("encode knowledge graph evidence state: %w", err)
 	}
 	snapshot.Pin.StateDigest = prefixedSHA256(stateJSON)
+	if includeCurrentEntries {
+		snapshot.CurrentEntries, err = loadKnowledgeGraphCurrentEntries(tx)
+		if err != nil {
+			return knowledgeGraphExportSnapshot{}, fmt.Errorf("load knowledge graph current entries: %w", err)
+		}
+	}
 	if err := tx.Commit(); err != nil {
 		return knowledgeGraphExportSnapshot{}, fmt.Errorf("finish knowledge graph export snapshot: %w", err)
 	}
 	return snapshot, nil
+}
+
+func loadKnowledgeGraphCurrentEntries(q knowledgeEvidenceQuerier) ([]Entry, error) {
+	rows, err := q.Query(`SELECT text, document_id, document_revision, chunk_hash, source_path,
+page, block_index, block_chunk_index, block_total_chunks
+FROM entries WHERE document_id <> '' ORDER BY id`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var entries []Entry
+	for rows.Next() {
+		var entry Entry
+		if err := rows.Scan(&entry.Text, &entry.DocumentID, &entry.DocumentRevision, &entry.ChunkHash, &entry.SourcePath,
+			&entry.Page, &entry.BlockIndex, &entry.BlockChunkIndex, &entry.BlockTotalChunks); err != nil {
+			return nil, err
+		}
+		entries = append(entries, entry)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return entries, nil
 }
 
 func renderKnowledgeGraphExport(format KnowledgeGraphExportFormat, envelope knowledgeGraphExportEnvelope, canonical []byte) ([]byte, string, string, error) {

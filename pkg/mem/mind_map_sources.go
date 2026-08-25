@@ -154,6 +154,85 @@ FROM entries WHERE document_id=? AND page=? AND block_index=? AND block_chunk_in
 	return resolveEvidenceAnchorFromEntries(anchor, entries), nil
 }
 
+const evidenceResolutionCoordinateBatchSize = 200
+
+type evidenceResolutionCoordinate struct {
+	documentID      string
+	page            int
+	blockIndex      int
+	blockChunkIndex int
+}
+
+// resolveEvidenceAnchorsWithQuery preserves the single-anchor resolution
+// semantics while resolving repeated coordinates in bounded batches. It is
+// used by whole-graph snapshots to avoid one SQLite round trip per anchor.
+func resolveEvidenceAnchorsWithQuery(q knowledgeEvidenceQuerier, anchors []EvidenceAnchor) ([]EvidenceResolution, error) {
+	coordinates := make([]evidenceResolutionCoordinate, 0, len(anchors))
+	seen := make(map[evidenceResolutionCoordinate]struct{}, len(anchors))
+	for i, anchor := range anchors {
+		if err := validateEvidenceAnchor(anchor); err != nil {
+			return nil, fmt.Errorf("validate evidence anchor %d: %w", i, err)
+		}
+		coordinate := evidenceResolutionCoordinate{
+			documentID: anchor.DocumentID, page: anchor.Page, blockIndex: anchor.BlockIndex, blockChunkIndex: anchor.BlockChunkIndex,
+		}
+		if _, exists := seen[coordinate]; !exists {
+			seen[coordinate] = struct{}{}
+			coordinates = append(coordinates, coordinate)
+		}
+	}
+	entriesByCoordinate := make(map[evidenceResolutionCoordinate][]Entry, len(coordinates))
+	for offset := 0; offset < len(coordinates); offset += evidenceResolutionCoordinateBatchSize {
+		end := offset + evidenceResolutionCoordinateBatchSize
+		if end > len(coordinates) {
+			end = len(coordinates)
+		}
+		var where strings.Builder
+		args := make([]any, 0, (end-offset)*4)
+		for i, coordinate := range coordinates[offset:end] {
+			if i > 0 {
+				where.WriteString(" OR ")
+			}
+			where.WriteString("(document_id=? AND page=? AND block_index=? AND block_chunk_index=?)")
+			args = append(args, coordinate.documentID, coordinate.page, coordinate.blockIndex, coordinate.blockChunkIndex)
+		}
+		rows, err := q.Query(`SELECT id, text, document_id, document_revision, chunk_hash,
+source_file, source_path, page, block_index, block_chunk_index, block_total_chunks, chunk_index
+FROM entries WHERE `+where.String()+` ORDER BY id`, args...)
+		if err != nil {
+			return nil, err
+		}
+		for rows.Next() {
+			var entry Entry
+			if err := rows.Scan(&entry.ID, &entry.Text, &entry.DocumentID, &entry.DocumentRevision, &entry.ChunkHash,
+				&entry.SourceFile, &entry.SourcePath, &entry.Page, &entry.BlockIndex, &entry.BlockChunkIndex,
+				&entry.BlockTotalChunks, &entry.ChunkIndex); err != nil {
+				rows.Close()
+				return nil, err
+			}
+			coordinate := evidenceResolutionCoordinate{
+				documentID: entry.DocumentID, page: entry.Page, blockIndex: entry.BlockIndex, blockChunkIndex: entry.BlockChunkIndex,
+			}
+			entriesByCoordinate[coordinate] = append(entriesByCoordinate[coordinate], entry)
+		}
+		if err := rows.Err(); err != nil {
+			rows.Close()
+			return nil, err
+		}
+		if err := rows.Close(); err != nil {
+			return nil, err
+		}
+	}
+	result := make([]EvidenceResolution, 0, len(anchors))
+	for _, anchor := range anchors {
+		coordinate := evidenceResolutionCoordinate{
+			documentID: anchor.DocumentID, page: anchor.Page, blockIndex: anchor.BlockIndex, blockChunkIndex: anchor.BlockChunkIndex,
+		}
+		result = append(result, resolveEvidenceAnchorFromEntries(anchor, entriesByCoordinate[coordinate]))
+	}
+	return result, nil
+}
+
 // classicMindMapResolvedStateDigest pins only the dynamic resolution state of
 // sources. It deliberately excludes content and timestamps: content is pinned
 // by Digest/revision, while repeated loads against unchanged backing state must

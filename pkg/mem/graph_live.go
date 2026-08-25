@@ -85,6 +85,8 @@ func newKnowledgeMapHandler(store *Store, title string, workspace *KnowledgeMapW
 			serveKnowledgeMapSelectionAnalysisSave(w, r, store, workspace)
 		case "/api/selection/export":
 			serveKnowledgeMapSelectionExport(w, r, store, workspace)
+		case "/api/export":
+			serveKnowledgeMapPortableExport(w, r, store, workspace)
 		case "/api/selection/learning/generate":
 			serveKnowledgeMapLearningGenerate(w, r, store, workspace, selection)
 		case "/api/selection/learning/save":
@@ -326,6 +328,48 @@ func serveKnowledgeMapSelectionExport(w http.ResponseWriter, r *http.Request, st
 	w.Header().Set("Content-Length", fmt.Sprint(len(result.Content)))
 	w.WriteHeader(http.StatusOK)
 	_, _ = w.Write(result.Content)
+}
+
+func serveKnowledgeMapPortableExport(w http.ResponseWriter, r *http.Request, store *Store, workspace *KnowledgeMapWorkspace) {
+	if workspace == nil {
+		http.NotFound(w, r)
+		return
+	}
+	if r.Method != http.MethodPost {
+		w.Header().Set("Allow", "POST")
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	if store == nil {
+		http.Error(w, "knowledge map store is unavailable", http.StatusServiceUnavailable)
+		return
+	}
+	if !knowledgeMapWorkspaceAuthorized(r, workspace.SessionToken) {
+		http.Error(w, "forbidden knowledge graph export request", http.StatusForbidden)
+		return
+	}
+	var request KnowledgeGraphExportRequest
+	if !decodeKnowledgeMapSelectionJSON(w, r, &request) {
+		return
+	}
+	if strings.TrimSpace(request.ExpectedDigest) == "" || strings.TrimSpace(request.ExpectedStateDigest) == "" {
+		http.Error(w, "knowledge graph export requires content and source-state pins", http.StatusBadRequest)
+		return
+	}
+	result, err := store.ExportKnowledgeGraph(request)
+	if err != nil {
+		if errors.Is(err, ErrKnowledgeGraphExportChanged) {
+			http.Error(w, "knowledge graph or source state changed; refresh before exporting", http.StatusConflict)
+			return
+		}
+		http.Error(w, "knowledge graph export request was rejected", http.StatusBadRequest)
+		return
+	}
+	w.Header().Set("Content-Type", result.ContentType)
+	w.Header().Set("Content-Disposition", mime.FormatMediaType("attachment", map[string]string{"filename": result.Filename}))
+	w.Header().Set("Content-Length", fmt.Sprint(len(result.Data)))
+	w.WriteHeader(http.StatusOK)
+	_, _ = w.Write(result.Data)
 }
 
 func serveKnowledgeMapLearningGenerate(w http.ResponseWriter, r *http.Request, store *Store, workspace *KnowledgeMapWorkspace, service *KnowledgeSelectionAnswerService) {

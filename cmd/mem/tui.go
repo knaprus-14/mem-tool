@@ -745,6 +745,7 @@ func tuiCommandMenuItems() []commandMenuEntry {
 		{"map reviews [флаги]", "журнал review-решений"},
 		{"map edits [флаги]", "история правок названий и описаний"},
 		{"map export", "вывести граф в JSON"},
+		{"map export --format markdown|outline|opml|graphml|gexf|mermaid|obsidian --output <путь> [флаги]", "экспортировать весь граф с provenance"},
 		{"map export-html <output.html> [флаги]", "создать автономную HTML-карту"},
 		{"open <путь>", "открыть другую локальную базу"},
 		{"init", "проверить, что активная база инициализирована"},

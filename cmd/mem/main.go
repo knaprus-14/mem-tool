@@ -838,14 +838,14 @@ func parseAskArgs(args []string) ([]string, int, error) {
 
 func handleMap(cfg *Config, store *Store, args []string) error {
 	if len(args) == 0 {
-		return errors.New("использование: mem map <open|build|coverage|diff|snapshots|corpus-diff|restore|restore-runs|extract|extract-runs|extract-run|analyze|duplicates|merge-node|merges|runs|run|prune-runs|status|approve|approve-batch|reviews|edits|export|export-html>\n  mem map open [--port N] [--title <текст>] [--no-browser]\n  mem map build <фокус> [-limit N] [-context-chars N]\n  mem map coverage [--document <путь|document-id>] [--pages N|N-M] [--tag <тег>] [--json]\n  mem map diff [--document <путь|document-id>] [--json]\n  mem map snapshots [--document <путь|document-id>] [--json]\n  mem map corpus-diff --document <путь|document-id> [--from <revision>] [--to <revision|current>] [--json]\n  mem map restore --document <путь|document-id> --revision <revision> [--confirm <plan-digest>] [--json]\n  mem map restore --rollback <run-id> [--confirm <plan-digest>] [--json]\n  mem map restore-runs [--json] [-limit N]\n  mem map extract <фокус> [--document <путь|document-id>] [--pages N|N-M] [--tag <тег>] [-context-chars N] [-batches N] [-resume <run-id>] [--dry-run]\n  mem map extract-runs [--json] [-limit N]\n  mem map extract-run <run-id> [--json]\n  mem map analyze <фокус> [-context-chars N] [-batches N] [-resume <run-id>]\n  mem map duplicates [--json] [-threshold 0.92] [-kind claim] [-nodes N] [-limit N]\n  mem map merge-node <manifest.json>\n  mem map merges [--json] [-limit N]\n  mem map runs [--json] [-limit N] [-status running|completed]\n  mem map run <run-id> [--json]\n  mem map prune-runs -older-than <duration> [-keep N] [--dry-run|--yes] [--json]\n  mem map status [--json]\n  mem map approve <node|edge> <id> --reviewer <имя> [--comment <текст>] [--evidence-digest <sha256>]\n  mem map approve-batch <manifest.json>\n  mem map reviews [--json] [-limit N]\n  mem map edits [--json] [-limit N]\n  mem map export\n  mem map export-html <output.html> [--title <текст>] [--force]")
+		return errors.New("использование: mem map <open|build|coverage|diff|snapshots|corpus-diff|restore|restore-runs|extract|extract-runs|extract-run|analyze|duplicates|merge-node|merges|runs|run|prune-runs|status|approve|approve-batch|reviews|edits|export|export-html>\n  mem map open [--port N] [--title <текст>] [--no-browser]\n  mem map build <фокус> [-limit N] [-context-chars N]\n  mem map coverage [--document <путь|document-id>] [--pages N|N-M] [--tag <тег>] [--json]\n  mem map diff [--document <путь|document-id>] [--json]\n  mem map snapshots [--document <путь|document-id>] [--json]\n  mem map corpus-diff --document <путь|document-id> [--from <revision>] [--to <revision|current>] [--json]\n  mem map restore --document <путь|document-id> --revision <revision> [--confirm <plan-digest>] [--json]\n  mem map restore --rollback <run-id> [--confirm <plan-digest>] [--json]\n  mem map restore-runs [--json] [-limit N]\n  mem map extract <фокус> [--document <путь|document-id>] [--pages N|N-M] [--tag <тег>] [-context-chars N] [-batches N] [-resume <run-id>] [--dry-run]\n  mem map extract-runs [--json] [-limit N]\n  mem map extract-run <run-id> [--json]\n  mem map analyze <фокус> [-context-chars N] [-batches N] [-resume <run-id>]\n  mem map duplicates [--json] [-threshold 0.92] [-kind claim] [-nodes N] [-limit N]\n  mem map merge-node <manifest.json>\n  mem map merges [--json] [-limit N]\n  mem map runs [--json] [-limit N] [-status running|completed]\n  mem map run <run-id> [--json]\n  mem map prune-runs -older-than <duration> [-keep N] [--dry-run|--yes] [--json]\n  mem map status [--json]\n  mem map approve <node|edge> <id> --reviewer <имя> [--comment <текст>] [--evidence-digest <sha256>]\n  mem map approve-batch <manifest.json>\n  mem map reviews [--json] [-limit N]\n  mem map edits [--json] [-limit N]\n  mem map export\n  mem map export --format markdown|outline|opml|graphml|gexf|mermaid|obsidian --output <путь> [--title <текст>] [--force]\n  mem map export-html <output.html> [--title <текст>] [--force]")
 	}
 	switch args[0] {
 	case "open":
 		return handleMapOpen(cfg, store, args[1:])
 	case "export":
-		if len(args) != 1 {
-			return errors.New("использование: mem map export")
+		if len(args) > 1 {
+			return handleKnowledgeGraphPortableExport(store, args[1:])
 		}
 		graph, err := store.LoadKnowledgeGraph()
 		if err != nil {
@@ -3968,6 +3968,14 @@ func printUsage() {
   mem map export
       Вывести сохранённый граф знаний в JSON (stdout).
 
+  mem map export --format markdown|outline|opml|graphml|gexf|mermaid|obsidian --output <путь> [--title <текст>] [--force]
+      Экспортировать весь текущий граф, все типизированные связи и provenance.
+      GraphML/GEXF подходят для Gephi/yEd, Mermaid — для документации, OPML и
+      outline — для планов, Markdown/Obsidian — для чтения и базы заметок.
+      Content digest и source-state digest защищают выгрузку от конкурентного
+      изменения; stale/missing источники не скрываются. Существующий файл не
+      меняется без --force, активная SQLite-база и её sidecar-файлы защищены.
+
   mem map export-html <output.html> [--title <текст>] [--force]
       Создать автономную офлайн HTML-карту с force-layout, pan/zoom/drag,
       поиском, фильтрами и provenance-панелью. Существующий файл не меняется
@@ -4126,6 +4134,8 @@ func printUsage() {
   mem map reviews --json
   mem map edits
   mem map export
+  mem map export --format graphml --output knowledge-map.graphml --title "Карта проекта"
+  mem map export --format obsidian --output knowledge-map.obsidian.md
   mem map export-html knowledge-map.html --title "Карта проекта"
   mem show 50                            # одна запись целиком
   mem show --from-file docs/arch.md      # все чанки документа

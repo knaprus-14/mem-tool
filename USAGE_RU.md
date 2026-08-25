@@ -1467,6 +1467,56 @@ mem map merge-node .\merge-node.json
 mem map merges
 ```
 
+Экспортировать **всю расширенную карту знаний** в переносимый файл:
+
+```powershell
+mem map export --format markdown --output .\knowledge-map.md --title "Карта проекта"
+mem map export --format outline --output .\knowledge-map.txt
+mem map export --format opml --output .\knowledge-map.opml
+mem map export --format graphml --output .\knowledge-map.graphml
+mem map export --format gexf --output .\knowledge-map.gexf
+mem map export --format mermaid --output .\knowledge-map.mmd
+mem map export --format obsidian --output .\knowledge-map.obsidian.md
+```
+
+Назначение форматов:
+
+- `markdown` — полный читаемый справочник по слоям с текстами, связями и
+  координатами источников;
+- `outline` — простой UTF-8 план для чтения и обработки скриптами;
+- `opml` — переносимый список узлов и связей для outline-приложений;
+- `graphml` — полноценный направленный граф для yEd, Gephi и библиотек;
+- `gexf` — полноценный направленный граф для Gephi и сетевого анализа;
+- `mermaid` — `flowchart LR` для Markdown-документации;
+- `obsidian` — одна заметка с front matter, Mermaid-схемой, секциями узлов,
+  block ID и читаемыми источниками.
+
+Каждый формат содержит полный canonical provenance: узлы, связи, исходные
+anchors и вычисленное состояние `current/stale/missing`. Экспортируется весь
+граф независимо от фильтров, свёрнутых кластеров и текущего выбора. Изменение
+графа или источника между открытием live-страницы и скачиванием блокирует
+операцию: обновите страницу и повторите её. `stale`/`missing` источники
+сохраняются в файле как предупреждение, но не считаются актуальным
+подтверждением.
+
+Безопасные пределы одного полного экспорта: до 10 000 узлов, 100 000 связей
+и 128 MiB готового файла. При превышении операция завершается ошибкой до записи
+назначения; существующий файл остаётся нетронутым. Для более крупного корпуса
+разделите карту по документам или тематическим областям и экспортируйте части
+отдельно.
+
+По умолчанию существующий файл не меняется. Для осознанной атомарной замены:
+
+```powershell
+mem map export --format graphml --output .\knowledge-map.graphml --force
+```
+
+Старое `mem map export` без дополнительных флагов совместимо с прежними
+скриптами и выводит сырой JSON графа в stdout. В live-интерфейсе полный экспорт
+находится в `ЕЩЁ → ЭКСПОРТ КАРТЫ`. Экспорт только выбранной области остаётся в
+рабочем пространстве `АНАЛИЗ` и создаёт отчёт, план, checklist, CSV или
+переносимую JSON-ветвь.
+
 Создать автономную интерактивную карту:
 
 ```powershell

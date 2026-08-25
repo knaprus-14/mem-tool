@@ -45,9 +45,10 @@ const mindMapUsage = `использование: mem mindmap <open|create|list|
 
 AI scope flags: --document <путь|document-id> [--page-from N] [--page-to N],
   --query <текст>, повторяемый --entry N, --node-sources, --without-sources,
-  --limit N (1..10000), --json. Без --limit безопасный автоматический порог —
-  512 current chunks; большая область отклоняется до вызова модели. Явный
-  --limit детерминированно берёт первые N chunks и не гарантирует полный корпус.
+  --limit N (1..10000), --json. Без evidence-флагов используются все current
+  chunks активной базы. Без --limit безопасный автоматический порог — 512;
+  большая область отклоняется до вызова модели. Явный --limit детерминированно
+  берёт первые N chunks и не гарантирует полный корпус.
   --without-sources несовместим с выбором evidence; ai-sources всегда требует
   current versioned evidence. Генерирующие команды сохраняют только preview;
   карту меняет лишь ai-apply.`

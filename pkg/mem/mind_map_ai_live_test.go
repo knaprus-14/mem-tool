@@ -59,6 +59,26 @@ func TestClassicMindMapAIWorkspacePreviewThenPublish(t *testing.T) {
 	}
 }
 
+func TestClassicMindMapAIWorkspaceBlankScopeUsesActiveBase(t *testing.T) {
+	store, entries := newClassicMindMapAITestStore(t)
+	provider := &classicMindMapAIFakeProvider{answers: []string{`{"nodes":[{"ref":"n1","parent_ref":"","label":"Методы защиты СПС","summary":"Проверено по базе","body_markdown":"","kind":"topic","citations":["E1"]}]}`}}
+	workspace := NewClassicMindMapAIWorkspace(context.Background(), classicMindMapAITestService(store, provider))
+	handler := NewClassicMindMapWorkspaceHandlerWithAI(store, "session", workspace)
+
+	startedResponse := classicMindMapWorkspaceRequest(t, handler, "/api/assistant/start", "127.0.0.1:9000", "http://127.0.0.1:9000", "session", map[string]any{
+		"action": "new_map", "prompt": "Методы защиты СПС", "title": "Методы защиты СПС", "scope": map[string]any{},
+	})
+	var started classicMindMapAIWorkspaceJob
+	decodeClassicMindMapTestResponse(t, startedResponse, http.StatusOK, &started)
+	preview := waitClassicMindMapAIWorkspacePreview(t, handler, started.ID)
+	if !preview.Grounded || preview.EvidenceCount != len(entries) || len(preview.Proposals) != 1 {
+		t.Fatalf("browser blank scope did not use active base: preview=%#v entries=%d", preview, len(entries))
+	}
+	if len(provider.requests) != 1 {
+		t.Fatalf("provider calls=%d, want one", len(provider.requests))
+	}
+}
+
 func TestClassicMindMapAIWorkspaceCancelAndUnavailable(t *testing.T) {
 	store, _ := newClassicMindMapAITestStore(t)
 	provider := classicMindMapAIBlockingProvider{}

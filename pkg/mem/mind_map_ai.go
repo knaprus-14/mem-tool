@@ -539,10 +539,14 @@ func (s *Store) selectClassicMindMapAIEntriesLocked(entries []Entry, request Cla
 	}
 	selected := make(map[int64]Entry)
 	hasFilter := request.Scope.Document != "" || request.Scope.PageFrom > 0 || request.Scope.PageTo > 0 || request.Scope.Query != ""
+	wholeActiveBase := !hasFilter && len(request.Scope.EntryIDs) == 0 && !request.Scope.UseNodeSources && !request.Scope.AllowUngrounded
 	// Explicit entry IDs are an exact user selection. Document/page/query are
 	// still useful to find those chunks in the UI, but must not silently add
-	// every other matching chunk to the generation manifest.
-	if hasFilter && len(request.Scope.EntryIDs) == 0 {
+	// every other matching chunk to the generation manifest. With no evidence
+	// selector at all, the grounded UI option "Вся активная база / без фильтра"
+	// means exactly all current versioned chunks. Explicit ungrounded mode stays
+	// empty by design.
+	if (hasFilter || wholeActiveBase) && len(request.Scope.EntryIDs) == 0 {
 		for _, entry := range entries {
 			if !validClassicMindMapAIVersionedEntry(entry) {
 				continue
@@ -628,7 +632,7 @@ func (s *Store) selectClassicMindMapAIEntriesLocked(entries []Entry, request Cla
 		return result[i].ID < result[j].ID
 	})
 	if request.Scope.Limit == 0 && len(result) > DefaultClassicMindMapAIEvidenceLimit {
-		return nil, fmt.Errorf("classic mind map AI scope matched %d current chunks, exceeding the safe automatic threshold %d; narrow document/pages/query/entry_ids or explicitly set --limit (scope.limit) from 1 to %d", len(result), DefaultClassicMindMapAIEvidenceLimit, MaxClassicMindMapAIEvidence)
+		return nil, fmt.Errorf("выбрано %d актуальных фрагментов — больше безопасного автоматического порога %d; сузьте документ, страницы, поиск или точные фрагменты либо укажите явный лимит от 1 до %d в дополнительных настройках (--limit в CLI)", len(result), DefaultClassicMindMapAIEvidenceLimit, MaxClassicMindMapAIEvidence)
 	}
 	if request.Scope.Limit > 0 && len(result) > request.Scope.Limit {
 		result = result[:request.Scope.Limit]

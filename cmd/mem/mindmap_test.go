@@ -266,8 +266,8 @@ func TestMindMapAIExistingCommandsCreatePersistedPreviewsWithFakeProvider(t *tes
 func TestMindMapAIHelpDocumentsCompleteEvidenceLimit(t *testing.T) {
 	for _, fragment := range []string{
 		"--page-from N", "--page-to N", "--query <текст>", "повторяемый --entry N",
-		"--node-sources", "--without-sources", "--limit N (1..10000)", "Без --limit безопасный автоматический порог",
-		"512 current chunks",
+		"--node-sources", "--without-sources", "--limit N (1..10000)", "Без evidence-флагов используются все current",
+		"chunks активной базы", "Без --limit безопасный автоматический порог — 512",
 		"не гарантирует полный корпус",
 	} {
 		if !strings.Contains(mindMapUsage, fragment) {

@@ -88,6 +88,25 @@ func TestClassicMindMapAINewMapPreviewIsNonMutatingAndApplyIsAtomic(t *testing.T
 	}
 }
 
+func TestClassicMindMapAINewMapBlankScopeUsesWholeActiveBase(t *testing.T) {
+	store, entries := newClassicMindMapAITestStore(t)
+	provider := &classicMindMapAIFakeProvider{answers: []string{`{"nodes":[{"ref":"n1","parent_ref":"","label":"Методы защиты СПС","summary":"Обзор","body_markdown":"","kind":"topic","citations":["E1"]}]}`}}
+	preview, err := PrepareClassicMindMapAIPreview(context.Background(), classicMindMapAITestService(store, provider), ClassicMindMapAIPreviewRequest{
+		Action: ClassicMindMapAINewMap, Prompt: "Методы защиты СПС", Title: "Методы защиты СПС",
+	}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !preview.Grounded || preview.EvidenceCount != len(entries) || len(provider.requests) != 1 {
+		t.Fatalf("blank new-map scope did not use the active base: preview=%#v entries=%d requests=%d", preview, len(entries), len(provider.requests))
+	}
+	for _, entry := range entries {
+		if !strings.Contains(provider.requests[0].Prompt, entry.Text) {
+			t.Fatalf("active-base evidence #%d is missing from model prompt", entry.ID)
+		}
+	}
+}
+
 func TestClassicMindMapAIExistingActionsApplyOneRevision(t *testing.T) {
 	tests := []struct {
 		name   string
@@ -462,8 +481,8 @@ func TestClassicMindMapAIEvidenceManifestHardCapIsExplicit(t *testing.T) {
 	}
 	selector := &Store{}
 	if selected, err := selector.selectClassicMindMapAIEntriesLocked(entries, request, ClassicMindMapNode{}, ClassicMindMapDocument{}); err == nil || selected != nil ||
-		!strings.Contains(err.Error(), fmt.Sprintf("matched %d", DefaultClassicMindMapAIEvidenceLimit+1)) ||
-		!strings.Contains(err.Error(), fmt.Sprintf("threshold %d", DefaultClassicMindMapAIEvidenceLimit)) ||
+		!strings.Contains(err.Error(), fmt.Sprintf("выбрано %d", DefaultClassicMindMapAIEvidenceLimit+1)) ||
+		!strings.Contains(err.Error(), fmt.Sprintf("порога %d", DefaultClassicMindMapAIEvidenceLimit)) ||
 		!strings.Contains(err.Error(), "--limit") {
 		t.Fatalf("unbounded wide scope selected=%d err=%v", len(selected), err)
 	}

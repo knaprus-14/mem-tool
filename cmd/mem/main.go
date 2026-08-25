@@ -3844,10 +3844,11 @@ func printUsage() {
   mem mindmap export <карта> --format html|svg|png|json|opml|markdown|mermaid|obsidian --output <путь> [--force]
       AI scope flags: --document <путь|document-id>, --page-from N, --page-to N,
       --query <текст>, повторяемый --entry N, --node-sources, --without-sources,
-      --limit N (1..10000). Без --limit безопасный автоматический порог — 512
-      current chunks; большая область отклоняется до вызова модели. Явный лимит
-      выбирает первые N chunks после стабильной сортировки и не гарантирует
-      полный корпус. --without-sources нельзя совмещать с evidence-флагами, а
+      --limit N (1..10000). Без evidence-флагов используются все current chunks
+      активной базы. Без --limit безопасный автоматический порог — 512; большая
+      область отклоняется до вызова модели. Явный лимит выбирает первые N chunks
+      после стабильной сортировки и не гарантирует полный корпус.
+      --without-sources нельзя совмещать с evidence-флагами, а
       ai-sources всегда требует current versioned evidence.
       Отдельные классические карты мыслей: каждая карта — упорядоченное дерево,
       которое можно создать вручную, изменять и связывать с точными фрагментами

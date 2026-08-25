@@ -519,6 +519,13 @@ live-скачивание от конкурентного изменения г�
 JSON-отчёты содержат manifest/snapshot digests; FAIL возвращает ненулевой код,
 но никогда не меняет базу и не вызывает модель.
 
+**Готово в 1.67.0 — второй срез:** `mem map eval-labeled` сравнивает current
+claims и явные связи `contradicts` с человеческим эталоном. Строгий manifest
+задаёт алиасы, необязательные node/citation pins и пороги TP/FP/FN,
+precision/recall/F1. Проверка выполняется в одном read-only SQLite-снимке,
+показывает лишние/пропущенные объекты и фиксирует graph/evidence/snapshot
+digests без вызова модели.
+
 ## 5. Порядок ближайших реализаций
 
 1. **Готово:** этап 1.1 — loopback live-server и `mem map open`.
@@ -607,9 +614,10 @@ JSON-отчёты содержат manifest/snapshot digests; FAIL возвра�
     OPML, GraphML/GEXF, Mermaid и Obsidian с полным provenance и state pins.
 42. **Готово в 1.66.0:** первый воспроизводимый quality gate по coverage, OCR,
     состояниям evidence и размерам карты со строгим manifest и машинным JSON.
-43. **Следующий шаг:** размеченные precision/recall evals claims и
-    contradictions, профиль SQLite/рендера на больших картах, фоновые jobs и
-    backup пользовательских views.
+43. **Готово в 1.67.0:** размеченные precision/recall/F1 evals claims и
+    contradictions с детальным аудитом FP/FN и reproducible digests.
+44. **Следующий шаг:** профиль SQLite/рендера на больших картах, затем фоновые
+    jobs и backup пользовательских views.
 
 ## 6. Стоп-условия для каждого этапа
 

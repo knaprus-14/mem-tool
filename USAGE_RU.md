@@ -1334,6 +1334,122 @@ mem map eval .\quality-baseline.json --json
 фактический coverage-снимок. Сравнивать результаты нужно только при совпадающем
 manifest digest.
 
+### Размеченная оценка precision/recall
+
+Coverage отвечает на вопрос «сколько материала обработано», но не доказывает,
+что claims извлечены правильно и что найденные противоречия действительно
+существуют. Для проверки качества на небольшом вручную размеченном наборе
+используйте отдельный manifest, например `labeled-benchmark.json`:
+
+```json
+{
+  "schema_version": 1,
+  "name": "SP10 — давление и температура",
+  "scope": {
+    "document": "E:\\temp\\mem-test4\\SP10.pdf",
+    "page_from": 10,
+    "page_to": 30,
+    "tag": "АУП"
+  },
+  "matching": {
+    "claim_similarity_threshold": 0.8,
+    "statuses": ["active", "draft"]
+  },
+  "claims": [
+    {
+      "id": "working-pressure",
+      "text": "Рабочее давление установки равно 10 бар",
+      "aliases": ["Рабочее давление составляет 10 бар"]
+    },
+    {
+      "id": "pressure-limit",
+      "text": "Рабочее давление не должно превышать 8 бар",
+      "node_id": "claim-pressure-limit",
+      "accepted_citation_ids": [
+        "cite-0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef-p22-b3-c1"
+      ]
+    },
+    {
+      "id": "temperature-limit",
+      "text": "Расчётная температура равна 40 градусам"
+    }
+  ],
+  "contradictions": [
+    {
+      "id": "pressure-conflict",
+      "left_claim_id": "working-pressure",
+      "right_claim_id": "pressure-limit"
+    }
+  ],
+  "requirements": {
+    "min_claim_precision": 90,
+    "min_claim_recall": 85,
+    "min_claim_f1": 87,
+    "min_contradiction_precision": 100,
+    "min_contradiction_recall": 90,
+    "min_contradiction_f1": 94,
+    "max_false_positive_claims": 2,
+    "max_false_negative_claims": 3,
+    "max_false_positive_contradictions": 0,
+    "max_false_negative_contradictions": 1
+  }
+}
+```
+
+`node_id` и `accepted_citation_ids` необязательны. Добавляйте их, когда эталон
+должен проверять конкретный объект либо конкретный фрагмент источника. Реальные
+значения можно взять из `mem map export` или JSON-отчёта карты. Не копируйте
+примерные значения из документации: они служат только для показа формата.
+
+Запуск:
+
+```powershell
+mem map eval-labeled .\labeled-benchmark.json
+mem map eval-labeled .\labeled-benchmark.json --json
+```
+
+Как работает сопоставление claims:
+
+1. В выбранной области берутся только узлы `claim` с перечисленными статусами и
+   хотя бы одним current evidence. По умолчанию статусы — `active` и `draft`.
+2. Текст эталона и aliases сравниваются с label, body и их объединением у узла.
+   Алгоритм — регистронезависимый token Dice по буквенно-цифровым словам. Он
+   детерминирован, не вызывает embeddings и не зависит от выбранной AI-модели.
+3. Порог по умолчанию равен `0.8`. Для разных формулировок лучше добавить
+   проверенный alias, а не чрезмерно снижать порог.
+4. Один узел может закрыть только один эталонный claim, и наоборот. Если задан
+   `node_id`, подходит только этот узел. Если заданы `accepted_citation_ids`, у
+   узла должен быть хотя бы один такой current источник в выбранной области.
+
+Связь `contradicts` считается true positive только тогда, когда оба её конца уже
+сопоставлены с указанной парой эталонных claims. Направление пары не важно.
+Повторная связь для уже закрытой пары является false positive. Analytics-узел
+`contradiction` сам по себе не засчитывается: метрика проверяет именно явное
+отношение между claims.
+
+Отчёт показывает:
+
+- `TP` — правильно найденные объекты;
+- `FP` — лишние claims или противоречия;
+- `FN` — пропущенные элементы эталона;
+- `precision = TP / (TP + FP)` — долю правильных среди найденных;
+- `recall = TP / (TP + FN)` — долю найденных среди ожидаемых;
+- `F1` — гармоническое среднее precision и recall.
+
+Если предсказаний нет, precision принимается равной 100% (нет FP); если в
+эталоне нет объектов, recall принимается равной 100% (нет FN). При пропущенном
+непустом эталоне recall и F1 всё равно становятся нулевыми. Human-отчёт
+перечисляет FP/FN и для найденных объектов показывает файл и страницу. JSON
+дополнительно содержит
+matches, текущие evidence, `manifest_digest`, `graph_digest`,
+`evidence_state_digest` и `snapshot_digest`.
+
+Manifest ограничен 8 MiB и 2000 claims / 5000 contradictions. Неизвестные поля,
+дубли ID и пар, неизвестные ссылки, неверные citation ID, лишний JSON и
+некорректные пороги отклоняются до оценки. Команда read-only, не вызывает модель
+и не изменяет статусы карты. Непройденный gate печатает полный отчёт, затем
+возвращает код процесса 1 — это подходит для PowerShell и CI.
+
 Сравнить сохранённые выдержки карты с текущей ревизией базы:
 
 ```powershell

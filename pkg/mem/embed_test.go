@@ -75,3 +75,29 @@ func TestGetEmbeddingContextCancelsInflightOllamaRequest(t *testing.T) {
 		t.Fatal("embedding request did not stop after cancellation")
 	}
 }
+
+func TestGetEmbeddingRejectsOversizedHTTPResponse(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(strings.Repeat("x", maxEmbeddingResponseBytes+1)))
+	}))
+	defer server.Close()
+	cfg := DefaultLocalConfig()
+	cfg.Ollama.BaseURL = server.URL
+	if _, err := GetEmbedding(cfg, "bounded response"); err == nil || !strings.Contains(err.Error(), "превышает лимит") {
+		t.Fatalf("oversized response error=%v", err)
+	}
+}
+
+func TestGetEmbeddingRejectsExcessiveDimensions(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"embedding":[` + strings.Repeat("0,", maxEmbeddingDimensions) + `0]}`))
+	}))
+	defer server.Close()
+	cfg := DefaultLocalConfig()
+	cfg.Ollama.BaseURL = server.URL
+	if _, err := GetEmbedding(cfg, "bounded dimensions"); err == nil || !strings.Contains(err.Error(), "слишком большая размерность") {
+		t.Fatalf("excessive dimensions error=%v", err)
+	}
+}

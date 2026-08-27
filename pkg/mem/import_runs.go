@@ -379,7 +379,7 @@ func (s *Store) DocumentImportRuns(selector, status string, limit int) ([]Docume
 		if value, err := filepath.Abs(selector); err == nil {
 			absolute = filepath.Clean(value)
 		}
-		where = append(where, `(LOWER(requested_path)=LOWER(?) OR LOWER(source_path)=LOWER(?) OR document_id=?)`)
+		where = append(where, `(`+sourcePathSQLPredicate("requested_path")+` OR `+sourcePathSQLPredicate("source_path")+` OR document_id=?)`)
 		args = append(args, absolute, absolute, selector)
 	}
 	if status != "" {

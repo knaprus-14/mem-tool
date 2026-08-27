@@ -728,7 +728,7 @@ func tuiCommandMenuItems() []commandMenuEntry {
 		{"map diff [--document путь] [--json]", "сравнить evidence карты с текущими ревизиями"},
 		{"map snapshots [--document путь] [--json]", "показать неизменяемые снимки ревизий"},
 		{"map corpus-diff --document путь [флаги]", "полный diff chunks между ревизиями"},
-		{"map restore --document путь --revision rev", "preview безопасного восстановления"},
+		{"map restore --document путь --revision dhs-...", "preview безопасного восстановления"},
 		{"map restore --rollback <run-id>", "preview проверяемого отката"},
 		{"map restore-runs [--json] [-limit N]", "журнал восстановлений и откатов"},
 		{"map extract <фокус> [флаги]", "пакетно разобрать непокрытые chunks"},

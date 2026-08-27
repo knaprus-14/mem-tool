@@ -134,3 +134,144 @@ VALUES ('Legacy', 'legacy text', '[]', '2026-01-01T00:00:00Z', 'test', 1, x'0000
 		t.Fatal("migration did not add knowledge_reviews.reverts_review_id")
 	}
 }
+
+func TestNewStoreMigratesLegacyDocumentHistoryExactlyOnce(t *testing.T) {
+	dir := t.TempDir()
+	seed, err := NewStore(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	chunks := validStructuredChunks()
+	created := "2026-01-02T03:04:05Z"
+	tx, err := seed.db.Begin()
+	if err != nil {
+		seed.Close()
+		t.Fatal(err)
+	}
+	graphID, _, err := writeKnowledgeGraphSnapshotTx(tx, KnowledgeGraph{}, created)
+	if err != nil {
+		_ = tx.Rollback()
+		seed.Close()
+		t.Fatal(err)
+	}
+	first := chunks[0]
+	if _, err := tx.Exec(`INSERT INTO document_history_snapshots
+(document_id, document_revision, source_path, media_type, chunk_count,
+ graph_snapshot_id, reason, created) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+		first.Provenance.DocumentID, first.Provenance.DocumentRevision,
+		first.Provenance.SourcePath, first.Provenance.MediaType, len(chunks),
+		graphID, "legacy_fixture", created); err != nil {
+		_ = tx.Rollback()
+		seed.Close()
+		t.Fatal(err)
+	}
+	for _, chunk := range chunks {
+		embedding, err := floatsToBytes(chunk.Embedding)
+		if err != nil {
+			_ = tx.Rollback()
+			seed.Close()
+			t.Fatal(err)
+		}
+		p := chunk.Provenance
+		if _, err := tx.Exec(`INSERT INTO document_history_chunks
+(document_id, document_revision, chunk_index, title, text, tags, created, backend,
+ embedding_model, embedding_space, dims, embedding, source_file, chunk_label,
+ total_chunks, chunk_hash, source_path, media_type, page, block_index, block_marker,
+ block_chunk_index, block_total_chunks, extraction_method, ocr_confidence, warnings, important)
+VALUES (?, ?, ?, ?, ?, '[]', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, '[]', ?)`,
+			p.DocumentID, p.DocumentRevision, chunk.ChunkIndex, chunk.Title, chunk.Text,
+			created, chunk.Backend, chunk.EmbeddingModel, chunk.EmbeddingSpace,
+			len(chunk.Embedding), embedding, p.SourcePath, chunk.ChunkLabel,
+			chunk.TotalChunks, p.ChunkHash, p.SourcePath, p.MediaType, p.Page,
+			p.BlockIndex, p.BlockMarker, p.BlockChunkIndex, p.BlockTotalChunks,
+			p.ExtractionMethod, p.OCRConfidence, boolToInt(chunk.Important)); err != nil {
+			_ = tx.Rollback()
+			seed.Close()
+			t.Fatal(err)
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		seed.Close()
+		t.Fatal(err)
+	}
+	if err := seed.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	firstOpen, err := NewStore(dir)
+	if err != nil {
+		t.Fatalf("first legacy history migration: %v", err)
+	}
+	snapshots, err := firstOpen.ListDocumentHistorySnapshots(first.Provenance.SourcePath)
+	if err != nil {
+		firstOpen.Close()
+		t.Fatal(err)
+	}
+	if len(snapshots) != 1 || snapshots[0].ChunkCount != len(chunks) || snapshots[0].SnapshotID == "" {
+		firstOpen.Close()
+		t.Fatalf("legacy history was not migrated exactly once: %#v", snapshots)
+	}
+	wantSnapshotID := snapshots[0].SnapshotID
+	var wantMigrated string
+	if err := firstOpen.db.QueryRow(`SELECT migrated FROM document_history_legacy_migrations
+WHERE document_id = ? AND document_revision = ?`, first.Provenance.DocumentID,
+		first.Provenance.DocumentRevision).Scan(&wantMigrated); err != nil {
+		firstOpen.Close()
+		t.Fatalf("read legacy migration marker: %v", err)
+	}
+	if wantMigrated == "" {
+		firstOpen.Close()
+		t.Fatal("legacy migration marker has an empty timestamp")
+	}
+
+	// If a subsequent NewStore attempted to decode this already-migrated row,
+	// the malformed float BLOB would fail startup. The immutable legacy trigger
+	// is dropped only to construct this regression fixture; initSchema recreates
+	// it before the second migration pass.
+	if _, err := firstOpen.db.Exec(`DROP TRIGGER document_history_chunks_no_update`); err != nil {
+		firstOpen.Close()
+		t.Fatal(err)
+	}
+	if _, err := firstOpen.db.Exec(`UPDATE document_history_chunks SET embedding = x'00'
+WHERE document_id = ? AND document_revision = ?`, first.Provenance.DocumentID,
+		first.Provenance.DocumentRevision); err != nil {
+		firstOpen.Close()
+		t.Fatal(err)
+	}
+	if err := firstOpen.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	secondOpen, err := NewStore(dir)
+	if err != nil {
+		t.Fatalf("repeat NewStore re-decoded migrated legacy chunks: %v", err)
+	}
+	defer secondOpen.Close()
+
+	var versionCount, versionChunkCount, markerCount int
+	if err := secondOpen.db.QueryRow(`SELECT COUNT(*) FROM document_history_versions`).Scan(&versionCount); err != nil {
+		t.Fatal(err)
+	}
+	if err := secondOpen.db.QueryRow(`SELECT COUNT(*) FROM document_history_version_chunks`).Scan(&versionChunkCount); err != nil {
+		t.Fatal(err)
+	}
+	if err := secondOpen.db.QueryRow(`SELECT COUNT(*) FROM document_history_legacy_migrations`).Scan(&markerCount); err != nil {
+		t.Fatal(err)
+	}
+	if versionCount != 1 || versionChunkCount != len(chunks) || markerCount != 1 {
+		t.Fatalf("repeat NewStore duplicated legacy history: versions=%d chunks=%d markers=%d",
+			versionCount, versionChunkCount, markerCount)
+	}
+	var gotSnapshotID, gotMigrated string
+	if err := secondOpen.db.QueryRow(`SELECT snapshot_id, migrated
+FROM document_history_legacy_migrations WHERE document_id = ? AND document_revision = ?`,
+		first.Provenance.DocumentID, first.Provenance.DocumentRevision).
+		Scan(&gotSnapshotID, &gotMigrated); err != nil {
+		t.Fatal(err)
+	}
+	if gotSnapshotID != wantSnapshotID || gotMigrated != wantMigrated {
+		t.Fatalf("repeat NewStore rewrote migration marker: id=%q/%q migrated=%q/%q",
+			gotSnapshotID, wantSnapshotID, gotMigrated, wantMigrated)
+	}
+}

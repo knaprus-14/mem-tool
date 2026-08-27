@@ -62,6 +62,7 @@ func handleClassicMindMapOpen(cfg *Config, store *Store, args []string) error {
 	server := &http.Server{
 		Handler:           mem.NewClassicMindMapWorkspaceHandlerWithAI(store, sessionToken, assistant),
 		ReadHeaderTimeout: 5 * time.Second,
+		ReadTimeout:       30 * time.Second,
 		IdleTimeout:       60 * time.Second,
 		MaxHeaderBytes:    32 << 10,
 	}
@@ -73,7 +74,17 @@ func handleClassicMindMapOpen(cfg *Config, store *Store, args []string) error {
 			fmt.Fprintln(os.Stderr, "[MINDMAP OPEN] Откройте адрес вручную:", url)
 		}
 	}
-	return serveClassicMindMap(ctx, server, listener)
+	serveErr := serveClassicMindMap(ctx, server, listener)
+	var assistantErr error
+	if assistant != nil {
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		assistantErr = assistant.Shutdown(shutdownCtx)
+		cancel()
+		if assistantErr != nil {
+			assistantErr = fmt.Errorf("mindmap open: stop AI workspace: %w", assistantErr)
+		}
+	}
+	return errors.Join(serveErr, assistantErr)
 }
 
 func parseMindMapOpenOptions(args []string) (mindMapOpenOptions, error) {

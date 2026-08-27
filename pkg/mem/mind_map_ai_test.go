@@ -518,3 +518,23 @@ func TestClassicMindMapAIEvidenceManifestHardCapIsExplicit(t *testing.T) {
 		t.Fatalf("over-maximum limit err=%v provider_calls=%d", err, len(provider.requests))
 	}
 }
+
+func TestClassicMindMapAIExpansionHonorsTotalNodeAndDepthLimits(t *testing.T) {
+	tooMany := make([]ClassicMindMapNode, MaxClassicMindMapNodes)
+	if err := validateClassicMindMapAIExpansionLimits(tooMany, "root", []ClassicMindMapAIProposal{{ID: "p1"}}); err == nil ||
+		!strings.Contains(err.Error(), fmt.Sprint(MaxClassicMindMapNodes)) {
+		t.Fatalf("AI node-count limit error=%v", err)
+	}
+
+	deep := make([]ClassicMindMapNode, MaxClassicMindMapDepth)
+	for i := range deep {
+		deep[i].ID = fmt.Sprintf("node-%d", i)
+		if i > 0 {
+			deep[i].ParentID = deep[i-1].ID
+		}
+	}
+	if err := validateClassicMindMapAIExpansionLimits(deep, deep[len(deep)-1].ID, []ClassicMindMapAIProposal{{ID: "p1"}}); err == nil ||
+		!strings.Contains(err.Error(), fmt.Sprint(MaxClassicMindMapDepth)) {
+		t.Fatalf("AI depth limit error=%v", err)
+	}
+}

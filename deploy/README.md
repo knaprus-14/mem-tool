@@ -44,6 +44,12 @@ install -o root -g root -m 0755 /tmp/mem-bot /opt/mem-bot/mem-bot
 cat > /opt/mem-bot/.env <<'EOF'
 TELEGRAM_BOT_TOKEN=ТВОЙ_ТОКЕН_СЮДА
 MEM_BOT_DATA_DIR=/opt/mem-bot/data
+MEM_BOT_ALLOWED_USER_IDS=123456789
+MEM_BOT_ALLOW_PUBLIC=false
+MEM_BOT_RATE_LIMIT_PER_MINUTE=30
+MEM_BOT_GLOBAL_RATE_LIMIT_PER_MINUTE=120
+MEM_BOT_MAX_ENTRIES_PER_USER=10000
+MEM_BOT_MAX_USERS=100
 EOF
 chown root:membot /opt/mem-bot/.env
 chmod 0640 /opt/mem-bot/.env
@@ -54,6 +60,14 @@ rm -f /tmp/mem-bot /tmp/mem-bot.service
 systemctl daemon-reload
 systemctl enable --now mem-bot
 ```
+
+`MEM_BOT_ALLOWED_USER_IDS` — список положительных Telegram user ID через
+запятую. По умолчанию бот запускается с закрытым доступом: пустой allowlist
+считается ошибкой конфигурации. Публичный режим разрешается только явно через
+`MEM_BOT_ALLOW_PUBLIC=true` при пустом allowlist; в нём все четыре числовых
+лимита выше должны оставаться положительными. Бот принимает данные только из
+личных чатов, поэтому групповые команды не получают доступ к пользовательской
+базе.
 
 Проверить формат бинаря, состояние и логи:
 

@@ -174,8 +174,11 @@ func (s *Store) loadCorpusAnalysisCandidates(focus string) ([]corpusAnalysisCand
 	candidates := make([]corpusAnalysisCandidate, 0)
 	skippedNonCurrent := 0
 	documents := make(map[string]bool)
-	s.mu.RLock()
-	defer s.mu.RUnlock()
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if err := s.refreshEntryCacheIfStaleUnlocked("corpus analysis candidates"); err != nil {
+		return nil, 0, 0, err
+	}
 	for _, node := range graph.Nodes {
 		if node.Status != KnowledgeStatusActive || node.Kind != KnowledgeNodeClaim {
 			continue

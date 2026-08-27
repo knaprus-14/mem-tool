@@ -94,14 +94,7 @@ func LoadConfig() (*Config, error) {
 // SaveConfig сохраняет конфиг в config.json
 func SaveConfig(cfg *Config) error {
 	path := ConfigPath()
-	if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
-		return err
-	}
-	data, err := json.MarshalIndent(cfg, "", "  ")
-	if err != nil {
-		return err
-	}
-	return os.WriteFile(path, data, 0600)
+	return saveConfigFile(path, cfg)
 }
 
 // === Per-directory варианты (для бота / multi-user) ===
@@ -126,13 +119,55 @@ func LoadConfigIn(dir string) (*Config, error) {
 
 // SaveConfigIn сохраняет конфиг в config.json внутри указанной директории.
 func SaveConfigIn(dir string, cfg *Config) error {
+	path := ConfigPathIn(dir)
+	return saveConfigFile(path, cfg)
+}
+
+// saveConfigFile replaces the configuration atomically. Writing directly to
+// config.json can truncate the only copy when a process, filesystem, or disk
+// fails halfway through the write. The temporary file lives in the same
+// directory so the final replace cannot cross filesystems.
+func saveConfigFile(path string, cfg *Config) error {
+	if cfg == nil {
+		return fmt.Errorf("сохранение конфига: nil config")
+	}
+	dir := filepath.Dir(path)
 	if err := os.MkdirAll(dir, 0700); err != nil {
 		return err
 	}
-	path := ConfigPathIn(dir)
 	data, err := json.MarshalIndent(cfg, "", "  ")
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(path, data, 0600)
+	data = append(data, '\n')
+
+	tmp, err := os.CreateTemp(dir, ".config-*.tmp")
+	if err != nil {
+		return fmt.Errorf("создание временного конфига: %w", err)
+	}
+	tmpPath := tmp.Name()
+	keepTemp := true
+	defer func() {
+		_ = tmp.Close()
+		if keepTemp {
+			_ = os.Remove(tmpPath)
+		}
+	}()
+	if err := tmp.Chmod(0600); err != nil {
+		return fmt.Errorf("права временного конфига: %w", err)
+	}
+	if _, err := tmp.Write(data); err != nil {
+		return fmt.Errorf("запись временного конфига: %w", err)
+	}
+	if err := tmp.Sync(); err != nil {
+		return fmt.Errorf("синхронизация временного конфига: %w", err)
+	}
+	if err := tmp.Close(); err != nil {
+		return fmt.Errorf("закрытие временного конфига: %w", err)
+	}
+	if err := replaceAtomicFile(tmpPath, path); err != nil {
+		return fmt.Errorf("атомарная замена конфига: %w", err)
+	}
+	keepTemp = false
+	return nil
 }

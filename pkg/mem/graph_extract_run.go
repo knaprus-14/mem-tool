@@ -340,7 +340,10 @@ func (s *Store) RebuildKnowledgeExtractionRunPlan(runID, focus string) (Knowledg
 	if report.SnapshotDigest != run.SnapshotDigest {
 		return KnowledgeExtractionJobPlan{}, errors.New("extraction source snapshot changed; the stored run cannot be resumed")
 	}
-	entries := s.knowledgeCoverageEntries(run.Scope)
+	entries, err := s.knowledgeCoverageEntries(run.Scope)
+	if err != nil {
+		return KnowledgeExtractionJobPlan{}, err
+	}
 	byCitation := make(map[string]Entry, len(entries))
 	for _, entry := range entries {
 		citationID, _ := CitationForEntry(entry)

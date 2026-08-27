@@ -60,6 +60,9 @@ func (s *Store) LexicalMode() string {
 func (s *Store) SearchWithOptions(options SearchOptions) ([]Entry, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if err := s.refreshEntryCacheIfStaleUnlocked("hybrid search"); err != nil {
+		return nil, err
+	}
 
 	query := strings.TrimSpace(options.Query)
 	lexicalScores := make(map[int64]float64)
@@ -213,26 +216,73 @@ func normalizeCosine(score float64) float64 {
 
 func (s *Store) lexicalScoresLocked(query string) (map[int64]float64, error) {
 	if s.lexicalMode == lexicalFTS5 {
-		if s.lexicalDirty {
-			if err := s.rebuildFTSLocked(); err != nil {
-				s.lexicalMode = lexicalFallback
+		const maxFTSSnapshotAttempts = 4
+		for attempt := 0; attempt < maxFTSSnapshotAttempts; attempt++ {
+			if s.lexicalDirty {
+				if err := s.rebuildFTSLocked(); err != nil {
+					// A busy/changing database is a per-call coordination failure,
+					// not proof that this SQLite build lost FTS5 support.
+					return fallbackLexicalScores(s.entries, query), nil
+				}
+			}
+
+			// Pin the generation check and FTS query to one SQLite read
+			// snapshot. An external entry commit after this transaction starts
+			// can be linearized after the current search; a commit before it is
+			// detected and forces a cache refresh/rebuild retry.
+			tx, err := s.db.Begin()
+			if err != nil {
 				return fallbackLexicalScores(s.entries, query), nil
 			}
-			s.lexicalDirty = false
-		}
-		scores, queryErr := s.queryFTSLocked(query)
-		if queryErr == nil {
+			databaseGeneration, generationErr := loadEntryCacheGeneration(tx)
+			if generationErr != nil {
+				_ = tx.Rollback()
+				s.invalidateEntryCacheUnlocked()
+				return nil, generationErr
+			}
+			ftsGeneration, ftsGenerationErr := loadEntryFTSGeneration(tx)
+			if ftsGenerationErr != nil {
+				_ = tx.Rollback()
+				return fallbackLexicalScores(s.entries, query), nil
+			}
+			if databaseGeneration != s.entryGeneration {
+				if rollbackErr := tx.Rollback(); rollbackErr != nil && rollbackErr != sql.ErrTxDone {
+					return nil, fmt.Errorf("refresh lexical cache: rollback stale snapshot: %w", rollbackErr)
+				}
+				if err := s.loadAll(); err != nil {
+					s.invalidateEntryCacheUnlocked()
+					return nil, fmt.Errorf("refresh lexical cache after external entry change: %w", err)
+				}
+				s.lexicalDirty = true
+				continue
+			}
+			if ftsGeneration != databaseGeneration {
+				if rollbackErr := tx.Rollback(); rollbackErr != nil && rollbackErr != sql.ErrTxDone {
+					return nil, fmt.Errorf("refresh lexical index: rollback mismatched generation: %w", rollbackErr)
+				}
+				s.lexicalDirty = true
+				continue
+			}
+			scores, queryErr := queryFTS(tx, query)
+			if queryErr != nil {
+				_ = tx.Rollback()
+				return fallbackLexicalScores(s.entries, query), nil
+			}
+			if err := tx.Commit(); err != nil {
+				return fallbackLexicalScores(s.entries, query), nil
+			}
 			return scores, nil
 		}
-		// A runtime FTS failure degrades this Store instance to a deterministic
-		// scan instead of making search unavailable.
-		s.lexicalMode = lexicalFallback
+		// Keep this call available under sustained external writer churn. The
+		// process-local entries and the fallback scores describe one coherent
+		// snapshot, while the next call is still free to retry FTS5.
+		return fallbackLexicalScores(s.entries, query), nil
 	}
 	return fallbackLexicalScores(s.entries, query), nil
 }
 
 func (s *Store) rebuildFTSLocked() error {
-	tx, err := s.db.Begin()
+	tx, cacheEntries, err := s.beginEntryMutationTx("FTS rebuild")
 	if err != nil {
 		return err
 	}
@@ -242,27 +292,45 @@ func (s *Store) rebuildFTSLocked() error {
 		}
 		return cause
 	}
-	if _, err := tx.Exec(`DELETE FROM entries_fts`); err != nil {
+	if err := rebuildFTSTx(tx, cacheEntries); err != nil {
 		return rollback(err)
 	}
-	for _, entry := range s.entries {
-		if _, err := tx.Exec(`INSERT INTO entries_fts(rowid, entry_id, title, text, tags)
-			VALUES (?, ?, ?, ?, ?)`, entry.ID, entry.ID, entry.Title, entry.Text, strings.Join(entry.Tags, " ")); err != nil {
-			return rollback(err)
-		}
+	generation, err := loadEntryCacheGeneration(tx)
+	if err != nil {
+		return rollback(err)
+	}
+	if generation != s.entryGeneration {
+		return rollback(fmt.Errorf("FTS rebuild generation %d does not match entry cache generation %d", generation, s.entryGeneration))
+	}
+	if _, err := tx.Exec(`UPDATE entry_fts_state SET generation = ? WHERE singleton = 1`, generation); err != nil {
+		return rollback(fmt.Errorf("write entry FTS generation: %w", err))
 	}
 	if err := tx.Commit(); err != nil {
 		return rollback(err)
 	}
+	s.lexicalDirty = false
 	return nil
 }
 
-func (s *Store) queryFTSLocked(query string) (map[int64]float64, error) {
+func rebuildFTSTx(tx *sql.Tx, entries []Entry) error {
+	if _, err := tx.Exec(`DELETE FROM entries_fts`); err != nil {
+		return err
+	}
+	for _, entry := range entries {
+		if _, err := tx.Exec(`INSERT INTO entries_fts(rowid, entry_id, title, text, tags)
+			VALUES (?, ?, ?, ?, ?)`, entry.ID, entry.ID, entry.Title, entry.Text, strings.Join(entry.Tags, " ")); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func queryFTS(q entryQuerier, query string) (map[int64]float64, error) {
 	match := makeFTSQuery(query)
 	if match == "" {
 		return map[int64]float64{}, nil
 	}
-	rows, err := s.db.Query(`SELECT entry_id, bm25(entries_fts)
+	rows, err := q.Query(`SELECT entry_id, bm25(entries_fts)
 		FROM entries_fts WHERE entries_fts MATCH ?
 		ORDER BY bm25(entries_fts), entry_id`, match)
 	if err != nil {

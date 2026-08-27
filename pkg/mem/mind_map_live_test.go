@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -105,6 +106,54 @@ func TestClassicMindMapWorkspaceRequiresLoopbackAndSession(t *testing.T) {
 				t.Fatalf("status=%d want=%d body=%q", response.Code, test.want, response.Body.String())
 			}
 		})
+	}
+}
+
+func TestClassicMindMapWorkspaceRejectsLegacyOverdeepMapWithoutChangingIt(t *testing.T) {
+	store, err := NewStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	doc, err := store.CreateClassicMindMap("Legacy deep map", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	tx, err := store.db.Begin()
+	if err != nil {
+		t.Fatal(err)
+	}
+	parentID := doc.Map.RootNodeID
+	now := time.Now().UTC().Format(time.RFC3339Nano)
+	for i := 1; i <= MaxClassicMindMapDepth; i++ {
+		id := fmt.Sprintf("legacy-depth-%03d", i)
+		if _, err := tx.Exec(`INSERT INTO mind_map_nodes
+(id, map_id, parent_id, position, label, summary, body_markdown, kind, origin,
+ locked, style_json, created, updated, deleted_at)
+VALUES (?, ?, ?, 0, ?, '', '', ?, ?, 0, '{}', ?, ?, '')`, id, doc.Map.ID, parentID,
+			id, ClassicMindMapNodeSubtopic, ClassicMindMapNodeImported, now, now); err != nil {
+			_ = tx.Rollback()
+			t.Fatal(err)
+		}
+		parentID = id
+	}
+	if err := tx.Commit(); err != nil {
+		t.Fatal(err)
+	}
+
+	handler := NewClassicMindMapWorkspaceHandler(store, "session")
+	response := classicMindMapWorkspaceRequest(t, handler, "/api/maps/load", "127.0.0.1:9000",
+		"http://127.0.0.1:9000", "session", map[string]any{"map_id": doc.Map.ID})
+	if response.Code != http.StatusUnprocessableEntity ||
+		!strings.Contains(response.Body.String(), "данные не изменены") {
+		t.Fatalf("legacy render guard: status=%d body=%q", response.Code, response.Body.String())
+	}
+	var count int
+	if err := store.db.QueryRow(`SELECT COUNT(*) FROM mind_map_nodes WHERE map_id=? AND deleted_at=''`, doc.Map.ID).Scan(&count); err != nil {
+		t.Fatal(err)
+	}
+	if count != MaxClassicMindMapDepth+1 {
+		t.Fatalf("legacy render guard changed stored nodes: got %d", count)
 	}
 }
 

@@ -154,44 +154,26 @@ func DefaultLocalConfig() *Config {
 // SQLite-база store.db создаётся автоматически при первом openStore.
 // Если .mem/ уже существует — возвращает ошибку.
 func InitMem() error {
-	if MemExists() {
-		return fmt.Errorf(".mem/ уже существует в текущей папке")
-	}
-
-	// Создаём директорию
-	if err := os.MkdirAll(MemDirName, 0700); err != nil {
-		return fmt.Errorf("не удалось создать %s/: %w", MemDirName, err)
-	}
-
-	// Пишем дефолтный config.json
 	cfg := DefaultLocalConfig()
-	data, err := json.MarshalIndent(cfg, "", "  ")
+	configData, err := json.MarshalIndent(cfg, "", "  ")
 	if err != nil {
 		return fmt.Errorf("ошибка сериализации config: %w", err)
 	}
-	if err := os.WriteFile(MemConfigPath(), data, 0600); err != nil {
-		// Откатываем создание директории
-		os.RemoveAll(MemDirName)
-		return fmt.Errorf("не удалось записать %s: %w", MemConfigPath(), err)
-	}
-
-	// Пишем meta.json с именем = basename(cwd) и датой создания
 	cwd, _ := os.Getwd()
-	name := filepath.Base(cwd)
 	meta := MemMeta{
-		Name:      name,
+		Name:      filepath.Base(cwd),
 		CreatedAt: time.Now().UTC().Format(time.RFC3339),
 	}
-	data, err = json.MarshalIndent(meta, "", "  ")
+	metaData, err := json.MarshalIndent(meta, "", "  ")
 	if err != nil {
-		os.RemoveAll(MemDirName)
 		return fmt.Errorf("ошибка сериализации meta: %w", err)
 	}
-	if err := os.WriteFile(MemMetaPath(), data, 0600); err != nil {
-		os.RemoveAll(MemDirName)
-		return fmt.Errorf("не удалось записать %s: %w", MemMetaPath(), err)
+	if err := createMemDirectory(MemDirName, configData, metaData); err != nil {
+		if os.IsExist(err) {
+			return fmt.Errorf(".mem/ уже существует в текущей папке")
+		}
+		return fmt.Errorf("не удалось инициализировать %s/: %w", MemDirName, err)
 	}
-
 	return nil
 }
 
@@ -239,26 +221,11 @@ func MetaPathIn(dir string) string {
 // Если уже существует — возвращает ошибку.
 // name используется в meta.json как имя базы.
 func InitMemIn(dir string, name string) error {
-	if MemExistsIn(dir) {
-		return fmt.Errorf("%s/ уже существует", dir)
-	}
-	if err := os.MkdirAll(dir, 0700); err != nil {
-		return fmt.Errorf("не удалось создать %s/: %w", dir, err)
-	}
-
-	// config.json
 	cfg := DefaultLocalConfig()
-	data, err := json.MarshalIndent(cfg, "", "  ")
+	configData, err := json.MarshalIndent(cfg, "", "  ")
 	if err != nil {
-		os.RemoveAll(dir)
 		return fmt.Errorf("сериализация config: %w", err)
 	}
-	if err := os.WriteFile(ConfigPathIn(dir), data, 0600); err != nil {
-		os.RemoveAll(dir)
-		return fmt.Errorf("запись config: %w", err)
-	}
-
-	// meta.json
 	if name == "" {
 		name = filepath.Base(filepath.Dir(dir))
 		if name == "." || name == "/" {
@@ -269,15 +236,41 @@ func InitMemIn(dir string, name string) error {
 		Name:      name,
 		CreatedAt: time.Now().UTC().Format(time.RFC3339),
 	}
-	data, err = json.MarshalIndent(meta, "", "  ")
+	metaData, err := json.MarshalIndent(meta, "", "  ")
 	if err != nil {
-		os.RemoveAll(dir)
 		return fmt.Errorf("сериализация meta: %w", err)
 	}
-	if err := os.WriteFile(MetaPathIn(dir), data, 0600); err != nil {
-		os.RemoveAll(dir)
-		return fmt.Errorf("запись meta: %w", err)
+	parent := filepath.Dir(filepath.Clean(dir))
+	if err := os.MkdirAll(parent, 0700); err != nil {
+		return fmt.Errorf("создание родительского каталога %s: %w", parent, err)
 	}
-
+	if err := createMemDirectory(dir, configData, metaData); err != nil {
+		if os.IsExist(err) {
+			return fmt.Errorf("%s/ уже существует", dir)
+		}
+		return fmt.Errorf("инициализация %s/: %w", dir, err)
+	}
 	return nil
 }
+
+func createMemDirectory(dir string, configData, metaData []byte) error {
+	if err := os.Mkdir(dir, 0700); err != nil {
+		return err
+	}
+	configPath := ConfigPathIn(dir)
+	if err := writeMemInitializationFile(configPath, configData, 0600); err != nil {
+		_ = os.Remove(configPath)
+		_ = os.Remove(dir)
+		return fmt.Errorf("запись config: %w", err)
+	}
+	metaPath := MetaPathIn(dir)
+	if err := writeMemInitializationFile(metaPath, metaData, 0600); err != nil {
+		_ = os.Remove(metaPath)
+		_ = os.Remove(configPath)
+		_ = os.Remove(dir)
+		return fmt.Errorf("запись meta: %w", err)
+	}
+	return nil
+}
+
+var writeMemInitializationFile = os.WriteFile

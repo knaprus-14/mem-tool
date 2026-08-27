@@ -67,11 +67,11 @@ func TestDocumentReplacementArchivesImmutableRevisionAndBuildsFullDiff(t *testin
 		report.ToRevision != newRevision || len(report.Changes) != 2 {
 		t.Fatalf("unexpected corpus diff: %#v", report)
 	}
-	if _, err := store.db.Exec(`UPDATE document_history_snapshots SET reason='tampered'`); err == nil ||
+	if _, err := store.db.Exec(`UPDATE document_history_versions SET reason='tampered'`); err == nil ||
 		!strings.Contains(err.Error(), "immutable") {
 		t.Fatalf("snapshot update was not blocked: %v", err)
 	}
-	if _, err := store.db.Exec(`DELETE FROM document_history_chunks`); err == nil ||
+	if _, err := store.db.Exec(`DELETE FROM document_history_version_chunks`); err == nil ||
 		!strings.Contains(err.Error(), "immutable") {
 		t.Fatalf("snapshot chunk delete was not blocked: %v", err)
 	}
@@ -87,7 +87,7 @@ func TestDocumentSnapshotFailureRollsBackReplacement(t *testing.T) {
 	if err := store.ReplaceDocumentChunks(oldChunks[0].Provenance.SourcePath, oldChunks); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := store.db.Exec(`CREATE TRIGGER fail_history_insert BEFORE INSERT ON document_history_chunks
+	if _, err := store.db.Exec(`CREATE TRIGGER fail_history_insert BEFORE INSERT ON document_history_version_chunks
 BEGIN SELECT RAISE(ABORT, 'planned snapshot failure'); END`); err != nil {
 		t.Fatal(err)
 	}
@@ -128,7 +128,7 @@ func TestCorpusRevisionDiffRequiresHistory(t *testing.T) {
 	}
 }
 
-func TestDocumentReplacementRejectsRevisionReuseWithDifferentContent(t *testing.T) {
+func TestDocumentReplacementAllowsRechunkForSameContentRevisionAndArchivesOldLayout(t *testing.T) {
 	store, err := NewStore(t.TempDir())
 	if err != nil {
 		t.Fatal(err)
@@ -138,15 +138,94 @@ func TestDocumentReplacementRejectsRevisionReuseWithDifferentContent(t *testing.
 	if err := store.ReplaceDocumentChunks(chunks[0].Provenance.SourcePath, chunks); err != nil {
 		t.Fatal(err)
 	}
-	changed := validStructuredChunks()
-	changed[0].Text = "different text under reused revision"
-	changed[0].Provenance.ChunkHash = ChunkContentHash(changed[0].Text)
-	if err := store.ReplaceDocumentChunks(changed[0].Provenance.SourcePath, changed); err == nil ||
-		!strings.Contains(err.Error(), "reused for different chunk content") {
-		t.Fatalf("expected reused revision rejection, got %v", err)
+	rechunked := []DocumentChunk{chunks[0]}
+	rechunked[0].Text = "chunk-0 chunk-1"
+	rechunked[0].Embedding = []float32{0, 1}
+	rechunked[0].ChunkIndex = 0
+	rechunked[0].TotalChunks = 1
+	rechunked[0].Provenance.ChunkHash = ChunkContentHash(rechunked[0].Text)
+	rechunked[0].Provenance.BlockChunkIndex = 0
+	rechunked[0].Provenance.BlockTotalChunks = 1
+	if err := store.ReplaceDocumentChunks(rechunked[0].Provenance.SourcePath, rechunked); err != nil {
+		t.Fatalf("same-revision rechunk failed: %v", err)
 	}
 	current := store.GetBySourceFile(chunks[0].Provenance.SourcePath)
-	if current[0].Text != chunks[0].Text {
-		t.Fatalf("rejected revision reuse changed current text: %q", current[0].Text)
+	if len(current) != 1 || current[0].Text != rechunked[0].Text ||
+		current[0].DocumentRevision != chunks[0].Provenance.DocumentRevision {
+		t.Fatalf("rechunk did not become current: %#v", current)
+	}
+	snapshots, err := store.ListDocumentHistorySnapshots(chunks[0].Provenance.SourcePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(snapshots) != 1 || snapshots[0].DocumentRevision != chunks[0].Provenance.DocumentRevision ||
+		snapshots[0].ChunkCount != len(chunks) {
+		t.Fatalf("old chunk layout was not archived: %#v", snapshots)
+	}
+	report, err := store.BuildCorpusRevisionDiff(chunks[0].Provenance.SourcePath, "", "current")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if report.FromRevision != report.ToRevision || report.ChangedChunks != 1 || report.RemovedChunks != 1 {
+		t.Fatalf("unexpected same-revision rechunk diff: %#v", report)
+	}
+	if err := store.ReplaceDocumentChunks(rechunked[0].Provenance.SourcePath, rechunked); err != nil {
+		t.Fatalf("idempotent rechunk import failed: %v", err)
+	}
+	snapshots, err = store.ListDocumentHistorySnapshots(chunks[0].Provenance.SourcePath)
+	if err != nil || len(snapshots) != 1 {
+		t.Fatalf("idempotent import created extra history: snapshots=%#v err=%v", snapshots, err)
+	}
+}
+
+func TestSameRevisionHistoryKeepsEveryDistinctChunkLayoutBySnapshotID(t *testing.T) {
+	store, err := NewStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	original := validStructuredChunks()
+	if err := store.ReplaceDocumentChunks(original[0].Provenance.SourcePath, original); err != nil {
+		t.Fatal(err)
+	}
+	combined := []DocumentChunk{original[0]}
+	combined[0].Text = "chunk-0 chunk-1"
+	combined[0].Embedding = []float32{0, 1}
+	combined[0].ChunkIndex, combined[0].TotalChunks = 0, 1
+	combined[0].Provenance.ChunkHash = ChunkContentHash(combined[0].Text)
+	combined[0].Provenance.BlockChunkIndex, combined[0].Provenance.BlockTotalChunks = 0, 1
+	if err := store.ReplaceDocumentChunks(combined[0].Provenance.SourcePath, combined); err != nil {
+		t.Fatal(err)
+	}
+	three := make([]DocumentChunk, 3)
+	for i, text := range []string{"chunk", "-0 ", "chunk-1"} {
+		three[i] = original[0]
+		three[i].Text, three[i].Embedding = text, []float32{float32(i + 1), 1}
+		three[i].ChunkIndex, three[i].TotalChunks = i, len(three)
+		three[i].Provenance.ChunkHash = ChunkContentHash(text)
+		three[i].Provenance.BlockChunkIndex, three[i].Provenance.BlockTotalChunks = i, len(three)
+	}
+	if err := store.ReplaceDocumentChunks(three[0].Provenance.SourcePath, three); err != nil {
+		t.Fatal(err)
+	}
+	snapshots, err := store.ListDocumentHistorySnapshots(original[0].Provenance.SourcePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(snapshots) != 2 || snapshots[0].SnapshotID == snapshots[1].SnapshotID ||
+		snapshots[0].DocumentRevision != snapshots[1].DocumentRevision {
+		t.Fatalf("same-revision layouts collided: %#v", snapshots)
+	}
+	latest, _, err := store.loadHistoricalDocumentEntries(original[0].Provenance.DocumentID, snapshots[0].SnapshotID)
+	if err != nil || len(latest) != 1 || latest[0].Text != combined[0].Text {
+		t.Fatalf("latest snapshot selector returned wrong layout: entries=%#v err=%v", latest, err)
+	}
+	oldest, _, err := store.loadHistoricalDocumentEntries(original[0].Provenance.DocumentID, snapshots[1].SnapshotID)
+	if err != nil || len(oldest) != len(original) || oldest[0].Text != original[0].Text {
+		t.Fatalf("oldest snapshot selector returned wrong layout: entries=%#v err=%v", oldest, err)
+	}
+	byRevision, selected, err := store.loadHistoricalDocumentEntries(original[0].Provenance.DocumentID, original[0].Provenance.DocumentRevision)
+	if err != nil || selected.SnapshotID != snapshots[0].SnapshotID || len(byRevision) != 1 {
+		t.Fatalf("legacy revision selector did not choose newest snapshot: selected=%#v entries=%#v err=%v", selected, byRevision, err)
 	}
 }

@@ -16,7 +16,10 @@ if (Test-Path $EnvFile) {
         $line = $_.Trim()
         if ($line -and -not $line.StartsWith('#')) {
             $k, $v = $line.Split('=', 2)
-            if ($k) { [Environment]::SetEnvironmentVariable($k.Trim(), $v.Trim(), 'Process') }
+            if ($k) {
+                $expandedValue = [Environment]::ExpandEnvironmentVariables($v.Trim())
+                [Environment]::SetEnvironmentVariable($k.Trim(), $expandedValue, 'Process')
+            }
         }
     }
 } else {
@@ -24,6 +27,7 @@ if (Test-Path $EnvFile) {
     Write-Host "Create file .env.local next to the script with content:" -ForegroundColor Yellow
     Write-Host "  TELEGRAM_BOT_TOKEN=your_bot_token_from_BotFather" -ForegroundColor Yellow
     Write-Host "  MEM_BOT_DATA_DIR=$DefaultDataDir" -ForegroundColor Yellow
+    Write-Host "  MEM_BOT_ALLOWED_USER_IDS=your_numeric_Telegram_user_id" -ForegroundColor Yellow
     exit 1
 }
 
@@ -57,7 +61,7 @@ New-Item -ItemType Directory -Force -Path $env:MEM_BOT_DATA_DIR | Out-Null
 
 Write-Host ""
 Write-Host "[run-bot] === mem-bot starting ===" -ForegroundColor Cyan
-Write-Host "[run-bot]   Telegram token: $($env:TELEGRAM_BOT_TOKEN.Substring(0,10))..." -ForegroundColor DarkGray
+Write-Host "[run-bot]   Telegram token: configured" -ForegroundColor DarkGray
 Write-Host "[run-bot]   Data dir:       $env:MEM_BOT_DATA_DIR" -ForegroundColor DarkGray
 Write-Host "[run-bot] Press Ctrl+C to stop the bot" -ForegroundColor DarkGray
 Write-Host ""

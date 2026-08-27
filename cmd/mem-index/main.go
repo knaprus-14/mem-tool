@@ -34,6 +34,8 @@ import (
 	"github.com/knaprus-14/mem-tool/pkg/ui"
 )
 
+var scanFileIndex = fileindex.Scan
+
 func main() {
 	os.Exit(run())
 }
@@ -42,14 +44,22 @@ func run() int {
 	args0 := os.Args[1:]
 
 	// Глобальные флаги --global / --dir.
-	useGlobal, customDir, args0 := mem.ParseGlobalFlag(args0)
+	useGlobal, customDir, args0, err := mem.ParseGlobalFlagStrict(args0)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "ошибка: %v\n", err)
+		return 1
+	}
 	if err := mem.ApplyDirSwitch(useGlobal, customDir); err != nil {
 		fmt.Fprintf(os.Stderr, "%v\n", err)
 		return 1
 	}
 
 	// Цвета.
-	colorMode, args0 := mem.ParseColorFlag(args0)
+	colorMode, args0, err := mem.ParseColorFlagStrict(args0)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "ошибка: %v\n", err)
+		return 1
+	}
 	ui.Init(colorMode)
 
 	if len(args0) == 0 {
@@ -78,9 +88,17 @@ func run() int {
 	case "rm":
 		return handleRm(args)
 	case "version":
+		if len(args) != 0 {
+			fmt.Fprintln(os.Stderr, "ошибка: команда version не принимает аргументы")
+			return 1
+		}
 		mem.PrintVersion("mem-index", buildinfo.Version)
 		return 0
 	case "help":
+		if len(args) != 0 {
+			fmt.Fprintln(os.Stderr, "ошибка: команда help не принимает аргументы")
+			return 1
+		}
 		printUsage()
 		return 0
 	}
@@ -92,11 +110,13 @@ func run() int {
 
 // parseFileIndexFlags парсит флаги mem-index. Отдельная функция от mem.parseFlags,
 // потому что набор флагов другой.
-func parseFileIndexFlags(args []string) (positional []string, enrich, noEmbed, includeStale bool, limit int, format string) {
+func parseFileIndexFlags(args []string) (positional []string, enrich, noEmbed, includeStale bool, limit int, err error) {
 	limit = 10
-	format = "text"
 	for i := 0; i < len(args); i++ {
 		switch args[i] {
+		case "--":
+			positional = append(positional, args[i+1:]...)
+			return positional, enrich, noEmbed, includeStale, limit, nil
 		case "-enrich":
 			enrich = true
 		case "-no-embed":
@@ -104,22 +124,35 @@ func parseFileIndexFlags(args []string) (positional []string, enrich, noEmbed, i
 		case "-include-stale":
 			includeStale = true
 		case "-limit":
-			if i+1 < len(args) {
-				i++
-				if n, err := strconv.Atoi(args[i]); err == nil && n > 0 {
-					limit = n
-				}
+			if i+1 >= len(args) {
+				return nil, false, false, false, 0, fmt.Errorf("флаг -limit требует положительное целое число")
 			}
-		case "-format":
-			if i+1 < len(args) {
-				i++
-				format = args[i]
+			i++
+			n, parseErr := strconv.Atoi(args[i])
+			if parseErr != nil || n <= 0 {
+				return nil, false, false, false, 0, fmt.Errorf("-limit должен быть положительным целым числом")
 			}
+			limit = n
 		default:
+			if strings.HasPrefix(args[i], "-") {
+				return nil, false, false, false, 0, fmt.Errorf("неизвестный флаг: %s", args[i])
+			}
 			positional = append(positional, args[i])
 		}
 	}
-	return
+	return positional, enrich, noEmbed, includeStale, limit, nil
+}
+
+func hasFileIndexFlag(args []string, target string) bool {
+	for _, arg := range args {
+		if arg == "--" {
+			return false
+		}
+		if arg == target {
+			return true
+		}
+	}
+	return false
 }
 
 // resolveRootDir возвращает абсолютный путь к scan-root.
@@ -139,7 +172,20 @@ func resolveRootDir(positional []string) (string, error) {
 // === handleInit ===
 
 func handleInit(args []string) int {
-	root, err := resolveRootDir(args)
+	positional, enrich, noEmbed, includeStale, _, err := parseFileIndexFlags(args)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "%v\n", err)
+		return 1
+	}
+	if enrich || noEmbed || includeStale || hasFileIndexFlag(args, "-limit") {
+		fmt.Fprintln(os.Stderr, "mem-index init не принимает флаги команды")
+		return 1
+	}
+	if len(positional) > 1 {
+		fmt.Fprintln(os.Stderr, "mem-index init принимает не более одного каталога")
+		return 1
+	}
+	root, err := resolveRootDir(positional)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "%v\n", err)
 		return 1
@@ -156,6 +202,15 @@ func handleInit(args []string) int {
 		fmt.Fprintf(os.Stderr, "ошибка init: %v\n", err)
 		return 1
 	}
+	cleanupFailedInit := true
+	defer func() {
+		if !cleanupFailedInit {
+			return
+		}
+		if err := os.RemoveAll(dir); err != nil {
+			fmt.Fprintf(os.Stderr, "ошибка отката незавершённого init %s: %v\n", dir, err)
+		}
+	}()
 
 	fmt.Printf("%s .fileindex/ создан в %s\n", ui.Mark("ok"), root)
 	fmt.Println(ui.Tag("Запускаю первый scan..."))
@@ -173,7 +228,7 @@ func handleInit(args []string) int {
 	}
 	defer store.Close()
 
-	report, err := fileindex.Scan(fileindex.ScanOptions{
+	report, err := scanFileIndex(fileindex.ScanOptions{
 		RootDir:  root,
 		Enrich:   false,
 		Embed:    true,
@@ -187,6 +242,7 @@ func handleInit(args []string) int {
 	if len(report.Errors) > 0 {
 		return 1
 	}
+	cleanupFailedInit = false
 	fmt.Println()
 	fmt.Printf("Готово. Аннотации пока пустые — запустите: mem-index enrich %s\n", root)
 	return 0
@@ -195,14 +251,26 @@ func handleInit(args []string) int {
 // === handleScan ===
 
 func handleScan(args []string) int {
-	positional, enrich, noEmbed, _, _, _ := parseFileIndexFlags(args)
+	positional, enrich, noEmbed, includeStale, _, err := parseFileIndexFlags(args)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "%v\n", err)
+		return 1
+	}
+	if includeStale || hasFileIndexFlag(args, "-limit") {
+		fmt.Fprintln(os.Stderr, "к scan применимы только -enrich и -no-embed")
+		return 1
+	}
+	if len(positional) > 1 {
+		fmt.Fprintln(os.Stderr, "mem-index scan принимает не более одного каталога")
+		return 1
+	}
 	root, err := resolveRootDir(positional)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "%v\n", err)
 		return 1
 	}
 	dir := filepath.Join(root, fileindex.FileIndexDirName)
-	if !fileindex.FileIndexExistsIn(dir) {
+	if !fileIndexInitialized(dir) {
 		fmt.Fprintf(os.Stderr, ".fileindex/ не найден в %s — сначала запустите: mem-index init %s\n", root, root)
 		return 1
 	}
@@ -219,7 +287,7 @@ func handleScan(args []string) int {
 	}
 	defer store.Close()
 
-	report, err := fileindex.Scan(fileindex.ScanOptions{
+	report, err := scanFileIndex(fileindex.ScanOptions{
 		RootDir:  root,
 		Enrich:   enrich,
 		Embed:    !noEmbed,
@@ -239,14 +307,26 @@ func handleScan(args []string) int {
 // === handleEnrich ===
 
 func handleEnrich(args []string) int {
-	positional, _, _, _, _, _ := parseFileIndexFlags(args)
+	positional, enrich, noEmbed, includeStale, _, err := parseFileIndexFlags(args)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "%v\n", err)
+		return 1
+	}
+	if enrich || noEmbed || includeStale || hasFileIndexFlag(args, "-limit") {
+		fmt.Fprintln(os.Stderr, "флаги -enrich, -no-embed и -include-stale неприменимы к enrich")
+		return 1
+	}
+	if len(positional) > 1 {
+		fmt.Fprintln(os.Stderr, "mem-index enrich принимает не более одного каталога")
+		return 1
+	}
 	root, err := resolveRootDir(positional)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "%v\n", err)
 		return 1
 	}
 	dir := filepath.Join(root, fileindex.FileIndexDirName)
-	if !fileindex.FileIndexExistsIn(dir) {
+	if !fileIndexInitialized(dir) {
 		fmt.Fprintf(os.Stderr, ".fileindex/ не найден в %s — сначала запустите: mem-index init %s\n", root, root)
 		return 1
 	}
@@ -264,7 +344,7 @@ func handleEnrich(args []string) int {
 	defer store.Close()
 
 	fmt.Println(ui.Tag("Извлекаю аннотации (FB2/PDF/EPUB/DjVu/TXT/MD)..."))
-	report, err := fileindex.Scan(fileindex.ScanOptions{
+	report, err := scanFileIndex(fileindex.ScanOptions{
 		RootDir:  root,
 		Enrich:   true,
 		Embed:    true,
@@ -284,7 +364,15 @@ func handleEnrich(args []string) int {
 // === handleFind ===
 
 func handleFind(args []string) int {
-	positional, _, _, _, limit, _ := parseFileIndexFlags(args)
+	positional, enrich, noEmbed, includeStale, limit, err := parseFileIndexFlags(args)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "%v\n", err)
+		return 1
+	}
+	if enrich || noEmbed || includeStale {
+		fmt.Fprintln(os.Stderr, "к find применим только флаг -limit")
+		return 1
+	}
 	if len(positional) == 0 {
 		fmt.Fprintln(os.Stderr, "укажи поисковый запрос\nПример: mem-index find \"книга про роботов\"")
 		return 1
@@ -292,7 +380,7 @@ func handleFind(args []string) int {
 	query := strings.Join(positional, " ")
 
 	dir := fileindex.FileIndexDir()
-	if !fileindex.FileIndexExists() {
+	if !fileIndexInitialized(dir) {
 		fmt.Fprintln(os.Stderr, ".fileindex/ не найден — сначала запустите: mem-index init <dir>")
 		return 1
 	}
@@ -357,10 +445,22 @@ func handleFind(args []string) int {
 // === handleList ===
 
 func handleList(args []string) int {
-	_, _, _, includeStale, limit, _ := parseFileIndexFlags(args)
+	positional, enrich, noEmbed, includeStale, limit, err := parseFileIndexFlags(args)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "%v\n", err)
+		return 1
+	}
+	if enrich || noEmbed {
+		fmt.Fprintln(os.Stderr, "к list применимы только -limit и -include-stale")
+		return 1
+	}
+	if len(positional) != 0 {
+		fmt.Fprintf(os.Stderr, "лишний аргумент: %s\n", positional[0])
+		return 1
+	}
 
 	dir := fileindex.FileIndexDir()
-	if !fileindex.FileIndexExists() {
+	if !fileIndexInitialized(dir) {
 		fmt.Fprintln(os.Stderr, ".fileindex/ не найден")
 		return 1
 	}
@@ -404,7 +504,7 @@ func handleList(args []string) int {
 // === handleShow ===
 
 func handleShow(args []string) int {
-	if len(args) == 0 {
+	if len(args) != 1 {
 		fmt.Fprintln(os.Stderr, "укажи id записи\nПример: mem-index show 42")
 		return 1
 	}
@@ -415,6 +515,10 @@ func handleShow(args []string) int {
 	}
 
 	dir := fileindex.FileIndexDir()
+	if !fileIndexInitialized(dir) {
+		fmt.Fprintln(os.Stderr, ".fileindex/ не найден — сначала запустите: mem-index init <dir>")
+		return 1
+	}
 	store, err := fileindex.NewStore(dir)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "ошибка открытия store: %v\n", err)
@@ -460,7 +564,15 @@ func handleShow(args []string) int {
 // === handleStats ===
 
 func handleStats(args []string) int {
+	if len(args) != 0 {
+		fmt.Fprintf(os.Stderr, "лишний аргумент: %s\n", args[0])
+		return 1
+	}
 	dir := fileindex.FileIndexDir()
+	if !fileIndexInitialized(dir) {
+		fmt.Fprintln(os.Stderr, ".fileindex/ не найден — сначала запустите: mem-index init <dir>")
+		return 1
+	}
 	store, err := fileindex.NewStore(dir)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "ошибка открытия store: %v\n", err)
@@ -489,7 +601,7 @@ func handleStats(args []string) int {
 // === handleRm ===
 
 func handleRm(args []string) int {
-	if len(args) == 0 {
+	if len(args) != 1 {
 		fmt.Fprintln(os.Stderr, "укажи id записи\nПример: mem-index rm 42")
 		return 1
 	}
@@ -499,6 +611,10 @@ func handleRm(args []string) int {
 		return 1
 	}
 	dir := fileindex.FileIndexDir()
+	if !fileIndexInitialized(dir) {
+		fmt.Fprintln(os.Stderr, ".fileindex/ не найден — сначала запустите: mem-index init <dir>")
+		return 1
+	}
 	store, err := fileindex.NewStore(dir)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "ошибка открытия store: %v\n", err)
@@ -511,6 +627,20 @@ func handleRm(args []string) int {
 	}
 	fmt.Printf("%s Запись #%d удалена\n", ui.Mark("ok"), id)
 	return 0
+}
+
+func fileIndexInitialized(dir string) bool {
+	for _, path := range []string{
+		fileindex.FileIndexConfigPathIn(dir),
+		fileindex.FileIndexMetaPathIn(dir),
+		fileindex.FileIndexStorePathIn(dir),
+	} {
+		info, err := os.Stat(path)
+		if err != nil || !info.Mode().IsRegular() {
+			return false
+		}
+	}
+	return true
 }
 
 // === Утилиты ===

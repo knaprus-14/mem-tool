@@ -153,8 +153,11 @@ func (s *Store) DetectKnowledgeNodeDuplicates(vectors []KnowledgeNodeVector, emb
 		embedding []float32
 	}
 	eligible := make([]candidateNode, 0)
-	s.mu.RLock()
-	defer s.mu.RUnlock()
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if err := s.refreshEntryCacheIfStaleUnlocked("knowledge duplicate detection"); err != nil {
+		return KnowledgeDuplicateReport{}, err
+	}
 	for _, node := range graph.Nodes {
 		if kind != "" && node.Kind != kind {
 			continue
@@ -317,8 +320,13 @@ func (s *Store) MergeKnowledgeDuplicate(request KnowledgeNodeMergeRequest) (Know
 		return rollback(ErrKnowledgeEvidenceChanged)
 	}
 	for _, node := range []KnowledgeNode{source, target} {
-		for _, anchor := range node.Evidence {
-			if resolution := resolveEvidenceAnchorFromEntries(anchor, s.entries); resolution.State != EvidenceCurrent {
+		resolutions, resolveErr := resolveEvidenceAnchorsFromQuerier(tx, node.Evidence)
+		if resolveErr != nil {
+			return rollback(fmt.Errorf("read current duplicate evidence: %w", resolveErr))
+		}
+		for _, resolution := range resolutions {
+			if resolution.State != EvidenceCurrent {
+				anchor := resolution.Anchor
 				return rollback(fmt.Errorf("%w: %s is %s", ErrKnowledgeEvidenceNotCurrent, anchor.CitationID, resolution.State))
 			}
 		}
@@ -450,8 +458,11 @@ func (s *Store) ListKnowledgeNodeMerges(limit int) ([]KnowledgeNodeMergeRecord, 
 	if limit < 1 || limit > 1000 {
 		return nil, errors.New("knowledge node merge limit must be between 1 and 1000")
 	}
-	s.mu.RLock()
-	defer s.mu.RUnlock()
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if err := s.refreshEntryCacheIfStaleUnlocked("knowledge node merge listing"); err != nil {
+		return nil, err
+	}
 	rows, err := s.db.Query(`SELECT id, source_node, target_node, kind, similarity, embedding_space,
 		source_node_digest, target_node_digest, source_evidence_digest, target_evidence_digest,
 		reviewer, comment, created FROM knowledge_node_merges ORDER BY id DESC LIMIT ?`, limit)
@@ -523,7 +534,7 @@ func knowledgeNodeMergeState(q interface {
 
 // invalidateChangedKnowledgeNodeMerges reopens generated objects when the
 // semantic content or evidence pinned by their latest merge changes.
-func invalidateChangedKnowledgeNodeMerges(tx *sql.Tx, entries []Entry) error {
+func invalidateChangedKnowledgeNodeMerges(tx *sql.Tx) error {
 	rows, err := tx.Query(`SELECT id, source_node, target_node, kind, similarity, embedding_space,
 		source_node_digest, target_node_digest, source_evidence_digest, target_evidence_digest,
 		reviewer, comment, created FROM knowledge_node_merges
@@ -548,6 +559,16 @@ func invalidateChangedKnowledgeNodeMerges(tx *sql.Tx, entries []Entry) error {
 	}
 	now := time.Now().UTC().Format(time.RFC3339)
 	for _, record := range records {
+		source, sourceErr := loadKnowledgeNode(tx, record.SourceID)
+		target, targetErr := loadKnowledgeNode(tx, record.TargetID)
+		entries := []Entry(nil)
+		if sourceErr == nil && targetErr == nil {
+			anchors := append(append([]EvidenceAnchor(nil), source.Evidence...), target.Evidence...)
+			entries, err = loadKnowledgeGraphEntriesForAnchors(tx, anchors)
+			if err != nil {
+				return fmt.Errorf("read merged node evidence: %w", err)
+			}
+		}
 		current, _ := knowledgeNodeMergeState(tx, entries, record)
 		if current {
 			continue

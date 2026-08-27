@@ -40,6 +40,43 @@ func TestDocumentImportReportsAtomicEmbeddingProgress(t *testing.T) {
 	}
 }
 
+func TestDocumentReimportRechunksUnchangedContentAfterConfigChange(t *testing.T) {
+	root := t.TempDir()
+	doc, err := ingest.ParseMarkdown(filepath.Join(root, "rechunk.md"),
+		"The same extracted source content is intentionally long enough to produce several fixed chunks.")
+	if err != nil {
+		t.Fatal(err)
+	}
+	store, err := NewStore(filepath.Join(root, "db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+
+	first, err := importExtractedDocumentWithEmbedder(testConfig(24, "fixed"), store, doc, ImportOptions{}, fakeEmbedding)
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := importExtractedDocumentWithEmbedder(testConfig(1000, "paragraph"), store, doc, ImportOptions{}, fakeEmbedding)
+	if err != nil {
+		t.Fatalf("unchanged document could not be re-chunked: %v", err)
+	}
+	if first.DocumentRevision != doc.Revision || second.DocumentRevision != doc.Revision || first.Chunks <= second.Chunks {
+		t.Fatalf("unexpected re-chunk results: first=%#v second=%#v", first, second)
+	}
+	current := store.GetBySourceFile(doc.SourcePath)
+	if len(current) != second.Chunks || current[0].DocumentRevision != doc.Revision {
+		t.Fatalf("new chunk layout is not current: %#v", current)
+	}
+	snapshots, err := store.ListDocumentHistorySnapshots(doc.SourcePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(snapshots) != 1 || snapshots[0].DocumentRevision != doc.Revision || snapshots[0].ChunkCount != first.Chunks {
+		t.Fatalf("previous chunk layout was not preserved: %#v", snapshots)
+	}
+}
+
 func TestPDFImportPersistsPageManifestWithEmptyPhysicalPage(t *testing.T) {
 	root := t.TempDir()
 	doc, err := ingest.ParseMarkdown(filepath.Join(root, "book.pdf"), "<!-- page: 1 -->\n\nStored page text")

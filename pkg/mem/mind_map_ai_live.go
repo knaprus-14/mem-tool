@@ -24,8 +24,11 @@ type ClassicMindMapAIWorkspace struct {
 	Context context.Context
 	Service *ClassicMindMapAIService
 
-	mu   sync.RWMutex
-	jobs map[string]*classicMindMapAIWorkspaceJob
+	mu     sync.RWMutex
+	jobs   map[string]*classicMindMapAIWorkspaceJob
+	cancel context.CancelFunc
+	wg     sync.WaitGroup
+	closed bool
 }
 
 type classicMindMapAIWorkspaceJob struct {
@@ -114,12 +117,16 @@ type classicMindMapAIPublishRequest struct {
 }
 
 var errClassicMindMapAICancelTooLate = errors.New("AI-задание уже завершило подготовку предпросмотра; отмена не выполнена")
+var errClassicMindMapAIWorkspaceClosed = errors.New("AI-помощник завершает работу")
 
 func NewClassicMindMapAIWorkspace(ctx context.Context, service *ClassicMindMapAIService) *ClassicMindMapAIWorkspace {
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	return &ClassicMindMapAIWorkspace{Context: ctx, Service: service, jobs: make(map[string]*classicMindMapAIWorkspaceJob)}
+	workspaceContext, cancel := context.WithCancel(ctx)
+	return &ClassicMindMapAIWorkspace{
+		Context: workspaceContext, Service: service, jobs: make(map[string]*classicMindMapAIWorkspaceJob), cancel: cancel,
+	}
 }
 
 func (w *ClassicMindMapAIWorkspace) start(request ClassicMindMapAIPreviewRequest) (classicMindMapAIWorkspaceJob, error) {
@@ -134,6 +141,11 @@ func (w *ClassicMindMapAIWorkspace) start(request ClassicMindMapAIPreviewRequest
 	now := time.Now().UTC().Format(time.RFC3339Nano)
 	job := &classicMindMapAIWorkspaceJob{ID: id, Status: "running", Phase: "queued", Message: "Запрос поставлен в очередь", Started: now, Updated: now, cancel: cancel}
 	w.mu.Lock()
+	if w.closed {
+		w.mu.Unlock()
+		cancel()
+		return classicMindMapAIWorkspaceJob{}, errClassicMindMapAIWorkspaceClosed
+	}
 	running := 0
 	for _, current := range w.jobs {
 		if current.Status == "running" {
@@ -154,18 +166,26 @@ func (w *ClassicMindMapAIWorkspace) start(request ClassicMindMapAIPreviewRequest
 		return classicMindMapAIWorkspaceJob{}, fmt.Errorf("AI-помощник уже выполняет предельное число заданий (%d); дождитесь завершения или отмените одно из них", maxClassicMindMapAIWorkspaceJobs)
 	}
 	w.jobs[id] = job
-	w.mu.Unlock()
+	w.wg.Add(1)
 	accepted := cloneClassicMindMapAIWorkspaceJob(job)
+	w.mu.Unlock()
 
 	go func() {
+		defer w.wg.Done()
 		preview, runErr := PrepareClassicMindMapAIPreview(ctx, w.Service, request, func(progress ClassicMindMapAIProgress) {
 			w.mu.Lock()
 			defer w.mu.Unlock()
 			current := w.jobs[id]
-			if current == nil || current.Status == "cancelled" {
+			if current == nil {
 				return
 			}
+			// Keep the durable run ID even when shutdown won the race with the
+			// first progress callback. Shutdown can then mark that SQLite row
+			// terminal before the Store is closed.
 			current.RunID = progress.RunID
+			if current.Status == "cancelled" {
+				return
+			}
 			current.Phase = progress.Phase
 			current.Current, current.Total = progress.Current, progress.Total
 			current.Batch, current.Batches = progress.Current, progress.Total
@@ -183,7 +203,7 @@ func (w *ClassicMindMapAIWorkspace) start(request ClassicMindMapAIPreviewRequest
 			if errors.Is(runErr, context.Canceled) || errors.Is(ctx.Err(), context.Canceled) {
 				current.Status, current.Phase, current.Message = "cancelled", "cancelled", "Операция отменена"
 			} else {
-				current.Status, current.Phase, current.Error = "failed", "failed", runErr.Error()
+				current.Status, current.Phase, current.Error = "failed", "failed", classicMindMapAIHTTPFailureMessage(runErr)
 			}
 			return
 		}
@@ -194,6 +214,128 @@ func (w *ClassicMindMapAIWorkspace) start(request ClassicMindMapAIPreviewRequest
 		current.Preview = &httpPreview
 	}()
 	return accepted, nil
+}
+
+// Shutdown stops accepting work, cancels every in-flight job, makes all known
+// durable runs terminal and waits for the worker goroutines. The Store owner
+// must call it before closing SQLite.
+func (w *ClassicMindMapAIWorkspace) Shutdown(ctx context.Context) error {
+	if w == nil {
+		return nil
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	now := time.Now().UTC().Format(time.RFC3339Nano)
+	w.mu.Lock()
+	if !w.closed {
+		w.closed = true
+		if w.cancel != nil {
+			w.cancel()
+		}
+	}
+	for _, job := range w.jobs {
+		if job.Status != "running" {
+			continue
+		}
+		if job.cancel != nil {
+			job.cancel()
+		}
+		job.Status, job.Phase = "cancelled", "cancelled"
+		job.Message, job.Error, job.Updated = "Операция отменена при остановке редактора", "", now
+	}
+	w.mu.Unlock()
+
+	firstCancelErr := w.cancelTrackedDurableRuns()
+	done := make(chan struct{})
+	go func() {
+		w.wg.Wait()
+		close(done)
+	}()
+	select {
+	case <-done:
+		return errors.Join(firstCancelErr, w.cancelTrackedDurableRuns())
+	case <-ctx.Done():
+		// The Store belongs to the caller and may be closed immediately after
+		// Shutdown returns. A provider is expected to honor cancellation, but a
+		// custom or wedged provider may not. Preserve the Store lifetime contract
+		// by waiting for the worker set even after the reporting deadline expires.
+		// The deadline is still returned so operators can see the slow shutdown.
+		deadlineErr := fmt.Errorf("остановка AI-помощника превысила срок: %w", ctx.Err())
+		<-done
+		return errors.Join(firstCancelErr, w.cancelTrackedDurableRuns(), deadlineErr)
+	}
+}
+
+func (w *ClassicMindMapAIWorkspace) cancelTrackedDurableRuns() error {
+	if w == nil || w.Service == nil || w.Service.Store == nil {
+		return nil
+	}
+	w.mu.RLock()
+	type trackedRun struct {
+		jobID string
+		runID string
+	}
+	runs := make([]trackedRun, 0, len(w.jobs))
+	seen := make(map[string]struct{}, len(w.jobs))
+	for jobID, job := range w.jobs {
+		runID := strings.TrimSpace(job.RunID)
+		if job.Status != "cancelled" || runID == "" {
+			continue
+		}
+		if _, exists := seen[runID]; exists {
+			continue
+		}
+		seen[runID] = struct{}{}
+		runs = append(runs, trackedRun{jobID: jobID, runID: runID})
+	}
+	w.mu.RUnlock()
+
+	var result error
+	for _, tracked := range runs {
+		durableStatus, _, err := w.Service.Store.cancelClassicMindMapAIRun(tracked.runID)
+		if err != nil {
+			result = errors.Join(result, fmt.Errorf("отменить сохранённое AI-задание %s: %w", tracked.runID, err))
+			continue
+		}
+		var durablePreview *classicMindMapAIHTTPPreview
+		if durableStatus == ClassicMindMapAIPreviewReady || durableStatus == ClassicMindMapAIInsufficient || durableStatus == ClassicMindMapAIPublished {
+			preview, loadErr := w.Service.Store.LoadClassicMindMapAIPreview(tracked.runID)
+			if loadErr != nil {
+				result = errors.Join(result, fmt.Errorf("восстановить завершённый AI-preview %s: %w", tracked.runID, loadErr))
+				continue
+			}
+			httpPreview := classicMindMapAIHTTPPreviewFrom(preview, preview.BatchCount)
+			durablePreview = &httpPreview
+		}
+		w.mu.Lock()
+		job := w.jobs[tracked.jobID]
+		if job != nil && job.RunID == tracked.runID && job.Status == "cancelled" && durableStatus != ClassicMindMapAICancelled {
+			job.Status, job.Phase = string(durableStatus), string(durableStatus)
+			job.Message = "AI-задание завершилось до остановки редактора"
+			job.Error = ""
+			job.Preview = durablePreview
+			job.Updated = time.Now().UTC().Format(time.RFC3339Nano)
+		}
+		w.mu.Unlock()
+	}
+	return result
+}
+
+func classicMindMapAIHTTPFailureMessage(err error) string {
+	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+		return "AI-операция отменена или превысила лимит времени"
+	}
+	if errors.Is(err, ErrClassicMindMapAIResourceLimit) {
+		return strings.TrimSpace(strings.TrimPrefix(err.Error(), ErrClassicMindMapAIResourceLimit.Error()+":"))
+	}
+	if errors.Is(err, ErrClassicMindMapAIInvalidRequest) {
+		return "Проверьте параметры и область источников AI-запроса"
+	}
+	if errors.Is(err, ErrClassicMindMapRevisionConflict) || errors.Is(err, ErrClassicMindMapLocked) {
+		return "Карта изменилась или выбранный узел заблокирован; обновите редактор"
+	}
+	return "AI-модель не смогла подготовить корректный предпросмотр. Проверьте настройки модели и повторите попытку."
 }
 
 func (w *ClassicMindMapAIWorkspace) get(id string) (classicMindMapAIWorkspaceJob, bool) {
@@ -363,7 +505,11 @@ func serveClassicMindMapAIStart(response http.ResponseWriter, request *http.Requ
 		MapRef: payload.MapID, NodeRef: payload.TargetNodeID, ExpectedRevision: payload.ExpectedRevision, Scope: payload.Scope,
 	})
 	if err != nil {
-		http.Error(response, err.Error(), http.StatusServiceUnavailable)
+		message := "AI-помощник временно недоступен"
+		if errors.Is(err, errClassicMindMapAIWorkspaceClosed) {
+			message = errClassicMindMapAIWorkspaceClosed.Error()
+		}
+		http.Error(response, message, http.StatusServiceUnavailable)
 		return
 	}
 	writeClassicMindMapResult(response, job, nil)
@@ -401,11 +547,11 @@ func serveClassicMindMapAICancel(response http.ResponseWriter, request *http.Req
 		return
 	}
 	if err != nil {
-		status := http.StatusInternalServerError
+		status, message := http.StatusInternalServerError, "Не удалось отменить AI-задание"
 		if errors.Is(err, errClassicMindMapAICancelTooLate) {
-			status = http.StatusConflict
+			status, message = http.StatusConflict, errClassicMindMapAICancelTooLate.Error()
 		}
-		http.Error(response, err.Error(), status)
+		http.Error(response, message, status)
 		return
 	}
 	writeClassicMindMapResult(response, job, nil)
@@ -425,13 +571,15 @@ func serveClassicMindMapAIPublish(response http.ResponseWriter, request *http.Re
 		ExpectedPreviewDigest: payload.ExpectedDigest, Actor: "browser", Comment: "AI preview published",
 	})
 	if err != nil {
-		status := http.StatusBadRequest
+		status, message := http.StatusBadRequest, "AI-preview не может быть опубликован"
 		if errors.Is(err, ErrClassicMindMapRevisionConflict) || errors.Is(err, ErrClassicMindMapAIChanged) || errors.Is(err, ErrClassicMindMapLocked) || errors.Is(err, ErrClassicMindMapAIAlreadyApplied) {
-			status = http.StatusConflict
+			status, message = http.StatusConflict, "Карта или AI-preview изменились; обновите редактор и повторите публикацию"
 		} else if errors.Is(err, ErrClassicMindMapAIPreviewNotFound) {
-			status = http.StatusNotFound
+			status, message = http.StatusNotFound, "AI-preview не найден"
+		} else if errors.Is(err, ErrClassicMindMapAIResourceLimit) {
+			status, message = http.StatusUnprocessableEntity, classicMindMapAIHTTPFailureMessage(err)
 		}
-		http.Error(response, err.Error(), status)
+		http.Error(response, message, status)
 		return
 	}
 	writeClassicMindMapResult(response, result, nil)

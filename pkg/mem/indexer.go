@@ -124,12 +124,6 @@ type embeddingFunc func(*Config, string) ([]float32, error)
 
 func indexFileWithEmbedder(cfg *Config, store *Store, filePath string, embed embeddingFunc) (IndexResult, error) {
 	result := IndexResult{FilePath: filePath}
-	embeddingIdentity, err := EmbeddingIdentityForConfig(cfg)
-	if err != nil {
-		result.Err = err
-		return result, err
-	}
-
 	absPath, err := CanonicalSourcePath(filePath)
 	if err != nil {
 		result.Err = err
@@ -145,15 +139,29 @@ func indexFileWithEmbedder(cfg *Config, store *Store, filePath string, embed emb
 
 	text = strings.TrimSpace(text)
 	if text == "" {
-		result.Skipped = true
+		if _, err := store.ReplaceDocumentWithEmpty(absPath); err != nil {
+			err = fmt.Errorf("очистить индекс пустого документа: %w", err)
+			result.Err = err
+			return result, err
+		}
 		return result, nil
 	}
 
 	// Разбиваем на чанки
 	chunks := ChunkDocument(text, cfg.Chunking.MaxSize, cfg.Chunking.Overlap, cfg.Chunking.Strategy)
 	if len(chunks) == 0 {
-		result.Skipped = true
+		if _, err := store.ReplaceDocumentWithEmpty(absPath); err != nil {
+			err = fmt.Errorf("очистить индекс документа без чанков: %w", err)
+			result.Err = err
+			return result, err
+		}
 		return result, nil
+	}
+
+	embeddingIdentity, err := EmbeddingIdentityForConfig(cfg)
+	if err != nil {
+		result.Err = err
+		return result, err
 	}
 
 	// Формируем теги из пути
@@ -186,6 +194,9 @@ func indexFileWithEmbedder(cfg *Config, store *Store, filePath string, embed emb
 	// Сохраняем чанки под каноническим абсолютным путём: одинаковые имена
 	// файлов в разных каталогах становятся разными документами.
 	fileName := filepath.Base(absPath)
+	documentID := documentIDForSourcePath(absPath)
+	documentRevision := ChunkContentHash(text)
+	mediaType := mediaTypeForSourcePath(absPath)
 	storedChunks := make([]DocumentChunk, len(chunks))
 	for i, chunk := range chunks {
 		storedChunks[i] = DocumentChunk{
@@ -193,7 +204,12 @@ func indexFileWithEmbedder(cfg *Config, store *Store, filePath string, embed emb
 			EmbeddingModel: embeddingIdentity.Model, EmbeddingSpace: embeddingIdentity.SpaceID,
 			Embedding: embeddings[i], ChunkLabel: chunk.Label,
 			ChunkIndex: chunk.Index, TotalChunks: len(chunks),
-			Provenance: Provenance{SourcePath: absPath, OCRConfidence: -1},
+			Provenance: Provenance{
+				DocumentID: documentID, DocumentRevision: documentRevision,
+				ChunkHash: ChunkContentHash(chunk.Text), SourcePath: absPath, MediaType: mediaType,
+				BlockIndex: 0, BlockChunkIndex: i, BlockTotalChunks: len(chunks),
+				ExtractionMethod: "text", OCRConfidence: -1,
+			},
 		}
 	}
 	if err = store.ReplaceDocumentChunks(absPath, storedChunks); err != nil {

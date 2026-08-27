@@ -17,15 +17,16 @@ import (
 )
 
 const (
-	DefaultAnswerTimeoutSeconds = 60
-	DefaultAnswerMaxTokens      = 512
-	DefaultMapGenerationTokens  = 4096
-	DefaultAnswerContextChars   = 12000
-	DefaultAnswerTemperature    = 0.1
-	DefaultAnswerLowConfidence  = 65
-	MaxAnswerTimeoutSeconds     = 3600
-	MaxAnswerTokens             = 100000
-	MaxAnswerContextChars       = 1000000
+	DefaultAnswerTimeoutSeconds        = 60
+	DefaultAnswerMaxTokens             = 512
+	DefaultMapGenerationTokens         = 4096
+	DefaultMapGenerationTimeoutSeconds = 180
+	DefaultAnswerContextChars          = 12000
+	DefaultAnswerTemperature           = 0.1
+	DefaultAnswerLowConfidence         = 65
+	MaxAnswerTimeoutSeconds            = 3600
+	MaxAnswerTokens                    = 100000
+	MaxAnswerContextChars              = 1000000
 )
 
 // AnswerRequest is provider-neutral and separate from embedding requests so
@@ -209,6 +210,9 @@ func (c AnswerConfig) WithMapGenerationDefaults() AnswerConfig {
 	if c.MaxTokens < DefaultMapGenerationTokens {
 		c.MaxTokens = DefaultMapGenerationTokens
 	}
+	if c.TimeoutSeconds < DefaultMapGenerationTimeoutSeconds {
+		c.TimeoutSeconds = DefaultMapGenerationTimeoutSeconds
+	}
 	return c
 }
 
@@ -264,28 +268,6 @@ func (p *OllamaAnswerProvider) Generate(ctx context.Context, request AnswerReque
 		}
 		responseFormat = request.ResponseSchema
 	}
-	body, err := json.Marshal(ollamaChatRequest{
-		Model: model,
-		Messages: []ollamaChatMessage{
-			{Role: "system", Content: request.System},
-			{Role: "user", Content: request.Prompt},
-		},
-		Stream: false,
-		Think:  &disableThinking,
-		Format: responseFormat,
-		Options: map[string]interface{}{
-			"num_predict": request.MaxTokens,
-			"temperature": request.Temperature,
-		},
-	})
-	if err != nil {
-		return "", fmt.Errorf("ollama answer: encode request: %w", err)
-	}
-	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, baseURL+"/api/chat", bytes.NewReader(body))
-	if err != nil {
-		return "", fmt.Errorf("ollama answer: create request: %w", err)
-	}
-	httpReq.Header.Set("Content-Type", "application/json")
 	client := p.HTTPClient
 	if client == nil {
 		client = http.DefaultClient
@@ -294,27 +276,65 @@ func (p *OllamaAnswerProvider) Generate(ctx context.Context, request AnswerReque
 	localClient.CheckRedirect = func(*http.Request, []*http.Request) error {
 		return http.ErrUseLastResponse
 	}
-	resp, err := localClient.Do(httpReq)
+	limit := p.MaxResponseBytes
+	if limit <= 0 {
+		limit = 256 * 1024
+	}
+	call := func(format any) (int, []byte, error) {
+		body, marshalErr := json.Marshal(ollamaChatRequest{
+			Model: model,
+			Messages: []ollamaChatMessage{
+				{Role: "system", Content: request.System},
+				{Role: "user", Content: request.Prompt},
+			},
+			Stream: false,
+			Think:  &disableThinking,
+			Format: format,
+			Options: map[string]interface{}{
+				"num_predict": request.MaxTokens,
+				"temperature": request.Temperature,
+			},
+		})
+		if marshalErr != nil {
+			return 0, nil, fmt.Errorf("ollama answer: encode request: %w", marshalErr)
+		}
+		httpReq, requestErr := http.NewRequestWithContext(ctx, http.MethodPost, baseURL+"/api/chat", bytes.NewReader(body))
+		if requestErr != nil {
+			return 0, nil, fmt.Errorf("ollama answer: create request: %w", requestErr)
+		}
+		httpReq.Header.Set("Content-Type", "application/json")
+		resp, requestErr := localClient.Do(httpReq)
+		if requestErr != nil {
+			return 0, nil, requestErr
+		}
+		defer resp.Body.Close()
+		responseBody, readErr := io.ReadAll(io.LimitReader(resp.Body, int64(limit)+1))
+		if readErr != nil {
+			return 0, nil, fmt.Errorf("ollama answer: read response: %w", readErr)
+		}
+		if len(responseBody) > limit {
+			return 0, nil, fmt.Errorf("ollama answer response exceeds %d bytes", limit)
+		}
+		return resp.StatusCode, responseBody, nil
+	}
+	statusCode, responseBody, err := call(responseFormat)
 	if err != nil {
 		if ctx.Err() != nil {
 			return "", fmt.Errorf("ollama answer cancelled or timed out: %w", ctx.Err())
 		}
 		return "", fmt.Errorf("ollama answer: request failed: %w", err)
 	}
-	defer resp.Body.Close()
-	limit := p.MaxResponseBytes
-	if limit <= 0 {
-		limit = 256 * 1024
+	if (statusCode < 200 || statusCode >= 300) && len(request.ResponseSchema) > 0 && !isOllamaCloudModel(model) && isOllamaGrammarFormatError(responseBody) {
+		statusCode, responseBody, err = call("json")
+		if err != nil {
+			if ctx.Err() != nil {
+				return "", fmt.Errorf("ollama answer cancelled or timed out: %w", ctx.Err())
+			}
+			return "", fmt.Errorf("ollama answer compatibility request failed: %w", err)
+		}
 	}
-	responseBody, err := io.ReadAll(io.LimitReader(resp.Body, int64(limit)+1))
-	if err != nil {
-		return "", fmt.Errorf("ollama answer: read response: %w", err)
-	}
-	if len(responseBody) > limit {
-		return "", fmt.Errorf("ollama answer response exceeds %d bytes", limit)
-	}
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return "", fmt.Errorf("ollama answer: HTTP %d: %s", resp.StatusCode, strings.TrimSpace(string(responseBody)))
+	if statusCode < 200 || statusCode >= 300 {
+		return "", fmt.Errorf("ollama answer: HTTP %d: %s", statusCode, strings.TrimSpace(string(responseBody)))
 	}
 	var decoded ollamaChatResponse
 	if err := json.Unmarshal(responseBody, &decoded); err != nil {
@@ -337,6 +357,12 @@ func (p *OllamaAnswerProvider) Generate(ctx context.Context, request AnswerReque
 		answer = unwrapOllamaCloudJSONFence(answer)
 	}
 	return answer, nil
+}
+
+func isOllamaGrammarFormatError(responseBody []byte) bool {
+	message := strings.ToLower(string(responseBody))
+	return strings.Contains(message, "grammar") &&
+		(strings.Contains(message, "parse") || strings.Contains(message, "invalid") || strings.Contains(message, "unsupported"))
 }
 
 // unwrapOllamaCloudJSONFence accepts the one compatibility wrapper observed

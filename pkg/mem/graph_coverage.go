@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"path/filepath"
+	"runtime"
 	"sort"
 	"strconv"
 	"strings"
@@ -156,12 +157,16 @@ func (s *Store) BuildKnowledgeCoverageReport(options KnowledgeCoverageOptions) (
 		return KnowledgeCoverageReport{}, errors.New("coverage page range is invalid")
 	}
 
-	s.mu.RLock()
+	s.mu.Lock()
+	if err := s.refreshEntryCacheIfStaleUnlocked("knowledge coverage report"); err != nil {
+		s.mu.Unlock()
+		return KnowledgeCoverageReport{}, err
+	}
 	entries := make([]Entry, len(s.entries))
 	for i := range s.entries {
 		entries[i] = cloneEntry(s.entries[i])
 	}
-	s.mu.RUnlock()
+	s.mu.Unlock()
 
 	builders := make(map[string]*knowledgeCoverageDocumentBuilder)
 	selected := make(map[string]knowledgeCoverageChunk)
@@ -521,9 +526,21 @@ func coveragePathsEqual(left, right string) bool {
 	leftAbs, leftErr := filepath.Abs(left)
 	rightAbs, rightErr := filepath.Abs(right)
 	if leftErr == nil && rightErr == nil {
-		return strings.EqualFold(filepath.Clean(leftAbs), filepath.Clean(rightAbs))
+		left, right = filepath.Clean(leftAbs), filepath.Clean(rightAbs)
+	} else {
+		left, right = filepath.Clean(left), filepath.Clean(right)
 	}
-	return strings.EqualFold(filepath.Clean(left), filepath.Clean(right))
+	if runtime.GOOS == "windows" {
+		return strings.EqualFold(left, right)
+	}
+	return left == right
+}
+
+func sourcePathSQLPredicate(column string) string {
+	if runtime.GOOS == "windows" {
+		return "LOWER(" + column + ") = LOWER(?)"
+	}
+	return column + " = ?"
 }
 
 func coverageEntryHasTag(entry Entry, tag string) bool {

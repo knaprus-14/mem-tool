@@ -97,16 +97,33 @@ func main() {
 func run() int {
 	args0 := os.Args[1:]
 
-	// Сначала парсим --global / --dir — они переключают cwd до всей остальной логики.
-	// После chdir все команды работают с целевой базой как обычно.
-	useGlobal, customDir, args0 := mem.ParseGlobalFlag(args0)
+	// Сначала только разбираем глобальные флаги. Проверка арности выполняется до
+	// смены cwd, автосоздания .mem/ и открытия SQLite, чтобы ошибочная команда не
+	// могла оставить никаких следов в текущей или целевой базе.
+	useGlobal, customDir, args0, err := mem.ParseGlobalFlagStrict(args0)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Ошибка: %v\n", err)
+		return 1
+	}
+	colorMode, args0, err := mem.ParseColorFlagStrict(args0)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Ошибка: %v\n", err)
+		return 1
+	}
+	if len(args0) > 0 {
+		if err := validateTopLevelCommandArgs(args0[0], args0[1:]); err != nil {
+			fmt.Fprintf(os.Stderr, "Ошибка: %v\n", err)
+			return 1
+		}
+	}
+
 	if err := mem.ApplyDirSwitch(useGlobal, customDir); err != nil {
 		fmt.Fprintf(os.Stderr, "%v\n", err)
 		return 1
 	}
 
-	// Потом --color/--no-color (влияет только на ui-стили, не на cwd)
-	colorMode, args0 := mem.ParseColorFlag(args0)
+	// --color/--no-color влияет только на оформление, но и его применяем после
+	// чистой проверки командной строки.
 	ui.Init(colorMode)
 
 	if len(os.Args) < 2 || len(args0) == 0 {
@@ -240,7 +257,10 @@ func run() int {
 			return 1
 		}
 	case "source":
-		handleSource(store, args)
+		if err := handleSource(store, args); err != nil {
+			fmt.Fprintf(os.Stderr, "Ошибка: %v\n", err)
+			return 1
+		}
 	case "sources":
 		handleSources(store)
 	case "show", "get", "view":
@@ -278,6 +298,115 @@ func run() int {
 		return 1
 	}
 	return 0
+}
+
+// commandPositionals removes the first argument terminator while preserving
+// every token after it as a literal positional argument. In particular,
+// `mem index -- -notes` addresses a path beginning with a dash, while a second
+// `--` remains an ordinary argument and is therefore subject to arity checks.
+func commandPositionals(args []string) []string {
+	for i, arg := range args {
+		if arg == "--" {
+			out := make([]string, 0, len(args)-1)
+			out = append(out, args[:i]...)
+			out = append(out, args[i+1:]...)
+			return out
+		}
+	}
+	return append([]string(nil), args...)
+}
+
+func exactCommandPositionals(command string, args []string, want int, usage string) ([]string, error) {
+	positionals := commandPositionals(args)
+	if len(positionals) != want {
+		if usage != "" {
+			return nil, fmt.Errorf("использование: %s", usage)
+		}
+		return nil, fmt.Errorf("команда %s не принимает аргументы", command)
+	}
+	return positionals, nil
+}
+
+// validateTopLevelCommandArgs covers commands whose handlers otherwise have
+// no args parameter or historically consumed only args[0]. It intentionally
+// runs before any filesystem/database side effect in run(). Argument-consuming
+// handlers repeat their structural validation for direct REPL/TUI calls.
+func validateTopLevelCommandArgs(command string, args []string) error {
+	switch command {
+	case "init", "version", "--version", "-v", "help", "--help", "-h", "stats", "sources", "repl", "where", "current":
+		_, err := exactCommandPositionals(command, args, 0, "")
+		return err
+	case "index":
+		positionals, err := exactCommandPositionals(command, args, 1, "mem index <файл|каталог>")
+		if err != nil {
+			return err
+		}
+		if strings.TrimSpace(positionals[0]) == "" {
+			return fmt.Errorf("путь для индексации пуст")
+		}
+		return nil
+	case "add":
+		return validateAddCommandArgs(args)
+	case "add-file", "import":
+		return validateSingleDocumentCommandArgs(command, args)
+	case "config":
+		_, err := parseConfigCommandArgs(args)
+		return err
+	case "source":
+		positionals, err := exactCommandPositionals(command, args, 1, "mem source <id>")
+		if err != nil {
+			return err
+		}
+		if _, err := parseEntryID(positionals[0]); err != nil {
+			return err
+		}
+		return nil
+	case "show", "get", "view":
+		_, err := parseShowRequest(args)
+		return err
+	default:
+		return nil
+	}
+}
+
+func validateAddCommandArgs(args []string) error {
+	if err := validateCommonFlags(args, "-title", "-tags", "-important"); err != nil {
+		return err
+	}
+	positionals, _, _, _, _, _, _, _, _, _ := parseFlags(args)
+	if strings.TrimSpace(strings.Join(positionals, " ")) == "" {
+		return fmt.Errorf("укажи текст для сохранения\nПример: mem add \"какой-то факт\" -title \"Название\" -tags \"термины,проект\" -important")
+	}
+	return nil
+}
+
+func validateSingleDocumentCommandArgs(command string, args []string) error {
+	if err := validateCommonFlags(args, "-title", "-tags", "-important"); err != nil {
+		return err
+	}
+	positionals, _, _, _, _, _, _, _, _, _ := parseFlags(args)
+	if len(positionals) == 0 || strings.TrimSpace(positionals[0]) == "" {
+		if command == "add-file" {
+			return fmt.Errorf("укажи путь к файлу (пример: mem add-file ./notes.txt -tags \"документация\")")
+		}
+		return fmt.Errorf("укажи Markdown, PDF или DjVu (пример: mem import ./book.djvu)")
+	}
+	if len(positionals) != 1 {
+		if command == "add-file" {
+			return fmt.Errorf("mem add-file принимает один файл за вызов")
+		}
+		return fmt.Errorf("mem import принимает один документ за вызов")
+	}
+	return nil
+}
+
+func parseEntryID(value string) (int64, error) {
+	idValue := strings.TrimPrefix(value, "#")
+	id, err := strconv.ParseInt(idValue, 10, 64)
+	if err != nil || id <= 0 {
+		return 0, fmt.Errorf("'%s' не является положительным номером записи", value)
+	}
+	return id, nil
 }
 
 func databasePathArg(args []string) (string, error) {
@@ -402,6 +531,9 @@ func parseFlags(args []string) (positional []string, title string, tags []string
 	limit = 10
 	for i := 0; i < len(args); i++ {
 		switch args[i] {
+		case "--":
+			positional = append(positional, args[i+1:]...)
+			return
 		case "-title":
 			if i+1 < len(args) {
 				i++
@@ -459,11 +591,62 @@ func parseFlags(args []string) (positional []string, title string, tags []string
 	return
 }
 
-func handleAdd(cfg *Config, store *Store, args []string) error {
-	positional, title, tags, _, _, _, _, _, important, _ := parseFlags(args)
-	if len(positional) == 0 {
-		return fmt.Errorf("укажи текст для сохранения\nПример: mem add \"какой-то факт\" -title \"Название\" -tags \"термины,проект\" -important")
+func validateCommonFlags(args []string, allowedFlags ...string) error {
+	valueFlags := map[string]bool{
+		"-title": true, "-tags": true, "-limit": true, "-from": true,
+		"-to": true, "-min-score": true, "-tag": true,
 	}
+	boolFlags := map[string]bool{"-vector-only": true, "-important": true}
+	allowed := make(map[string]bool, len(allowedFlags))
+	for _, flag := range allowedFlags {
+		allowed[flag] = true
+	}
+	for i := 0; i < len(args); i++ {
+		arg := args[i]
+		if arg == "--" {
+			return nil
+		}
+		if boolFlags[arg] {
+			if !allowed[arg] {
+				return fmt.Errorf("флаг %s неприменим к этой команде", arg)
+			}
+			continue
+		}
+		if valueFlags[arg] {
+			if !allowed[arg] {
+				return fmt.Errorf("флаг %s неприменим к этой команде", arg)
+			}
+			if i+1 >= len(args) || strings.TrimSpace(args[i+1]) == "" || strings.HasPrefix(args[i+1], "-") {
+				return fmt.Errorf("флаг %s требует значение", arg)
+			}
+			i++
+			value := args[i]
+			switch arg {
+			case "-limit":
+				n, err := strconv.Atoi(value)
+				if err != nil || n <= 0 {
+					return fmt.Errorf("-limit должен быть положительным целым числом")
+				}
+			case "-min-score":
+				n, err := strconv.ParseFloat(value, 64)
+				if err != nil || n < 0 || n > 1 {
+					return fmt.Errorf("-min-score должен быть числом от 0 до 1")
+				}
+			}
+			continue
+		}
+		if strings.HasPrefix(arg, "-") {
+			return fmt.Errorf("неизвестный флаг: %s", arg)
+		}
+	}
+	return nil
+}
+
+func handleAdd(cfg *Config, store *Store, args []string) error {
+	if err := validateAddCommandArgs(args); err != nil {
+		return err
+	}
+	positional, title, tags, _, _, _, _, _, important, _ := parseFlags(args)
 
 	text := strings.Join(positional, " ")
 	embeddingIdentity, err := mem.EmbeddingIdentityForConfig(cfg)
@@ -492,6 +675,9 @@ func handleAdd(cfg *Config, store *Store, args []string) error {
 }
 
 func handleSearch(cfg *Config, store *Store, args []string) error {
+	if err := validateCommonFlags(args, "-tags", "-limit", "-from", "-to", "-min-score", "-vector-only", "-tag"); err != nil {
+		return err
+	}
 	positional, _, tags, limit, from, to, minScore, vectorOnly, _, tagFilter := parseFlags(args)
 	if len(positional) == 0 {
 		return fmt.Errorf("укажи поисковый запрос\nПример: mem search \"IP сервера\" -tags \"инфраструктура\" -from 2026-06-01")
@@ -648,6 +834,9 @@ func handleSearch(cfg *Config, store *Store, args []string) error {
 func handleAsk(cfg *Config, store *Store, args []string) error {
 	searchArgs, contextOverride, err := parseAskArgs(args)
 	if err != nil {
+		return err
+	}
+	if err := validateCommonFlags(searchArgs, "-tags", "-limit", "-from", "-to", "-min-score", "-vector-only", "-tag"); err != nil {
 		return err
 	}
 	positional, _, tags, limit, from, to, minScore, vectorOnly, _, tagFilter := parseFlags(searchArgs)
@@ -819,6 +1008,10 @@ func parseAskArgs(args []string) ([]string, int, error) {
 	contextBudget := 0
 	out := make([]string, 0, len(args))
 	for i := 0; i < len(args); i++ {
+		if args[i] == "--" {
+			out = append(out, args[i:]...)
+			break
+		}
 		if args[i] != "-context-chars" {
 			out = append(out, args[i])
 			continue
@@ -838,7 +1031,7 @@ func parseAskArgs(args []string) ([]string, int, error) {
 
 func handleMap(cfg *Config, store *Store, args []string) error {
 	if len(args) == 0 {
-		return errors.New("использование: mem map <open|build|coverage|eval|eval-labeled|profile|diff|snapshots|corpus-diff|restore|restore-runs|extract|extract-runs|extract-run|analyze|duplicates|merge-node|merges|runs|run|prune-runs|status|approve|approve-batch|reviews|edits|export|export-html>\n  mem map open [--port N] [--title <текст>] [--no-browser]\n  mem map build <фокус> [-limit N] [-context-chars N]\n  mem map coverage [--document <путь|document-id>] [--pages N|N-M] [--tag <тег>] [--json]\n  mem map eval <manifest.json> [--json]\n  mem map eval-labeled <manifest.json> [--json]\n  mem map profile [-iterations N] [--view <имя>] [--json]\n  mem map diff [--document <путь|document-id>] [--json]\n  mem map snapshots [--document <путь|document-id>] [--json]\n  mem map corpus-diff --document <путь|document-id> [--from <revision>] [--to <revision|current>] [--json]\n  mem map restore --document <путь|document-id> --revision <revision> [--confirm <plan-digest>] [--json]\n  mem map restore --rollback <run-id> [--confirm <plan-digest>] [--json]\n  mem map restore-runs [--json] [-limit N]\n  mem map extract <фокус> [--document <путь|document-id>] [--pages N|N-M] [--tag <тег>] [-context-chars N] [-batches N] [-resume <run-id>] [--dry-run]\n  mem map extract-runs [--json] [-limit N]\n  mem map extract-run <run-id> [--json]\n  mem map analyze <фокус> [-context-chars N] [-batches N] [-resume <run-id>]\n  mem map duplicates [--json] [-threshold 0.92] [-kind claim] [-nodes N] [-limit N]\n  mem map merge-node <manifest.json>\n  mem map merges [--json] [-limit N]\n  mem map runs [--json] [-limit N] [-status running|completed]\n  mem map run <run-id> [--json]\n  mem map prune-runs -older-than <duration> [-keep N] [--dry-run|--yes] [--json]\n  mem map status [--json]\n  mem map approve <node|edge> <id> --reviewer <имя> [--comment <текст>] [--evidence-digest <sha256>]\n  mem map approve-batch <manifest.json>\n  mem map reviews [--json] [-limit N]\n  mem map edits [--json] [-limit N]\n  mem map export\n  mem map export --format markdown|outline|opml|graphml|gexf|mermaid|obsidian --output <путь> [--title <текст>] [--force]\n  mem map export-html <output.html> [--title <текст>] [--force]")
+		return errors.New("использование: mem map <open|build|coverage|eval|eval-labeled|profile|diff|snapshots|corpus-diff|restore|restore-runs|extract|extract-runs|extract-run|analyze|duplicates|merge-node|merges|runs|run|prune-runs|status|approve|approve-batch|reviews|edits|export|export-html>\n  mem map open [--port N] [--title <текст>] [--no-browser]\n  mem map build <фокус> [-limit N] [-context-chars N]\n  mem map coverage [--document <путь|document-id>] [--pages N|N-M] [--tag <тег>] [--json]\n  mem map eval <manifest.json> [--json]\n  mem map eval-labeled <manifest.json> [--json]\n  mem map profile [-iterations N] [--view <имя>] [--json]\n  mem map diff [--document <путь|document-id>] [--json]\n  mem map snapshots [--document <путь|document-id>] [--json]\n  mem map corpus-diff --document <путь|document-id> [--from <snapshot-id|revision>] [--to <snapshot-id|revision|current>] [--json]\n  mem map restore --document <путь|document-id> --revision <snapshot-id|revision> [--confirm <plan-digest>] [--json]\n  mem map restore --rollback <run-id> [--confirm <plan-digest>] [--json]\n  mem map restore-runs [--json] [-limit N]\n  mem map extract <фокус> [--document <путь|document-id>] [--pages N|N-M] [--tag <тег>] [-context-chars N] [-batches N] [-resume <run-id>] [--dry-run]\n  mem map extract-runs [--json] [-limit N]\n  mem map extract-run <run-id> [--json]\n  mem map analyze <фокус> [-context-chars N] [-batches N] [-resume <run-id>]\n  mem map duplicates [--json] [-threshold 0.92] [-kind claim] [-nodes N] [-limit N]\n  mem map merge-node <manifest.json>\n  mem map merges [--json] [-limit N]\n  mem map runs [--json] [-limit N] [-status running|completed]\n  mem map run <run-id> [--json]\n  mem map prune-runs -older-than <duration> [-keep N] [--dry-run|--yes] [--json]\n  mem map status [--json]\n  mem map approve <node|edge> <id> --reviewer <имя> [--comment <текст>] [--evidence-digest <sha256>]\n  mem map approve-batch <manifest.json>\n  mem map reviews [--json] [-limit N]\n  mem map edits [--json] [-limit N]\n  mem map export\n  mem map export --format markdown|outline|opml|graphml|gexf|mermaid|obsidian --output <путь> [--title <текст>] [--force]\n  mem map export-html <output.html> [--title <текст>] [--force]")
 	}
 	switch args[0] {
 	case "open":
@@ -1032,8 +1225,8 @@ func handleMapSnapshots(store *Store, args []string) error {
 		return nil
 	}
 	for _, snapshot := range snapshots {
-		fmt.Fprintf(os.Stdout, "- %s\n  revision: %s · chunks: %d · created: %s\n  map: %s · reason: %s\n",
-			snapshot.SourcePath, snapshot.DocumentRevision, snapshot.ChunkCount, snapshot.Created,
+		fmt.Fprintf(os.Stdout, "- %s\n  snapshot: %s · revision: %s\n  chunks: %d · created: %s\n  map: %s · reason: %s\n",
+			snapshot.SourcePath, snapshot.SnapshotID, snapshot.DocumentRevision, snapshot.ChunkCount, snapshot.Created,
 			snapshot.GraphSnapshotID, snapshot.Reason)
 	}
 	return nil
@@ -1048,7 +1241,7 @@ func handleMapCorpusDiff(store *Store, args []string) error {
 			jsonOutput = true
 		case "--document", "--from", "--to":
 			if i+1 >= len(args) || strings.TrimSpace(args[i+1]) == "" {
-				return errors.New("использование: mem map corpus-diff --document <путь|document-id> [--from <revision>] [--to <revision|current>] [--json]")
+				return errors.New("использование: mem map corpus-diff --document <путь|document-id> [--from <snapshot-id|revision>] [--to <snapshot-id|revision|current>] [--json]")
 			}
 			flag := args[i]
 			i++
@@ -1120,7 +1313,7 @@ func handleMapRestore(store *Store, args []string) error {
 			jsonOutput = true
 		case "--document", "--revision", "--rollback", "--confirm":
 			if i+1 >= len(args) || strings.TrimSpace(args[i+1]) == "" {
-				return errors.New("использование: mem map restore (--document <путь|document-id> --revision <revision> | --rollback <run-id>) [--confirm <plan-digest>] [--json]")
+				return errors.New("использование: mem map restore (--document <путь|document-id> --revision <snapshot-id|revision> | --rollback <run-id>) [--confirm <plan-digest>] [--json]")
 			}
 			flag := args[i]
 			i++
@@ -1211,7 +1404,7 @@ func printDocumentRestorePlan(plan mem.DocumentRestorePlan) {
 		fmt.Fprintf(os.Stdout, "\nПрименить после проверки:\n  mem map restore --rollback %s --confirm %s\n", plan.RollbackOf, plan.PlanDigest)
 	} else {
 		fmt.Fprintf(os.Stdout, "\nПрименить после проверки:\n  mem map restore --document %q --revision %s --confirm %s\n",
-			plan.SourcePath, plan.TargetRevision, plan.PlanDigest)
+			plan.SourcePath, plan.TargetSnapshotID, plan.PlanDigest)
 	}
 }
 
@@ -2695,6 +2888,9 @@ func handleMapBuild(cfg *Config, store *Store, args []string) error {
 	if err != nil {
 		return err
 	}
+	if err := validateCommonFlags(searchArgs, "-tags", "-limit", "-from", "-to", "-min-score", "-vector-only", "-tag"); err != nil {
+		return err
+	}
 	positional, _, tags, limit, from, to, minScore, vectorOnly, _, tagFilter := parseFlags(searchArgs)
 	if len(positional) == 0 {
 		return errors.New("укажи фокус карты\nПример: mem map build \"архитектура импорта\" -limit 10")
@@ -2873,7 +3069,13 @@ func reRankResults(results []Entry, query string) int {
 }
 
 func handleRecent(store *Store, args []string) error {
-	_, _, _, limit, _, _, _, _, _, _ := parseFlags(args)
+	if err := validateCommonFlags(args, "-limit"); err != nil {
+		return err
+	}
+	positional, _, _, limit, _, _, _, _, _, _ := parseFlags(args)
+	if len(positional) != 0 {
+		return fmt.Errorf("лишний аргумент: %s", positional[0])
+	}
 
 	entries, err := store.Recent(limit)
 	if err != nil {
@@ -2916,10 +3118,10 @@ func handleRecent(store *Store, args []string) error {
 }
 
 func handleAddFile(cfg *Config, store *Store, args []string) error {
-	positional, title, tags, _, _, _, _, _, important, _ := parseFlags(args)
-	if len(positional) == 0 {
-		return fmt.Errorf("укажи путь к файлу (пример: mem add-file ./notes.txt -tags \"документация\")")
+	if err := validateSingleDocumentCommandArgs("add-file", args); err != nil {
+		return err
 	}
+	positional, title, tags, _, _, _, _, _, important, _ := parseFlags(args)
 
 	path := positional[0]
 	ext := strings.ToLower(filepath.Ext(path))
@@ -3014,13 +3216,10 @@ func handleAddFile(cfg *Config, store *Store, args []string) error {
 }
 
 func handleImport(cfg *Config, store *Store, args []string) error {
+	if err := validateSingleDocumentCommandArgs("import", args); err != nil {
+		return err
+	}
 	positional, title, tags, _, _, _, _, _, important, _ := parseFlags(args)
-	if len(positional) == 0 {
-		return fmt.Errorf("укажи Markdown, PDF или DjVu (пример: mem import ./book.djvu)")
-	}
-	if len(positional) > 1 {
-		return fmt.Errorf("mem import принимает один документ за вызов")
-	}
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
 	defer stop()
@@ -3367,11 +3566,15 @@ func shouldReportImportProgress(current, total int) bool {
 }
 
 func handleIndex(cfg *Config, store *Store, args []string) error {
-	if len(args) == 0 {
-		return fmt.Errorf("укажи путь к файлу или папке (пример: mem index C:\\МоиДокументы\\)")
+	positionals, err := exactCommandPositionals("index", args, 1, "mem index <файл|каталог>")
+	if err != nil {
+		return err
+	}
+	path := positionals[0]
+	if strings.TrimSpace(path) == "" {
+		return fmt.Errorf("путь для индексации пуст")
 	}
 
-	path := args[0]
 	results, err := IndexDirectory(cfg, store, path)
 	if err != nil {
 		return err
@@ -3392,23 +3595,19 @@ func handleIndex(cfg *Config, store *Store, args []string) error {
 	return nil
 }
 
-func handleSource(store *Store, args []string) {
-	if len(args) == 0 {
-		fmt.Fprintln(os.Stderr, "Ошибка: укажи номер записи")
-		fmt.Fprintln(os.Stderr, "Пример: mem source 15")
-		os.Exit(1)
-	}
-
-	id, err := strconv.ParseInt(args[0], 10, 64)
+func handleSource(store *Store, args []string) error {
+	positionals, err := exactCommandPositionals("source", args, 1, "mem source <id>")
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "Ошибка: '%s' не число\n", args[0])
-		os.Exit(1)
+		return err
+	}
+	id, err := parseEntryID(positionals[0])
+	if err != nil {
+		return err
 	}
 
 	entry, err := store.GetByID(id)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "Ошибка: %v\n", err)
-		os.Exit(1)
+		return err
 	}
 
 	impMark := ""
@@ -3466,6 +3665,7 @@ func handleSource(store *Store, args []string) {
 	} else {
 		fmt.Println("[EMBED] Модель: неизвестна (legacy; требуется переиндексация)")
 	}
+	return nil
 }
 
 // handleShow выводит одну запись полностью или все чанки одного файла.
@@ -3476,46 +3676,81 @@ func handleSource(store *Store, args []string) {
 //	mem show --from-file <path> — все чанки документа с данным SourceFile
 //
 // Алиасы: get, view.
-func handleShow(store *Store, args []string) error {
-	var idArg string
-	fromFile := ""
-	rest := []string{}
+type showRequest struct {
+	idArg    string
+	fromFile string
+}
+
+func parseShowRequest(args []string) (showRequest, error) {
+	var request showRequest
+	positionals := make([]string, 0, 1)
+	parseOptions := true
 	for i := 0; i < len(args); i++ {
 		a := args[i]
+		if parseOptions && a == "--" {
+			parseOptions = false
+			continue
+		}
+		if !parseOptions {
+			positionals = append(positionals, a)
+			continue
+		}
 		switch {
 		case a == "--from-file" || a == "--file" || a == "-f":
-			if i+1 < len(args) {
-				fromFile = args[i+1]
-				i++
+			if request.fromFile != "" {
+				return showRequest{}, fmt.Errorf("флаг %s указан несколько раз", a)
 			}
+			if i+1 >= len(args) || args[i+1] == "--" || strings.TrimSpace(args[i+1]) == "" {
+				return showRequest{}, fmt.Errorf("флаг %s требует непустой путь", a)
+			}
+			request.fromFile = args[i+1]
+			i++
 		case strings.HasPrefix(a, "--from-file="):
-			fromFile = strings.TrimPrefix(a, "--from-file=")
+			if request.fromFile != "" {
+				return showRequest{}, fmt.Errorf("флаг --from-file указан несколько раз")
+			}
+			request.fromFile = strings.TrimPrefix(a, "--from-file=")
+			if strings.TrimSpace(request.fromFile) == "" {
+				return showRequest{}, fmt.Errorf("флаг --from-file требует непустой путь")
+			}
 		case strings.HasPrefix(a, "--file="):
-			fromFile = strings.TrimPrefix(a, "--file=")
+			if request.fromFile != "" {
+				return showRequest{}, fmt.Errorf("флаг --file указан несколько раз")
+			}
+			request.fromFile = strings.TrimPrefix(a, "--file=")
+			if strings.TrimSpace(request.fromFile) == "" {
+				return showRequest{}, fmt.Errorf("флаг --file требует непустой путь")
+			}
 		default:
-			rest = append(rest, a)
+			positionals = append(positionals, a)
 		}
 	}
-	if fromFile != "" {
-		rest = nil // --from-file — отдельный режим, без id
-	} else {
-		if len(rest) == 0 {
-			return fmt.Errorf("укажи ID записи или --from-file <путь>\nПримеры:\n  mem show 50\n  mem show #50\n  mem show --from-file docs/architecture.md")
+	if request.fromFile != "" {
+		if len(positionals) != 0 {
+			return showRequest{}, fmt.Errorf("mem show --from-file принимает ровно один путь и не принимает ID")
 		}
-		idArg = rest[0]
+		return request, nil
 	}
-
-	if fromFile != "" {
-		return showAllChunksFromFile(store, fromFile)
+	if len(positionals) != 1 {
+		return showRequest{}, fmt.Errorf("укажи ровно один ID записи или --from-file <путь>\nПримеры:\n  mem show 50\n  mem show #50\n  mem show --from-file docs/architecture.md")
 	}
+	request.idArg = positionals[0]
+	if _, err := parseEntryID(request.idArg); err != nil {
+		return showRequest{}, err
+	}
+	return request, nil
+}
 
-	// Снимаем префикс # если есть
-	idStr := strings.TrimPrefix(idArg, "#")
-	id, err := strconv.ParseInt(idStr, 10, 64)
+func handleShow(store *Store, args []string) error {
+	request, err := parseShowRequest(args)
 	if err != nil {
-		return fmt.Errorf("'%s' не число", idArg)
+		return err
+	}
+	if request.fromFile != "" {
+		return showAllChunksFromFile(store, request.fromFile)
 	}
 
+	id, _ := parseEntryID(request.idArg)
 	entry, err := store.GetByID(id)
 	if err != nil {
 		return fmt.Errorf("%w", err)
@@ -3645,7 +3880,7 @@ func handleStats(store *Store) error {
 
 // handleDelete удаляет запись по ID
 func handleDelete(store *Store, args []string) error {
-	if len(args) == 0 {
+	if len(args) != 1 {
 		return fmt.Errorf("укажи номер записи для удаления\nПример: mem delete 15")
 	}
 
@@ -3675,6 +3910,9 @@ func handleEdit(cfg *Config, store *Store, args []string) error {
 
 	// Парсим остальные аргументы (после ID)
 	rest := args[1:]
+	if err := validateCommonFlags(rest, "-title"); err != nil {
+		return err
+	}
 	positionals, editTitle, _, _, _, _, _, _, _, _ := parseFlags(rest)
 	editText := strings.Join(positionals, " ")
 
@@ -3735,7 +3973,13 @@ func handleRetag(store *Store, args []string) error {
 		return fmt.Errorf("'%s' не число", args[0])
 	}
 
-	_, _, newTags, _, _, _, _, _, _, _ := parseFlags(args[1:])
+	if err := validateCommonFlags(args[1:], "-tags"); err != nil {
+		return err
+	}
+	positional, _, newTags, _, _, _, _, _, _, _ := parseFlags(args[1:])
+	if len(positional) != 0 {
+		return fmt.Errorf("лишний аргумент: %s", positional[0])
+	}
 	if len(newTags) == 0 {
 		return fmt.Errorf("укажи -tags \"новые,теги\"\nПример: mem retag 15 -tags \"сервер,ubuntu\"")
 	}
@@ -3756,7 +4000,7 @@ func handleRetag(store *Store, args []string) error {
 
 // handleImportant переключает флаг важности записи
 func handleImportant(store *Store, args []string) error {
-	if len(args) == 0 {
+	if len(args) != 1 {
 		return fmt.Errorf("укажи номер записи\nПример: mem important 15")
 	}
 
@@ -3902,11 +4146,11 @@ func printUsage() {
       Показать неизменяемые снимки прежних ревизий. Снимок создаётся автоматически
       перед атомарной заменой документа и включает полный корпус и снимок карты.
 
-  mem map corpus-diff --document <путь|document-id> [--from <revision>] [--to <revision|current>] [--json]
+  mem map corpus-diff --document <путь|document-id> [--from <snapshot-id|revision>] [--to <snapshot-id|revision|current>] [--json]
       Полностью сравнить сохранённую ревизию со следующей исторической или текущей:
       added/changed/removed/unchanged chunks, тексты, хеши и физические координаты.
 
-  mem map restore --document <путь|document-id> --revision <revision> [--confirm <plan-digest>] [--json]
+  mem map restore --document <путь|document-id> --revision <snapshot-id|revision> [--confirm <plan-digest>] [--json]
       Без --confirm выполняет только обязательный preview: diff корпуса, размеры
       текущей/целевой карты и state-pinned digest. С точным digest атомарно
       восстанавливает документ и всю карту; перед изменением создаёт точку отката.
@@ -4145,7 +4389,7 @@ func printUsage() {
   mem map diff --document "D:/Books/manual.pdf"
   mem map snapshots --document "D:/Books/manual.pdf"
   mem map corpus-diff --document "D:/Books/manual.pdf"
-  mem map restore --document "D:/Books/manual.pdf" --revision "sha256:..."
+  mem map restore --document "D:/Books/manual.pdf" --revision "dhs-..."
   mem map restore-runs
   mem map extract "полный разбор документа" --document "D:/Books/manual.pdf" -batches 16
   mem map analyze "требования к рабочему давлению"
@@ -4194,14 +4438,65 @@ func printUsage() {
 
 // handleConfig — CLI-обёртка над mem.SaveConfig / mem.LoadConfig
 // Реализует команды `mem config set-backend`, `set-polza-key` и т.д.
+func parseConfigCommandArgs(args []string) ([]string, error) {
+	args = commandPositionals(args)
+	if len(args) == 0 {
+		return args, nil
+	}
+
+	usage := ""
+	switch args[0] {
+	case "set-backend":
+		usage = "mem config set-backend <ollama|polza>"
+	case "set-polza-key":
+		usage = "mem config set-polza-key <api_key>"
+	case "set-polza-model":
+		usage = "mem config set-polza-model <model_name>"
+	case "set-ollama-model":
+		usage = "mem config set-ollama-model <model_name>"
+	case "set-answer-model":
+		usage = "mem config set-answer-model <model_name>"
+	case "set-answer-base-url":
+		usage = "mem config set-answer-base-url <local-url>"
+	case "set-answer-timeout":
+		usage = "mem config set-answer-timeout <секунды>"
+	case "set-answer-max-tokens":
+		usage = "mem config set-answer-max-tokens <число>"
+	case "set-answer-context-chars":
+		usage = "mem config set-answer-context-chars <число>"
+	case "set-chunk-size":
+		usage = "mem config set-chunk-size <символов>"
+	case "set-chunk-overlap":
+		usage = "mem config set-chunk-overlap <символов>"
+	case "set-chunk-strategy":
+		usage = "mem config set-chunk-strategy <paragraph|sentence|fixed>"
+	default:
+		return nil, fmt.Errorf("неизвестная команда: %s", args[0])
+	}
+	if len(args) != 2 || (args[0] == "set-answer-model" && strings.TrimSpace(args[1]) == "") {
+		return nil, fmt.Errorf("использование: %s", usage)
+	}
+	return args, nil
+}
+
 func handleConfig(args []string) error {
+	parsedArgs, err := parseConfigCommandArgs(args)
+	if err != nil {
+		return err
+	}
+	args = parsedArgs
+
 	cfg, err := loadConfig()
 	if err != nil {
 		return err
 	}
 
 	if len(args) == 0 {
-		data, _ := json.MarshalIndent(cfg, "", "  ")
+		displayConfig := *cfg
+		if displayConfig.Polza.APIKey != "" {
+			displayConfig.Polza.APIKey = "[скрыт]"
+		}
+		data, _ := json.MarshalIndent(&displayConfig, "", "  ")
 		fmt.Println(string(data))
 		return nil
 	}
@@ -4209,7 +4504,7 @@ func handleConfig(args []string) error {
 	cmd := args[0]
 	switch cmd {
 	case "set-backend":
-		if len(args) < 2 {
+		if len(args) != 2 {
 			return fmt.Errorf("использование: mem config set-backend <ollama|polza>")
 		}
 		backend := args[1]
@@ -4220,28 +4515,28 @@ func handleConfig(args []string) error {
 		return saveConfig(cfg)
 
 	case "set-polza-key":
-		if len(args) < 2 {
+		if len(args) != 2 {
 			return fmt.Errorf("использование: mem config set-polza-key <api_key>")
 		}
 		cfg.Polza.APIKey = args[1]
 		return saveConfig(cfg)
 
 	case "set-polza-model":
-		if len(args) < 2 {
+		if len(args) != 2 {
 			return fmt.Errorf("использование: mem config set-polza-model <model_name>")
 		}
 		cfg.Polza.Model = args[1]
 		return saveConfig(cfg)
 
 	case "set-ollama-model":
-		if len(args) < 2 {
+		if len(args) != 2 {
 			return fmt.Errorf("использование: mem config set-ollama-model <model_name>")
 		}
 		cfg.Ollama.Model = args[1]
 		return saveConfig(cfg)
 
 	case "set-answer-model":
-		if len(args) < 2 || strings.TrimSpace(args[1]) == "" {
+		if len(args) != 2 || strings.TrimSpace(args[1]) == "" {
 			return fmt.Errorf("использование: mem config set-answer-model <model_name>")
 		}
 		candidate := cfg.Answer
@@ -4253,7 +4548,7 @@ func handleConfig(args []string) error {
 		return saveConfig(cfg)
 
 	case "set-answer-base-url":
-		if len(args) < 2 {
+		if len(args) != 2 {
 			return fmt.Errorf("использование: mem config set-answer-base-url <local-url>")
 		}
 		baseURL, err := mem.NormalizeLocalAnswerBaseURL(args[1])
@@ -4264,7 +4559,7 @@ func handleConfig(args []string) error {
 		return saveConfig(cfg)
 
 	case "set-answer-timeout":
-		if len(args) < 2 {
+		if len(args) != 2 {
 			return fmt.Errorf("использование: mem config set-answer-timeout <секунды>")
 		}
 		n, err := strconv.Atoi(args[1])
@@ -4275,7 +4570,7 @@ func handleConfig(args []string) error {
 		return saveConfig(cfg)
 
 	case "set-answer-max-tokens":
-		if len(args) < 2 {
+		if len(args) != 2 {
 			return fmt.Errorf("использование: mem config set-answer-max-tokens <число>")
 		}
 		n, err := strconv.Atoi(args[1])
@@ -4286,7 +4581,7 @@ func handleConfig(args []string) error {
 		return saveConfig(cfg)
 
 	case "set-answer-context-chars":
-		if len(args) < 2 {
+		if len(args) != 2 {
 			return fmt.Errorf("использование: mem config set-answer-context-chars <число>")
 		}
 		n, err := strconv.Atoi(args[1])
@@ -4297,7 +4592,7 @@ func handleConfig(args []string) error {
 		return saveConfig(cfg)
 
 	case "set-chunk-size":
-		if len(args) < 2 {
+		if len(args) != 2 {
 			return fmt.Errorf("использование: mem config set-chunk-size <символов>")
 		}
 		n, err := strconv.Atoi(args[1])
@@ -4308,7 +4603,7 @@ func handleConfig(args []string) error {
 		return saveConfig(cfg)
 
 	case "set-chunk-overlap":
-		if len(args) < 2 {
+		if len(args) != 2 {
 			return fmt.Errorf("использование: mem config set-chunk-overlap <символов>")
 		}
 		n, err := strconv.Atoi(args[1])
@@ -4319,7 +4614,7 @@ func handleConfig(args []string) error {
 		return saveConfig(cfg)
 
 	case "set-chunk-strategy":
-		if len(args) < 2 {
+		if len(args) != 2 {
 			return fmt.Errorf("использование: mem config set-chunk-strategy <paragraph|sentence|fixed>")
 		}
 		strategy := args[1]

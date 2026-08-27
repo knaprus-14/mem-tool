@@ -102,11 +102,13 @@ func (s *Store) CreateKnowledgeWorkspaceNode(request KnowledgeWorkspaceCreateReq
 	if evidenceDigest != request.ExpectedEvidence {
 		return rollback(fmt.Errorf("%w: parent evidence no longer matches", ErrKnowledgeEvidenceChanged))
 	}
-	resolutions := make([]EvidenceResolution, 0, len(anchors))
-	for _, anchor := range anchors {
-		resolution := resolveEvidenceAnchorFromEntries(anchor, s.entries)
-		resolutions = append(resolutions, resolution)
+	resolutions, err := resolveEvidenceAnchorsFromQuerier(tx, anchors)
+	if err != nil {
+		return rollback(fmt.Errorf("read current parent evidence: %w", err))
+	}
+	for _, resolution := range resolutions {
 		if resolution.State != EvidenceCurrent {
+			anchor := resolution.Anchor
 			return rollback(fmt.Errorf("%w: %s is %s", ErrKnowledgeEvidenceNotCurrent, anchor.CitationID, resolution.State))
 		}
 	}

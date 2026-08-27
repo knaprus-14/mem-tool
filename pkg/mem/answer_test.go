@@ -63,8 +63,9 @@ func TestMapGenerationDefaultsRaiseOnlySmallOutputBudgets(t *testing.T) {
 		t.Fatalf("general answer budget = %d, want %d", general.MaxTokens, DefaultAnswerMaxTokens)
 	}
 	mapDefaults := (AnswerConfig{}).WithMapGenerationDefaults()
-	if mapDefaults.MaxTokens != DefaultMapGenerationTokens {
-		t.Fatalf("map generation budget = %d, want %d", mapDefaults.MaxTokens, DefaultMapGenerationTokens)
+	if mapDefaults.MaxTokens != DefaultMapGenerationTokens || mapDefaults.TimeoutSeconds != DefaultMapGenerationTimeoutSeconds {
+		t.Fatalf("map generation defaults = tokens %d timeout %d, want %d/%d", mapDefaults.MaxTokens,
+			mapDefaults.TimeoutSeconds, DefaultMapGenerationTokens, DefaultMapGenerationTimeoutSeconds)
 	}
 	custom := (AnswerConfig{MaxTokens: DefaultMapGenerationTokens + 1024}).WithMapGenerationDefaults()
 	if custom.MaxTokens != DefaultMapGenerationTokens+1024 {
@@ -308,6 +309,44 @@ func TestOllamaAnswerProviderSendsStructuredSchemaOnlyWhenRequested(t *testing.T
 	})
 	if err != nil || answer != `{"claims":[]}` {
 		t.Fatalf("structured schema request failed: answer=%q err=%v", answer, err)
+	}
+}
+
+func TestOllamaAnswerProviderFallsBackWhenLocalRuntimeRejectsSchemaGrammar(t *testing.T) {
+	requests := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests++
+		var request ollamaChatRequest
+		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		if requests == 1 {
+			if _, ok := request.Format.(map[string]any); !ok {
+				http.Error(w, "expected schema request", http.StatusBadRequest)
+				return
+			}
+			http.Error(w, "failed to parse grammar", http.StatusBadRequest)
+			return
+		}
+		if request.Format != "json" {
+			http.Error(w, fmt.Sprintf("fallback format=%#v, want json", request.Format), http.StatusBadRequest)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = fmt.Fprint(w, `{"message":{"role":"assistant","content":"{\"claims\":[]}"},"done":true,"done_reason":"stop"}`)
+	}))
+	defer server.Close()
+	provider, err := NewOllamaAnswerProvider(AnswerConfig{BaseURL: server.URL, Model: "local-chat"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	provider.HTTPClient = server.Client()
+	answer, err := provider.Generate(context.Background(), AnswerRequest{
+		System: "system", Prompt: "user", ResponseSchema: json.RawMessage(`{"type":"object"}`),
+	})
+	if err != nil || answer != `{"claims":[]}` || requests != 2 {
+		t.Fatalf("schema compatibility fallback: requests=%d answer=%q err=%v", requests, answer, err)
 	}
 }
 

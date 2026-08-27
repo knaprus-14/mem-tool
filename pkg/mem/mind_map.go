@@ -21,6 +21,8 @@ const (
 	ClassicMindMapFormatVersion = 1
 	MaxClassicMindMapTitleRunes = 512
 	MaxClassicMindMapTextRunes  = 65536
+	MaxClassicMindMapNodes      = 10000
+	MaxClassicMindMapDepth      = 256
 )
 
 type ClassicMindMapMode string
@@ -214,6 +216,7 @@ var (
 	ErrClassicMindMapAmbiguousRef     = errors.New("classic mind map reference is ambiguous")
 	ErrClassicMindMapRevisionConflict = errors.New("classic mind map revision conflict")
 	ErrClassicMindMapLocked           = errors.New("classic mind map node is locked")
+	ErrClassicMindMapRenderLimit      = errors.New("classic mind map exceeds browser render limits")
 )
 
 const classicMindMapSchema = `
@@ -417,15 +420,6 @@ func (s *Store) ImportClassicMindMap(draft ClassicMindMapDraft, actor, comment s
 
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	for _, node := range normalized.Nodes {
-		for _, source := range node.Sources {
-			if source.Kind == ClassicMindMapSourceEvidence {
-				if source.Evidence == nil || resolveEvidenceAnchorFromEntries(*source.Evidence, s.entries).State != EvidenceCurrent {
-					return ClassicMindMapDocument{}, fmt.Errorf("узел %q содержит неактуальный или отсутствующий источник", node.Label)
-				}
-			}
-		}
-	}
 	tx, err := s.db.Begin()
 	if err != nil {
 		return ClassicMindMapDocument{}, err
@@ -433,6 +427,22 @@ func (s *Store) ImportClassicMindMap(draft ClassicMindMapDraft, actor, comment s
 	rollback := func(cause error) (ClassicMindMapDocument, error) {
 		_ = tx.Rollback()
 		return ClassicMindMapDocument{}, cause
+	}
+	for _, node := range normalized.Nodes {
+		for _, source := range node.Sources {
+			if source.Kind == ClassicMindMapSourceEvidence {
+				if source.Evidence == nil {
+					return rollback(fmt.Errorf("узел %q содержит неактуальный или отсутствующий источник", node.Label))
+				}
+				resolutions, resolveErr := resolveEvidenceAnchorsFromQuerier(tx, []EvidenceAnchor{*source.Evidence})
+				if resolveErr != nil {
+					return rollback(fmt.Errorf("проверить источник узла %q: %w", node.Label, resolveErr))
+				}
+				if len(resolutions) != 1 || resolutions[0].State != EvidenceCurrent {
+					return rollback(fmt.Errorf("узел %q содержит неактуальный или отсутствующий источник", node.Label))
+				}
+			}
+		}
 	}
 	rootID := ids[rootRef]
 	if _, err := tx.Exec(`INSERT INTO mind_maps
@@ -583,8 +593,8 @@ func normalizeClassicMindMapDraft(draft ClassicMindMapDraft) (ClassicMindMapDraf
 	if !validClassicMindMapStatus(draft.Status) {
 		return draft, "", fmt.Errorf("неподдерживаемый статус карты %q", draft.Status)
 	}
-	if len(draft.Nodes) == 0 || len(draft.Nodes) > 100000 {
-		return draft, "", fmt.Errorf("карта должна содержать от 1 до 100000 узлов")
+	if len(draft.Nodes) == 0 || len(draft.Nodes) > MaxClassicMindMapNodes {
+		return draft, "", fmt.Errorf("карта должна содержать от 1 до %d узлов", MaxClassicMindMapNodes)
 	}
 	refs := make(map[string]bool, len(draft.Nodes))
 	rootRef := ""
@@ -649,15 +659,33 @@ func normalizeClassicMindMapDraft(draft ClassicMindMapDraft) (ClassicMindMapDraf
 	for _, node := range draft.Nodes {
 		parent[node.Ref] = node.ParentRef
 	}
+	depths := make(map[string]int, len(draft.Nodes))
 	for ref := range refs {
-		seen := map[string]bool{}
+		if depths[ref] != 0 {
+			continue
+		}
+		path := make([]string, 0, 16)
+		pathIndex := make(map[string]int, 16)
 		cursor := ref
+		baseDepth := 0
 		for cursor != "" {
-			if seen[cursor] {
+			if _, found := pathIndex[cursor]; found {
 				return draft, "", fmt.Errorf("карта содержит цикл через узел %q", cursor)
 			}
-			seen[cursor] = true
+			if known := depths[cursor]; known != 0 {
+				baseDepth = known
+				break
+			}
+			pathIndex[cursor] = len(path)
+			path = append(path, cursor)
 			cursor = parent[cursor]
+		}
+		for i := len(path) - 1; i >= 0; i-- {
+			baseDepth++
+			if baseDepth > MaxClassicMindMapDepth {
+				return draft, "", fmt.Errorf("глубина карты превышает %d уровней у узла %q", MaxClassicMindMapDepth, path[i])
+			}
+			depths[path[i]] = baseDepth
 		}
 	}
 	if draft.Generation != nil {
@@ -1186,6 +1214,16 @@ func (s *Store) AddClassicMindMapNode(mapRef, parentRef, label string, position 
 		if parent.Locked {
 			return "", fmt.Errorf("%w: родитель %q", ErrClassicMindMapLocked, parent.Label)
 		}
+		current, err := loadClassicMindMapDocument(tx, item.ID)
+		if err != nil {
+			return "", err
+		}
+		if len(current.Nodes) >= MaxClassicMindMapNodes {
+			return "", fmt.Errorf("карта уже содержит максимально допустимые %d узлов", MaxClassicMindMapNodes)
+		}
+		if classicMindMapNodeDepth(current.Nodes, parent.ID)+1 > MaxClassicMindMapDepth {
+			return "", fmt.Errorf("глубина карты не может превышать %d уровней", MaxClassicMindMapDepth)
+		}
 		count, err := classicMindMapSiblingCount(tx, item.ID, parent.ID)
 		if err != nil {
 			return "", err
@@ -1283,6 +1321,9 @@ func (s *Store) MoveClassicMindMapNode(mapRef, nodeRef, parentRef string, positi
 		}
 		if classicMindMapDescendant(doc.Nodes, node.ID, parent.ID) {
 			return "", fmt.Errorf("перемещение создаст цикл: %q находится внутри ветки %q", parent.Label, node.Label)
+		}
+		if classicMindMapNodeDepth(doc.Nodes, parent.ID)+classicMindMapSubtreeHeight(doc.Nodes, node.ID) > MaxClassicMindMapDepth {
+			return "", fmt.Errorf("глубина карты не может превышать %d уровней", MaxClassicMindMapDepth)
 		}
 		targetOrder, err := classicMindMapSiblingIDs(tx, item.ID, parent.ID, node.ID)
 		if err != nil {
@@ -1425,7 +1466,11 @@ func (s *Store) AttachClassicMindMapEvidence(mapRef, nodeRef string, anchor Evid
 	}
 	var attached ClassicMindMapSource
 	doc, _, err := s.mutateClassicMindMap(mapRef, expectedRevision, actor, comment, "attach_evidence", func(tx *sql.Tx, item ClassicMindMap) (string, error) {
-		if resolveEvidenceAnchorFromEntries(anchor, s.entries).State != EvidenceCurrent {
+		resolutions, resolveErr := resolveEvidenceAnchorsFromQuerier(tx, []EvidenceAnchor{anchor})
+		if resolveErr != nil {
+			return "", fmt.Errorf("проверить current-состояние источника %s: %w", anchor.CitationID, resolveErr)
+		}
+		if len(resolutions) != 1 || resolutions[0].State != EvidenceCurrent {
 			return "", fmt.Errorf("источник %s не является current в активной базе", anchor.CitationID)
 		}
 		node, err := resolveClassicMindMapNodeRef(tx, item.ID, nodeRef)
@@ -1958,6 +2003,100 @@ func classicMindMapDescendant(nodes []ClassicMindMapNode, ancestorID, candidateI
 		}
 	}
 	return false
+}
+
+func classicMindMapNodeDepth(nodes []ClassicMindMapNode, nodeID string) int {
+	parent := make(map[string]string, len(nodes))
+	for _, node := range nodes {
+		parent[node.ID] = node.ParentID
+	}
+	depth := 0
+	seen := make(map[string]bool, 16)
+	for cursor := nodeID; cursor != ""; cursor = parent[cursor] {
+		if seen[cursor] {
+			return MaxClassicMindMapDepth + 1
+		}
+		seen[cursor] = true
+		depth++
+	}
+	return depth
+}
+
+func classicMindMapSubtreeHeight(nodes []ClassicMindMapNode, rootID string) int {
+	children := make(map[string][]string, len(nodes))
+	for _, node := range nodes {
+		children[node.ParentID] = append(children[node.ParentID], node.ID)
+	}
+	type item struct {
+		id    string
+		depth int
+	}
+	stack := []item{{id: rootID, depth: 1}}
+	seen := make(map[string]bool, len(nodes))
+	maxDepth := 0
+	for len(stack) > 0 {
+		current := stack[len(stack)-1]
+		stack = stack[:len(stack)-1]
+		if seen[current.id] {
+			return MaxClassicMindMapDepth + 1
+		}
+		seen[current.id] = true
+		if current.depth > maxDepth {
+			maxDepth = current.depth
+		}
+		for _, childID := range children[current.id] {
+			stack = append(stack, item{id: childID, depth: current.depth + 1})
+		}
+	}
+	return maxDepth
+}
+
+func validateClassicMindMapBrowserRender(nodes []ClassicMindMapNode) error {
+	if len(nodes) > MaxClassicMindMapNodes {
+		return fmt.Errorf("%w: карта содержит %d узлов, безопасный предел веб-редактора — %d; данные не изменены, используйте CLI export",
+			ErrClassicMindMapRenderLimit, len(nodes), MaxClassicMindMapNodes)
+	}
+	parents := make(map[string]string, len(nodes))
+	for _, node := range nodes {
+		parents[node.ID] = node.ParentID
+	}
+	depths := map[string]int{"": 0}
+	for _, node := range nodes {
+		if _, ready := depths[node.ID]; ready {
+			continue
+		}
+		path := make([]string, 0, 16)
+		positions := make(map[string]int, 16)
+		cursor := node.ID
+		baseDepth := 0
+		for cursor != "" {
+			if depth, ready := depths[cursor]; ready {
+				baseDepth = depth
+				break
+			}
+			if _, repeated := positions[cursor]; repeated {
+				return fmt.Errorf("%w: карта содержит цикл; данные не изменены, используйте CLI export",
+					ErrClassicMindMapRenderLimit)
+			}
+			parent, exists := parents[cursor]
+			if !exists {
+				return fmt.Errorf("%w: карта ссылается на отсутствующий родительский узел; данные не изменены, используйте CLI export",
+					ErrClassicMindMapRenderLimit)
+			}
+			positions[cursor] = len(path)
+			path = append(path, cursor)
+			cursor = parent
+		}
+		for i := len(path) - 1; i >= 0; i-- {
+			baseDepth++
+			depths[path[i]] = baseDepth
+			if baseDepth > MaxClassicMindMapDepth {
+				return fmt.Errorf("%w: глубина карты превышает %d уровней; данные не изменены, используйте CLI export",
+					ErrClassicMindMapRenderLimit, MaxClassicMindMapDepth)
+			}
+		}
+	}
+	return nil
 }
 
 func classicMindMapEvidenceTitle(anchor EvidenceAnchor) string {

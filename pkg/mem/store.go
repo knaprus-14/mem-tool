@@ -97,13 +97,14 @@ type DocumentChunk struct {
 
 // Store — потокобезопасное хранилище векторов на базе SQLite
 type Store struct {
-	mu           sync.RWMutex
-	db           *sql.DB
-	path         string
-	entries      []Entry
-	vectors      [][]float32
-	lexicalMode  string
-	lexicalDirty bool
+	mu              sync.RWMutex
+	db              *sql.DB
+	path            string
+	entries         []Entry
+	vectors         [][]float32
+	entryGeneration int64
+	lexicalMode     string
+	lexicalDirty    bool
 }
 
 // Схема БД (создаётся при инициализации)
@@ -146,6 +147,43 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_source_chunk
     WHERE source_file != '';
 
 CREATE INDEX IF NOT EXISTS idx_backend ON entries(backend);
+
+-- A durable generation lets long-lived Store instances detect entry changes
+-- made by another process before opening a document-replacement writer.
+CREATE TABLE IF NOT EXISTS entry_cache_state (
+    singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
+    generation INTEGER NOT NULL CHECK (generation >= 0)
+);
+
+INSERT OR IGNORE INTO entry_cache_state(singleton, generation) VALUES (1, 0);
+
+CREATE TRIGGER IF NOT EXISTS entries_cache_after_insert
+AFTER INSERT ON entries
+BEGIN
+    UPDATE entry_cache_state SET generation = generation + 1 WHERE singleton = 1;
+END;
+
+CREATE TRIGGER IF NOT EXISTS entries_cache_after_update
+AFTER UPDATE ON entries
+BEGIN
+    UPDATE entry_cache_state SET generation = generation + 1 WHERE singleton = 1;
+END;
+
+CREATE TRIGGER IF NOT EXISTS entries_cache_after_delete
+AFTER DELETE ON entries
+BEGIN
+    UPDATE entry_cache_state SET generation = generation + 1 WHERE singleton = 1;
+END;
+
+-- entries_fts is shared by every Store connection. Its marker is updated in
+-- the same transaction as a complete rebuild so readers can pin both the
+-- entry and lexical generations to one SQLite snapshot.
+CREATE TABLE IF NOT EXISTS entry_fts_state (
+    singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
+    generation INTEGER NOT NULL CHECK (generation >= -1)
+);
+
+INSERT OR IGNORE INTO entry_fts_state(singleton, generation) VALUES (1, -1);
 `
 
 const upsertChunkSQL = `INSERT INTO entries
@@ -282,6 +320,10 @@ func initSchema(db *sql.DB) error {
 		_ = tx.Rollback()
 		return err
 	}
+	if err := migrateLegacyDocumentHistoryTx(tx); err != nil {
+		_ = tx.Rollback()
+		return err
+	}
 	if err := tx.Commit(); err != nil {
 		// Commit может упасть, если другая горутина уже создала схему —
 		// это нормально для CREATE TABLE IF NOT EXISTS, просто проглатываем.
@@ -324,6 +366,17 @@ func initSchema(db *sql.DB) error {
 			return err
 		}
 		if err := migrateKnowledgeReviewSchemaDB(db); err != nil {
+			return err
+		}
+		migrationTx, err := db.Begin()
+		if err != nil {
+			return err
+		}
+		if err := migrateLegacyDocumentHistoryTx(migrationTx); err != nil {
+			_ = migrationTx.Rollback()
+			return err
+		}
+		if err := migrationTx.Commit(); err != nil {
 			return err
 		}
 	}
@@ -440,19 +493,26 @@ func (s *Store) Close() error {
 // loadAll загружает все записи в оперативный кэш при старте.
 // При повреждении embedding/tags в БД — пропускаем запись (с пометкой в stderr
 // через возвращаемый wrapped error), чтобы битый row не сломал загрузку всей базы.
-func (s *Store) loadAll() error {
-	rows, err := s.db.Query(`SELECT id, title, text, tags, created, backend, embedding_model, embedding_space, dims, embedding,
-		source_file, chunk_label, chunk_index, total_chunks,
-		document_id, document_revision, chunk_hash,
-		source_path, media_type, page, block_index, block_marker,
-		block_chunk_index, block_total_chunks,
-		extraction_method, ocr_confidence, warnings, important
-		FROM entries ORDER BY id`)
+type entryQuerier interface {
+	Query(string, ...any) (*sql.Rows, error)
+}
+
+const storedEntryColumns = `id, title, text, tags, created, backend, embedding_model, embedding_space, dims, embedding,
+source_file, chunk_label, chunk_index, total_chunks,
+document_id, document_revision, chunk_hash,
+source_path, media_type, page, block_index, block_marker,
+block_chunk_index, block_total_chunks,
+extraction_method, ocr_confidence, warnings, important`
+
+func loadEntriesFromQuery(q entryQuerier, query string, args ...any) ([]Entry, [][]float32, error) {
+	rows, err := q.Query(query, args...)
 	if err != nil {
-		return err
+		return nil, nil, err
 	}
 	defer rows.Close()
 
+	var entries []Entry
+	var vectors [][]float32
 	for rows.Next() {
 		var e Entry
 		var tagsJSON string
@@ -468,28 +528,68 @@ func (s *Store) loadAll() error {
 			&e.BlockIndex, &e.BlockMarker, &e.BlockChunkIndex, &e.BlockTotalChunks,
 			&e.ExtractionMethod, &e.OCRConfidence,
 			&warningsJSON, &important); err != nil {
-			return err
+			return nil, nil, err
 		}
 
 		tags, err := tagsFromJSON(tagsJSON)
 		if err != nil {
-			return fmt.Errorf("запись #%d: %w", e.ID, err)
+			return nil, nil, fmt.Errorf("запись #%d: %w", e.ID, err)
 		}
 		embedding, err := bytesToFloats(embBytes)
 		if err != nil {
-			return fmt.Errorf("запись #%d: %w", e.ID, err)
+			return nil, nil, fmt.Errorf("запись #%d: %w", e.ID, err)
+		}
+		if len(embedding) != e.Dims {
+			return nil, nil, fmt.Errorf("запись #%d: размер embedding %d не совпадает с dims %d", e.ID, len(embedding), e.Dims)
 		}
 		e.Tags = tags
 		if err := json.Unmarshal([]byte(warningsJSON), &e.Warnings); err != nil {
-			return fmt.Errorf("запись #%d: повреждены warnings: %w", e.ID, err)
+			return nil, nil, fmt.Errorf("запись #%d: повреждены warnings: %w", e.ID, err)
 		}
 		e.Embedding = embedding
 		e.Important = important != 0
 
-		s.entries = append(s.entries, e)
-		s.vectors = append(s.vectors, e.Embedding)
+		entries = append(entries, e)
+		vectors = append(vectors, e.Embedding)
 	}
-	return rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, nil, err
+	}
+	return entries, vectors, nil
+}
+
+func loadAllEntries(q entryQuerier) ([]Entry, [][]float32, error) {
+	return loadEntriesFromQuery(q, `SELECT `+storedEntryColumns+` FROM entries ORDER BY id`)
+}
+
+func loadEntriesBySource(q entryQuerier, sourcePath string) ([]Entry, error) {
+	entries, _, err := loadEntriesFromQuery(q,
+		`SELECT `+storedEntryColumns+` FROM entries WHERE `+sourcePathSQLPredicate("source_file")+` ORDER BY chunk_index`, sourcePath)
+	return entries, err
+}
+
+func (s *Store) loadAll() error {
+	tx, err := s.db.Begin()
+	if err != nil {
+		return fmt.Errorf("begin entry cache snapshot: %w", err)
+	}
+	entries, vectors, err := loadAllEntries(tx)
+	if err != nil {
+		_ = tx.Rollback()
+		return err
+	}
+	generation, err := loadEntryCacheGeneration(tx)
+	if err != nil {
+		_ = tx.Rollback()
+		return err
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit entry cache snapshot: %w", err)
+	}
+	s.entries = entries
+	s.vectors = vectors
+	s.entryGeneration = generation
+	return nil
 }
 
 // === Сериализация ===
@@ -586,7 +686,7 @@ func (s *Store) add(text string, title string, tags []string, backend, embedding
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	now := time.Now().UTC().Format(time.RFC3339)
+	now := time.Now().UTC().Format(time.RFC3339Nano)
 	// Копируем tags и embedding — caller может мутировать свои слайсы после возврата,
 	// а Store хранит свои копии в кэше (s.entries/s.vectors).
 	tagsCopy := append([]string(nil), tags...)
@@ -987,9 +1087,9 @@ func (s *Store) replaceDocumentChunks(sourcePath string, chunks []DocumentChunk,
 
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	tx, err := s.db.Begin()
+	tx, cacheEntries, err := s.beginEntryMutationTx("document replacement")
 	if err != nil {
-		return fmt.Errorf("begin document replacement: %w", err)
+		return err
 	}
 	rollback := func(cause error) error {
 		if rollbackErr := tx.Rollback(); rollbackErr != nil && rollbackErr != sql.ErrTxDone {
@@ -997,34 +1097,44 @@ func (s *Store) replaceDocumentChunks(sourcePath string, chunks []DocumentChunk,
 		}
 		return cause
 	}
-	oldEntries := make([]Entry, 0)
-	for i := range s.entries {
-		if s.entries[i].SourceFile == sourcePath {
-			oldEntries = append(oldEntries, cloneEntry(s.entries[i]))
-		}
+	oldEntries, err := loadEntriesBySource(tx, sourcePath)
+	if err != nil {
+		return rollback(fmt.Errorf("read current document before replacement: %w", err))
 	}
-	if len(oldEntries) > 0 && oldEntries[0].DocumentID != "" &&
-		oldEntries[0].DocumentRevision == expectedDocumentRevision {
-		if len(oldEntries) != len(prepared) {
-			return rollback(fmt.Errorf("document revision %s was reused for different chunk content", expectedDocumentRevision))
-		}
-		sort.Slice(oldEntries, func(i, j int) bool { return oldEntries[i].ChunkIndex < oldEntries[j].ChunkIndex })
-		for i := range prepared {
-			if oldEntries[i].ChunkIndex != prepared[i].entry.ChunkIndex ||
-				oldEntries[i].ChunkHash != prepared[i].entry.ChunkHash || oldEntries[i].Text != prepared[i].entry.Text {
-				return rollback(fmt.Errorf("document revision %s was reused for different chunk content", expectedDocumentRevision))
-			}
-		}
+	currentTombstone, tombstoneErr := loadDocumentTombstone(tx, sourcePath)
+	if tombstoneErr != nil && !errors.Is(tombstoneErr, sql.ErrNoRows) {
+		return rollback(fmt.Errorf("read current empty document before replacement: %w", tombstoneErr))
 	}
-	if len(oldEntries) > 0 && oldEntries[0].DocumentID != "" && oldEntries[0].DocumentRevision != "" &&
-		oldEntries[0].DocumentRevision != expectedDocumentRevision {
-		graph, graphErr := loadKnowledgeGraphFromQuerier(s.db)
+	if tombstoneErr == nil && len(oldEntries) == 0 {
+		graph, graphErr := loadKnowledgeGraphFromQuerier(tx)
 		if graphErr != nil {
 			return rollback(fmt.Errorf("snapshot current knowledge graph: %w", graphErr))
 		}
-		if snapshotErr := archiveDocumentHistoryTx(tx, oldEntries, graph, now, "before_document_replace"); snapshotErr != nil {
+		if _, snapshotErr := writeEmptyDocumentHistoryVersionTx(tx, currentTombstone, graph, now, "before_document_replace"); snapshotErr != nil {
 			return rollback(snapshotErr)
 		}
+	}
+	historyEntries := normalizeLegacyDocumentEntries(oldEntries, sourcePath)
+	if len(historyEntries) > 0 &&
+		(historyEntries[0].DocumentRevision != expectedDocumentRevision || !sameDocumentChunkLayout(historyEntries, prepared)) {
+		graph, graphErr := loadKnowledgeGraphFromQuerier(tx)
+		if graphErr != nil {
+			return rollback(fmt.Errorf("snapshot current knowledge graph: %w", graphErr))
+		}
+		if _, snapshotErr := archiveDocumentHistoryTx(tx, historyEntries, graph, now, "before_document_replace"); snapshotErr != nil {
+			return rollback(snapshotErr)
+		}
+	}
+	if _, err := tx.Exec(`DELETE FROM document_current_tombstones
+WHERE document_id = ? OR `+sourcePathSQLPredicate("source_path"), expectedDocumentID, sourcePath); err != nil {
+		return rollback(fmt.Errorf("clear empty document marker: %w", err))
+	}
+	// Canonical paths are case-insensitive on Windows. Remove an older spelling
+	// before the exact-key UPSERT so one physical source cannot acquire duplicate
+	// rows merely because the caller used different path casing.
+	if _, err := tx.Exec(`DELETE FROM entries WHERE `+sourcePathSQLPredicate("source_file")+` AND source_file <> ?`,
+		sourcePath, sourcePath); err != nil {
+		return rollback(fmt.Errorf("normalize document source path: %w", err))
 	}
 
 	for i := range prepared {
@@ -1045,7 +1155,7 @@ func (s *Store) replaceDocumentChunks(sourcePath string, chunks []DocumentChunk,
 			return rollback(fmt.Errorf("read document chunk %d id: %w", i+1, err))
 		}
 	}
-	if _, err := tx.Exec(`DELETE FROM entries WHERE source_file = ? AND chunk_index >= ?`, sourcePath, len(prepared)); err != nil {
+	if _, err := tx.Exec(`DELETE FROM entries WHERE `+sourcePathSQLPredicate("source_file")+` AND chunk_index >= ?`, sourcePath, len(prepared)); err != nil {
 		return rollback(fmt.Errorf("prune stale document chunks: %w", err))
 	}
 	if manifest != nil {
@@ -1058,32 +1168,65 @@ func (s *Store) replaceDocumentChunks(sourcePath string, chunks []DocumentChunk,
 			return rollback(err)
 		}
 	}
+	finalGeneration, err := loadEntryCacheGeneration(tx)
+	if err != nil {
+		return rollback(err)
+	}
+	replacementEntries := make([]Entry, len(prepared))
+	for i := range prepared {
+		replacementEntries[i] = prepared[i].entry
+	}
+	freshEntries, freshVectors := replaceSourceInEntryCache(cacheEntries, sourcePath, replacementEntries)
 	if err := tx.Commit(); err != nil {
 		return fmt.Errorf("commit document replacement: %w", err)
 	}
 
-	entries := s.entries[:0]
-	vectors := s.vectors[:0]
-	for i := range s.entries {
-		if s.entries[i].SourceFile == sourcePath {
-			continue
-		}
-		entries = append(entries, s.entries[i])
-		vectors = append(vectors, s.vectors[i])
-	}
-	for i := range prepared {
-		entries = append(entries, prepared[i].entry)
-		vectors = append(vectors, prepared[i].entry.Embedding)
-	}
-	s.entries = entries
-	s.vectors = vectors
+	s.entries = freshEntries
+	s.vectors = freshVectors
+	s.entryGeneration = finalGeneration
 	s.lexicalDirty = true
 	return nil
 }
 
-// PruneSourceChunks удаляет устаревшие хвостовые чанки документа после
-// успешной повторной индексации более короткой версии. Ручные записи и чанки
-// других источников не затрагиваются.
+// sameDocumentChunkLayout compares the source-derived representation only.
+// DocumentRevision identifies extracted source content, while chunk boundaries
+// may legitimately change when the chunking configuration changes.
+func sameDocumentChunkLayout(current []Entry, replacement []preparedDocumentChunk) bool {
+	if len(current) != len(replacement) {
+		return false
+	}
+	for i := range replacement {
+		old := current[i]
+		fresh := replacement[i].entry
+		if old.ChunkIndex != fresh.ChunkIndex || old.TotalChunks != fresh.TotalChunks ||
+			old.Text != fresh.Text || old.ChunkHash != fresh.ChunkHash ||
+			old.Page != fresh.Page || old.BlockIndex != fresh.BlockIndex ||
+			old.BlockMarker != fresh.BlockMarker || old.BlockChunkIndex != fresh.BlockChunkIndex ||
+			old.BlockTotalChunks != fresh.BlockTotalChunks || old.ExtractionMethod != fresh.ExtractionMethod ||
+			old.OCRConfidence != fresh.OCRConfidence || !stringSlicesEqual(old.Warnings, fresh.Warnings) {
+			return false
+		}
+	}
+	return true
+}
+
+func stringSlicesEqual(left, right []string) bool {
+	if len(left) != len(right) {
+		return false
+	}
+	for i := range left {
+		if left[i] != right[i] {
+			return false
+		}
+	}
+	return true
+}
+
+// PruneSourceChunks is retained for source compatibility. Removing a complete
+// source is routed through the history-preserving empty-state transaction;
+// partial pruning is rejected because it cannot produce coherent provenance
+// totals or an explicit replacement revision. Call ReplaceDocumentChunks for a
+// shorter non-empty document.
 func (s *Store) PruneSourceChunks(sourceFile string, firstStaleIndex int) (int64, error) {
 	if sourceFile == "" {
 		return 0, fmt.Errorf("удаление хвостовых чанков: пустой source_file")
@@ -1091,35 +1234,10 @@ func (s *Store) PruneSourceChunks(sourceFile string, firstStaleIndex int) (int64
 	if firstStaleIndex < 0 {
 		return 0, fmt.Errorf("удаление хвостовых чанков: отрицательный индекс %d", firstStaleIndex)
 	}
-
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
-	res, err := s.db.Exec(`DELETE FROM entries WHERE source_file = ? AND chunk_index >= ?`, sourceFile, firstStaleIndex)
-	if err != nil {
-		return 0, err
+	if firstStaleIndex != 0 {
+		return 0, fmt.Errorf("частичное удаление чанков больше не поддерживается; замените документ атомарно через ReplaceDocumentChunks")
 	}
-	deleted, err := res.RowsAffected()
-	if err != nil {
-		return 0, fmt.Errorf("RowsAffected: %w", err)
-	}
-	if deleted == 0 {
-		return 0, nil
-	}
-
-	entries := s.entries[:0]
-	vectors := s.vectors[:0]
-	for i := range s.entries {
-		if s.entries[i].SourceFile == sourceFile && s.entries[i].ChunkIndex >= firstStaleIndex {
-			continue
-		}
-		entries = append(entries, s.entries[i])
-		vectors = append(vectors, s.vectors[i])
-	}
-	s.entries = entries
-	s.vectors = vectors
-	s.lexicalDirty = true
-	return deleted, nil
+	return s.ReplaceDocumentWithEmpty(sourceFile)
 }
 
 // DeleteById удаляет запись по ID (hard delete)
@@ -1173,124 +1291,180 @@ func (s *Store) UpdateByIdWithEmbeddingIdentity(id int64, text string, title str
 }
 
 func (s *Store) updateByID(id int64, text string, title string, tags []string, embedding []float32, identity *EmbeddingIdentity) error {
+	return s.updateByIDWithBeforeWrite(id, text, title, tags, embedding, identity, nil)
+}
+
+// updateByIDWithBeforeWrite keeps the optional callback private for
+// deterministic transaction-interleaving tests. Production callers always
+// pass nil through updateByID.
+func (s *Store) updateByIDWithBeforeWrite(id int64, text string, title string, tags []string, embedding []float32, identity *EmbeddingIdentity, beforeWrite func()) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	tx, cacheEntries, err := s.beginEntryMutationTx("entry update")
+	if err != nil {
+		return err
+	}
+	rollback := func(cause error) error {
+		if rollbackErr := tx.Rollback(); rollbackErr != nil && rollbackErr != sql.ErrTxDone {
+			return fmt.Errorf("%v; entry update rollback failed: %w", cause, rollbackErr)
+		}
+		return cause
+	}
 	entryIndex := -1
-	for i := range s.entries {
-		if s.entries[i].ID == id {
+	for i := range cacheEntries {
+		if cacheEntries[i].ID == id {
 			entryIndex = i
 			break
 		}
 	}
 	if entryIndex < 0 {
-		return fmt.Errorf("запись #%d не найдена", id)
+		return rollback(fmt.Errorf("запись #%d не найдена", id))
 	}
-	if s.entries[entryIndex].DocumentID != "" && text != s.entries[entryIndex].Text {
-		return fmt.Errorf("запись #%d является source-anchored chunk; измените исходный документ и повторите mem import", id)
+	current := cloneEntry(cacheEntries[entryIndex])
+	if current.DocumentID != "" && text != current.Text {
+		return rollback(fmt.Errorf("запись #%d является source-anchored chunk; измените исходный документ и повторите mem import", id))
 	}
 
-	now := time.Now().UTC().Format(time.RFC3339)
+	now := time.Now().UTC().Format(time.RFC3339Nano)
 	// Копируем tags — caller может мутировать свой слайс после возврата.
 	tagsCopy := append([]string(nil), tags...)
 	tagsStr, err := tagsToJSON(tagsCopy)
 	if err != nil {
-		return fmt.Errorf("сериализация тегов: %w", err)
+		return rollback(fmt.Errorf("сериализация тегов: %w", err))
 	}
 
+	updated := current
+	updated.Text, updated.Title, updated.Tags, updated.Created = text, title, tagsCopy, now
+	var result sql.Result
 	if embedding != nil {
 		embCopy := append([]float32(nil), embedding...)
 		embBytes, err := floatsToBytes(embCopy)
 		if err != nil {
-			return fmt.Errorf("сериализация embedding: %w", err)
+			return rollback(fmt.Errorf("сериализация embedding: %w", err))
 		}
-		backend := s.entries[entryIndex].Backend
+		backend := current.Backend
 		embeddingModel, embeddingSpace := "", ""
 		if identity != nil {
 			backend = identity.Backend
 			embeddingModel = identity.Model
 			embeddingSpace = identity.SpaceID
 		}
-		res, err := s.db.Exec(`UPDATE entries SET text=?, title=?, tags=?, backend=?, embedding_model=?, embedding_space=?, embedding=?, dims=?, created=? WHERE id=?`,
-			text, title, tagsStr, backend, embeddingModel, embeddingSpace, embBytes, len(embCopy), now, id)
+		if beforeWrite != nil {
+			beforeWrite()
+		}
+		result, err = tx.Exec(`UPDATE entries
+SET text=?, title=?, tags=?, backend=?, embedding_model=?, embedding_space=?, embedding=?, dims=?, created=?
+WHERE id=? AND text=? AND created=? AND document_id=? AND document_revision=? AND chunk_hash=? AND source_file=? AND source_path=?`,
+			text, title, tagsStr, backend, embeddingModel, embeddingSpace, embBytes, len(embCopy), now,
+			id, current.Text, current.Created, current.DocumentID, current.DocumentRevision, current.ChunkHash,
+			current.SourceFile, current.SourcePath)
 		if err != nil {
-			return err
+			return rollback(err)
 		}
-		if n, rowsErr := res.RowsAffected(); rowsErr != nil {
-			return fmt.Errorf("RowsAffected: %w", rowsErr)
-		} else if n == 0 {
-			return fmt.Errorf("запись #%d не найдена", id)
-		}
-		s.lexicalDirty = true
-		for i := range s.entries {
-			if s.entries[i].ID == id {
-				s.entries[i].Text = text
-				s.entries[i].Title = title
-				s.entries[i].Tags = tagsCopy
-				s.entries[i].Created = now
-				s.entries[i].Backend = backend
-				s.entries[i].EmbeddingModel = embeddingModel
-				s.entries[i].EmbeddingSpace = embeddingSpace
-				s.entries[i].Embedding = embCopy
-				s.entries[i].Dims = len(embCopy)
-				s.vectors[i] = embCopy
-				return nil
-			}
-		}
-		return fmt.Errorf("запись #%d не найдена", id)
+		updated.Backend = backend
+		updated.EmbeddingModel = embeddingModel
+		updated.EmbeddingSpace = embeddingSpace
+		updated.Embedding = embCopy
+		updated.Dims = len(embCopy)
 	} else {
-		res, err := s.db.Exec(`UPDATE entries SET text=?, title=?, tags=?, created=? WHERE id=?`,
-			text, title, tagsStr, now, id)
+		if beforeWrite != nil {
+			beforeWrite()
+		}
+		result, err = tx.Exec(`UPDATE entries SET text=?, title=?, tags=?, created=?
+WHERE id=? AND text=? AND created=? AND document_id=? AND document_revision=? AND chunk_hash=? AND source_file=? AND source_path=?`,
+			text, title, tagsStr, now, id, current.Text, current.Created, current.DocumentID,
+			current.DocumentRevision, current.ChunkHash, current.SourceFile, current.SourcePath)
 		if err != nil {
-			return err
+			return rollback(err)
 		}
-		if n, rowsErr := res.RowsAffected(); rowsErr != nil {
-			return fmt.Errorf("RowsAffected: %w", rowsErr)
-		} else if n == 0 {
-			return fmt.Errorf("запись #%d не найдена", id)
-		}
-		s.lexicalDirty = true
-		for i := range s.entries {
-			if s.entries[i].ID == id {
-				s.entries[i].Text = text
-				s.entries[i].Title = title
-				s.entries[i].Tags = tagsCopy
-				s.entries[i].Created = now
-				return nil
-			}
-		}
-		return fmt.Errorf("запись #%d не найдена", id)
 	}
+	rows, rowsErr := result.RowsAffected()
+	if rowsErr != nil {
+		return rollback(fmt.Errorf("RowsAffected: %w", rowsErr))
+	}
+	if rows != 1 {
+		return rollback(fmt.Errorf("запись #%d изменилась до атомарного обновления", id))
+	}
+	finalGeneration, err := loadEntryCacheGeneration(tx)
+	if err != nil {
+		return rollback(err)
+	}
+	freshEntries := append([]Entry(nil), cacheEntries...)
+	freshEntries[entryIndex] = updated
+	freshVectors := make([][]float32, len(freshEntries))
+	for i := range freshEntries {
+		freshVectors[i] = freshEntries[i].Embedding
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit entry update: %w", err)
+	}
+	s.entries, s.vectors, s.entryGeneration, s.lexicalDirty = freshEntries, freshVectors, finalGeneration, true
+	return nil
 }
 
 // ToggleImportant переключает флаг важности.
 // Возвращает Entry-копию (не указатель на внутренний кэш) — иначе вызывающий код
 // может читать/менять состояние Store конкурентно после снятия локального Lock.
 func (s *Store) ToggleImportant(id int64) (*Entry, error) {
+	return s.toggleImportantWithBeforeWrite(id, nil)
+}
+
+// toggleImportantWithBeforeWrite exposes a deterministic interleaving point to
+// package tests while production calls execute without a callback.
+func (s *Store) toggleImportantWithBeforeWrite(id int64, beforeWrite func()) (*Entry, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-
-	var current int
-	err := s.db.QueryRow(`SELECT important FROM entries WHERE id = ?`, id).Scan(&current)
-	if err == sql.ErrNoRows {
-		return nil, fmt.Errorf("запись #%d не найдена", id)
-	}
+	tx, cacheEntries, err := s.beginEntryMutationTx("entry importance update")
 	if err != nil {
 		return nil, err
 	}
-	newVal := 1 - current
-	_, err = s.db.Exec(`UPDATE entries SET important = ? WHERE id = ?`, newVal, id)
-	if err != nil {
-		return nil, err
+	rollback := func(cause error) (*Entry, error) {
+		if rollbackErr := tx.Rollback(); rollbackErr != nil && rollbackErr != sql.ErrTxDone {
+			return nil, fmt.Errorf("%v; entry importance rollback failed: %w", cause, rollbackErr)
+		}
+		return nil, cause
 	}
-
-	for i := range s.entries {
-		if s.entries[i].ID == id {
-			s.entries[i].Important = newVal != 0
-			entry := cloneEntry(s.entries[i])
-			return &entry, nil
+	entryIndex := -1
+	for i := range cacheEntries {
+		if cacheEntries[i].ID == id {
+			entryIndex = i
+			break
 		}
 	}
-	return nil, fmt.Errorf("запись #%d не найдена", id)
+	if entryIndex < 0 {
+		return rollback(fmt.Errorf("запись #%d не найдена", id))
+	}
+	if beforeWrite != nil {
+		beforeWrite()
+	}
+	var newVal int
+	err = tx.QueryRow(`UPDATE entries
+SET important = CASE important WHEN 0 THEN 1 ELSE 0 END
+WHERE id = ? RETURNING important`, id).Scan(&newVal)
+	if err == sql.ErrNoRows {
+		return rollback(fmt.Errorf("запись #%d не найдена", id))
+	}
+	if err != nil {
+		return rollback(err)
+	}
+	finalGeneration, err := loadEntryCacheGeneration(tx)
+	if err != nil {
+		return rollback(err)
+	}
+	updated := cloneEntry(cacheEntries[entryIndex])
+	updated.Important = newVal != 0
+	freshEntries := append([]Entry(nil), cacheEntries...)
+	freshEntries[entryIndex] = updated
+	freshVectors := make([][]float32, len(freshEntries))
+	for i := range freshEntries {
+		freshVectors[i] = freshEntries[i].Embedding
+	}
+	if err := tx.Commit(); err != nil {
+		return nil, fmt.Errorf("commit entry importance update: %w", err)
+	}
+	s.entries, s.vectors, s.entryGeneration, s.lexicalDirty = freshEntries, freshVectors, finalGeneration, true
+	result := cloneEntry(updated)
+	return &result, nil
 }
 
 // Search ищет ближайшие по смыслу записи (cosine similarity в Go)
@@ -1308,8 +1482,11 @@ func (s *Store) SearchInEmbeddingSpace(queryVector []float32, backend, embedding
 }
 
 func (s *Store) search(queryVector []float32, backend, embeddingSpace string, limit int) ([]Entry, error) {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if err := s.refreshEntryCacheIfStaleUnlocked("vector search"); err != nil {
+		return nil, err
+	}
 
 	if limit <= 0 {
 		limit = 10
@@ -1364,8 +1541,11 @@ func (s *Store) search(queryVector []float32, backend, embeddingSpace string, li
 // Раньше возвращался хвост s.entries (отсортирован при loadAll по id ASC)
 // и разворачивался — порядок определялся id, а не фактическим временем создания.
 func (s *Store) Recent(limit int) ([]Entry, error) {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if err := s.refreshEntryCacheIfStaleUnlocked("recent entries"); err != nil {
+		return nil, err
+	}
 
 	if limit <= 0 {
 		limit = 10
@@ -1400,8 +1580,11 @@ func (s *Store) Recent(limit int) ([]Entry, error) {
 // Возвращает указатель на локальную копию Entry с глубокими копиями Tags/Embedding —
 // вызывающий код не может мутировать внутренний кэш Store после снятия RLock.
 func (s *Store) GetByID(id int64) (*Entry, error) {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if err := s.refreshEntryCacheIfStaleUnlocked("entry lookup"); err != nil {
+		return nil, err
+	}
 
 	for i := range s.entries {
 		if s.entries[i].ID == id {
@@ -1416,8 +1599,11 @@ func (s *Store) GetByID(id int64) (*Entry, error) {
 // Возвращает []Entry (не []*Entry) — каждая запись это копия с глубокими копиями
 // Tags/Embedding, чтобы вызывающий код не мог мутировать внутренний кэш Store.
 func (s *Store) GetBySourceFile(sourceFile string) []Entry {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if err := s.refreshEntryCacheIfStaleUnlocked("source entry lookup"); err != nil {
+		return nil
+	}
 
 	var out []Entry
 	for i := range s.entries {
@@ -1431,10 +1617,13 @@ func (s *Store) GetBySourceFile(sourceFile string) []Entry {
 
 // SourceFiles возвращает список уникальных файлов-источников с количеством чанков
 func (s *Store) SourceFiles() map[string]int {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
+	s.mu.Lock()
+	defer s.mu.Unlock()
 
 	result := make(map[string]int)
+	if err := s.refreshEntryCacheIfStaleUnlocked("source file listing"); err != nil {
+		return result
+	}
 	for _, e := range s.entries {
 		if e.SourceFile != "" {
 			result[e.SourceFile]++
@@ -1445,11 +1634,19 @@ func (s *Store) SourceFiles() map[string]int {
 
 // Stats возвращает статистику
 func (s *Store) Stats() map[string]interface{} {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
+	s.mu.Lock()
+	defer s.mu.Unlock()
 
 	backendCount := make(map[string]int)
 	sourceCount := 0
+	if err := s.refreshEntryCacheIfStaleUnlocked("store statistics"); err != nil {
+		return map[string]interface{}{
+			"total_entries":  0,
+			"by_backend":     backendCount,
+			"doc_chunks":     0,
+			"store_location": s.path,
+		}
+	}
 	for _, e := range s.entries {
 		backendCount[e.Backend]++
 		if e.SourceFile != "" {

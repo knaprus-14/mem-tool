@@ -296,14 +296,22 @@ func classicMindMapResolvedStateDigest(doc ClassicMindMapDocument) string {
 // physically present in the active store. Old revisions are represented by
 // stale anchors on maps, never as attachable candidates.
 func (s *Store) ListClassicMindMapSourceDocuments() []ClassicMindMapSourceDocument {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
+	s.mu.Lock()
+	if err := s.refreshEntryCacheIfStaleUnlocked("classic mind map source documents"); err != nil {
+		s.mu.Unlock()
+		return nil
+	}
+	entries := make([]Entry, len(s.entries))
+	for i := range s.entries {
+		entries[i] = cloneEntryWithoutEmbedding(s.entries[i])
+	}
+	s.mu.Unlock()
 	type aggregate struct {
 		item  ClassicMindMapSourceDocument
 		pages map[int]struct{}
 	}
 	groups := make(map[string]*aggregate)
-	for _, entry := range s.entries {
+	for _, entry := range entries {
 		if entry.DocumentID == "" || entry.DocumentRevision == "" || entry.ChunkHash == "" || entry.SourcePath == "" {
 			continue
 		}
@@ -345,18 +353,27 @@ func (s *Store) SearchClassicMindMapEvidence(options ClassicMindMapEvidenceSearc
 		return nil, fmt.Errorf("limit источников не может превышать %d", MaxClassicMindMapSourceResults)
 	}
 	s.mu.Lock()
-	defer s.mu.Unlock()
+	if err := s.refreshEntryCacheIfStaleUnlocked("classic mind map evidence search"); err != nil {
+		s.mu.Unlock()
+		return nil, err
+	}
 	lexical := map[int64]float64{}
 	if query != "" {
 		var err error
 		lexical, err = s.lexicalScoresLocked(query)
 		if err != nil {
+			s.mu.Unlock()
 			return nil, err
 		}
 	}
-	result := make([]ClassicMindMapEvidenceCandidate, 0, limit)
+	entries := make([]Entry, len(s.entries))
 	for i := range s.entries {
-		entry := cloneEntry(s.entries[i])
+		entries[i] = cloneEntryWithoutEmbedding(s.entries[i])
+	}
+	s.mu.Unlock()
+	result := make([]ClassicMindMapEvidenceCandidate, 0, limit)
+	for i := range entries {
+		entry := entries[i]
 		if entry.DocumentID == "" || entry.DocumentRevision == "" || entry.ChunkHash == "" || entry.SourcePath == "" {
 			continue
 		}
@@ -406,6 +423,13 @@ func (s *Store) SearchClassicMindMapEvidence(options ClassicMindMapEvidenceSearc
 		result = result[:limit]
 	}
 	return result, nil
+}
+
+func cloneEntryWithoutEmbedding(entry Entry) Entry {
+	entry.Tags = append([]string(nil), entry.Tags...)
+	entry.Warnings = append([]string(nil), entry.Warnings...)
+	entry.Embedding = nil
+	return entry
 }
 
 func classicMindMapTextMatches(entry Entry, query string) bool {

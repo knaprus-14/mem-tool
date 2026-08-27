@@ -411,7 +411,7 @@ func (s *Store) SaveKnowledgeSelectionAnalysis(request KnowledgeSelectionAnalysi
 		}
 		return KnowledgeSelectionAnalysisSaveResult{}, cause
 	}
-	if err := verifyKnowledgeSelectionManifestTx(tx, manifest, s.entries); err != nil {
+	if err := verifyKnowledgeSelectionManifestTx(tx, manifest); err != nil {
 		return rollback(err)
 	}
 	now := time.Now().UTC().Format(time.RFC3339Nano)
@@ -516,7 +516,7 @@ func formatKnowledgeSelectionAnalysisReport(analysis KnowledgeSelectionAnalysis)
 	return body.String(), nil
 }
 
-func verifyKnowledgeSelectionManifestTx(tx *sql.Tx, manifest KnowledgeSelectionManifest, entries []Entry) error {
+func verifyKnowledgeSelectionManifestTx(tx *sql.Tx, manifest KnowledgeSelectionManifest) error {
 	objects := append(append([]KnowledgeSelectionObject(nil), manifest.Nodes...), manifest.Edges...)
 	for _, selected := range objects {
 		var label, body string
@@ -550,8 +550,12 @@ func verifyKnowledgeSelectionManifestTx(tx *sql.Tx, manifest KnowledgeSelectionM
 		if err != nil || evidenceDigest != selected.EvidenceDigest {
 			return fmt.Errorf("%w: selected %s %q evidence changed", ErrKnowledgeSelectionChanged, selected.ObjectType, selected.ID)
 		}
-		for _, anchor := range anchors {
-			if resolveEvidenceAnchorFromEntries(anchor, entries).State != EvidenceCurrent {
+		resolutions, err := resolveEvidenceAnchorsFromQuerier(tx, anchors)
+		if err != nil {
+			return fmt.Errorf("read current selected evidence: %w", err)
+		}
+		for _, resolution := range resolutions {
+			if resolution.State != EvidenceCurrent {
 				return ErrKnowledgeSelectionNotCurrent
 			}
 		}

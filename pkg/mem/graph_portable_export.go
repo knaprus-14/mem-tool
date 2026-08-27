@@ -330,6 +330,63 @@ FROM entries WHERE document_id <> '' ORDER BY id`)
 	return entries, nil
 }
 
+// loadKnowledgeGraphEntriesForAnchors reads only the current chunks addressed
+// by a mutation/review request. Evidence freshness is keyed by stable source
+// coordinates, so an updated revision is still returned and classified stale
+// without materializing the text of the whole corpus.
+func loadKnowledgeGraphEntriesForAnchors(q knowledgeEvidenceQuerier, anchors []EvidenceAnchor) ([]Entry, error) {
+	seen := make(map[string]bool, len(anchors))
+	entries := make([]Entry, 0, len(anchors))
+	for _, anchor := range anchors {
+		key := fmt.Sprintf("%s\x00%d\x00%d\x00%d", anchor.DocumentID, anchor.Page, anchor.BlockIndex, anchor.BlockChunkIndex)
+		if seen[key] {
+			continue
+		}
+		seen[key] = true
+		rows, err := q.Query(`SELECT text, document_id, document_revision, chunk_hash, source_path,
+page, block_index, block_chunk_index, block_total_chunks
+FROM entries WHERE document_id = ? AND page = ? AND block_index = ? AND block_chunk_index = ?
+ORDER BY id LIMIT 1`, anchor.DocumentID, anchor.Page, anchor.BlockIndex, anchor.BlockChunkIndex)
+		if err != nil {
+			return nil, err
+		}
+		if rows.Next() {
+			var entry Entry
+			if err := rows.Scan(&entry.Text, &entry.DocumentID, &entry.DocumentRevision, &entry.ChunkHash,
+				&entry.SourcePath, &entry.Page, &entry.BlockIndex, &entry.BlockChunkIndex,
+				&entry.BlockTotalChunks); err != nil {
+				_ = rows.Close()
+				return nil, err
+			}
+			entries = append(entries, entry)
+		}
+		if err := rows.Err(); err != nil {
+			_ = rows.Close()
+			return nil, err
+		}
+		if err := rows.Close(); err != nil {
+			return nil, err
+		}
+	}
+	return entries, nil
+}
+
+// resolveEvidenceAnchorsFromQuerier resolves anchors against rows read through
+// the caller's database snapshot. Mutations must pass their active *sql.Tx so
+// an external Store cannot make a stale in-memory entry cache authorize a
+// provenance-sensitive write.
+func resolveEvidenceAnchorsFromQuerier(q knowledgeEvidenceQuerier, anchors []EvidenceAnchor) ([]EvidenceResolution, error) {
+	entries, err := loadKnowledgeGraphEntriesForAnchors(q, anchors)
+	if err != nil {
+		return nil, err
+	}
+	resolutions := make([]EvidenceResolution, 0, len(anchors))
+	for _, anchor := range anchors {
+		resolutions = append(resolutions, resolveEvidenceAnchorFromEntries(anchor, entries))
+	}
+	return resolutions, nil
+}
+
 func renderKnowledgeGraphExport(format KnowledgeGraphExportFormat, envelope knowledgeGraphExportEnvelope, canonical []byte) ([]byte, string, string, error) {
 	switch format {
 	case KnowledgeGraphExportMarkdown:

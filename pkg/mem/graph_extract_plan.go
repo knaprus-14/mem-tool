@@ -69,7 +69,10 @@ func (s *Store) BuildKnowledgeExtractionJobPlan(focus string, scope KnowledgeCov
 		return KnowledgeExtractionJobPlan{}, err
 	}
 	scope = report.Scope
-	entries := s.knowledgeCoverageEntries(scope)
+	entries, err := s.knowledgeCoverageEntries(scope)
+	if err != nil {
+		return KnowledgeExtractionJobPlan{}, err
+	}
 	covered, err := s.currentKnowledgeCoveredCitations(entries)
 	if err != nil {
 		return KnowledgeExtractionJobPlan{}, err
@@ -140,9 +143,12 @@ func buildKnowledgeExtractionJobPrompt(focus string, entries []Entry, contextBud
 	return prompt, nil
 }
 
-func (s *Store) knowledgeCoverageEntries(scope KnowledgeCoverageOptions) []Entry {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
+func (s *Store) knowledgeCoverageEntries(scope KnowledgeCoverageOptions) ([]Entry, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if err := s.refreshEntryCacheIfStaleUnlocked("knowledge extraction evidence"); err != nil {
+		return nil, err
+	}
 	entries := make([]Entry, 0, len(s.entries))
 	for _, entry := range s.entries {
 		if !coverageEntryMatchesDocument(entry, scope.Document) || !coverageEntryHasTag(entry, scope.Tag) ||
@@ -172,7 +178,7 @@ func (s *Store) knowledgeCoverageEntries(scope KnowledgeCoverageOptions) []Entry
 		}
 		return entries[i].ID < entries[j].ID
 	})
-	return entries
+	return entries, nil
 }
 
 func (s *Store) currentKnowledgeCoveredCitations(entries []Entry) (map[string]bool, error) {

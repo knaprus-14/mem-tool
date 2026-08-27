@@ -3,19 +3,28 @@ package fileindex
 import (
 	"archive/zip"
 	"bytes"
+	"context"
 	"encoding/xml"
-	"errors"
-	"fmt"
 	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"time"
 )
 
 // MaxAnnotationBytes — максимум байт, читаемых из файла для аннотации.
 // 64 KB — первая глава / аннотация / copyright-страница для большинства книг.
 const MaxAnnotationBytes = 64 * 1024
+
+// Metadata XML may be larger than the final annotation, but it still needs a
+// hard decompression/read boundary. This protects enrich from oversized FB2
+// documents and compressed EPUB metadata entries.
+const (
+	maxMetadataXMLBytes      = 4 * 1024 * 1024
+	maxEPUBContainerBytes    = 1024 * 1024
+	externalExtractorTimeout = 30 * time.Second
+)
 
 // MaxEmbedChars — лимит рун для embedding (тот же, что в pkg/mem/embed.go:15).
 const MaxEmbedChars = 2000
@@ -84,7 +93,7 @@ func readTextFirst(absPath string) (string, error) {
 // fb2Description — структура для парсинга <description> FB2.
 // Нас интересует <annotation>: описание книги (вступление, о чём).
 type fb2Document struct {
-	XMLName xml.Name `xml:"http://www.gribuser.ru/xml/fictionbook/2.0 FictionBook"`
+	XMLName     xml.Name       `xml:"http://www.gribuser.ru/xml/fictionbook/2.0 FictionBook"`
 	Description fb2Description `xml:"description"`
 }
 
@@ -97,28 +106,36 @@ type fb2TitleInfo struct {
 }
 
 func readFB2Annotation(absPath string) (string, error) {
-	data, err := os.ReadFile(absPath)
+	f, err := os.Open(absPath)
 	if err != nil {
 		return "", err
 	}
-	// FB2 — один большой XML. Парсим, достаём annotation.
-	var doc fb2Document
-	if err := xml.Unmarshal(data, &doc); err != nil {
-		// Fallback: первые 64 KB как plain text.
-		if len(data) > MaxAnnotationBytes {
-			data = data[:MaxAnnotationBytes]
+	defer f.Close()
+
+	// Decode as a stream so a multi-gigabyte FB2 never has to be materialized.
+	// The decoder may inspect up to maxMetadataXMLBytes while looking for the
+	// annotation; malformed or unusually structured files fall back to the same
+	// bounded plain-text prefix used historically.
+	decoder := xml.NewDecoder(io.LimitReader(f, maxMetadataXMLBytes))
+	for {
+		token, decodeErr := decoder.Token()
+		if decodeErr != nil {
+			return readTextFirst(absPath)
 		}
-		return truncateRunes(string(data), MaxEmbedChars), nil
-	}
-	annotation := strings.TrimSpace(doc.Description.TitleInfo.Annotation)
-	if annotation == "" {
-		// Fallback: первые 64 KB.
-		if len(data) > MaxAnnotationBytes {
-			data = data[:MaxAnnotationBytes]
+		start, ok := token.(xml.StartElement)
+		if !ok || start.Name.Local != "annotation" {
+			continue
 		}
-		return truncateRunes(string(data), MaxEmbedChars), nil
+		var annotation string
+		if err := decoder.DecodeElement(&annotation, &start); err != nil {
+			return readTextFirst(absPath)
+		}
+		annotation = strings.TrimSpace(annotation)
+		if annotation == "" {
+			return readTextFirst(absPath)
+		}
+		return truncateRunes(annotation, MaxEmbedChars), nil
 	}
-	return truncateRunes(annotation, MaxEmbedChars), nil
 }
 
 // === PDF ===
@@ -131,14 +148,11 @@ func readPDFFirstPages(absPath string) (string, error) {
 		// pdftotext недоступен — это не ошибка, просто нет аннотации.
 		return "", nil
 	}
-	cmd := exec.Command(pdftotext, "-f", "1", "-l", "2", "-layout", absPath, "-")
-	out, err := cmd.Output()
+	out, err := boundedCommandOutput(pdftotext,
+		[]string{"-f", "1", "-l", "2", "-layout", absPath, "-"}, MaxAnnotationBytes)
 	if err != nil {
 		// pdftotext вернул ошибку (например, encrypted PDF) — тоже не критично.
 		return "", nil
-	}
-	if len(out) > MaxAnnotationBytes {
-		out = out[:MaxAnnotationBytes]
 	}
 	return truncateRunes(string(out), MaxEmbedChars), nil
 }
@@ -179,12 +193,10 @@ func readEPUBDescription(absPath string) (string, error) {
 	var opfPath string
 	for _, f := range zr.File {
 		if f.Name == "META-INF/container.xml" {
-			rc, err := f.Open()
-			if err != nil {
-				continue
+			data, ok := readZIPEntryBounded(f, maxEPUBContainerBytes)
+			if !ok {
+				break
 			}
-			data, _ := io.ReadAll(rc)
-			rc.Close()
 			if err := xml.Unmarshal(data, &container); err == nil {
 				if len(container.Rootfiles) > 0 {
 					opfPath = container.Rootfiles[0].FullPath
@@ -200,12 +212,10 @@ func readEPUBDescription(absPath string) (string, error) {
 	// 2. content.opf → metadata.
 	for _, f := range zr.File {
 		if f.Name == opfPath {
-			rc, err := f.Open()
-			if err != nil {
+			data, ok := readZIPEntryBounded(f, maxMetadataXMLBytes)
+			if !ok {
 				return "", nil
 			}
-			data, _ := io.ReadAll(rc)
-			rc.Close()
 
 			var pkg epubPackage
 			if err := xml.Unmarshal(data, &pkg); err != nil {
@@ -242,18 +252,17 @@ func readDjVuMetadata(absPath string) (string, error) {
 	if err != nil {
 		return "", nil
 	}
-	cmd := exec.Command(djvused, "-e", "print-meta", absPath)
-	out, err := cmd.Output()
+	out, err := boundedCommandOutput(djvused, []string{"-e", "print-meta", absPath}, MaxAnnotationBytes)
 	if err != nil {
 		return "", nil
 	}
 	// Парсим вывод djvused -e print-meta:
-//   (_meta
-//     (Title "...")
-//     (Author "...")
-//     (Year "...")
-//     ...
-//   )
+	//   (_meta
+	//     (Title "...")
+	//     (Author "...")
+	//     (Year "...")
+	//     ...
+	//   )
 	var title, author, year string
 	lines := strings.Split(string(out), "\n")
 	for _, line := range lines {
@@ -277,6 +286,61 @@ func readDjVuMetadata(absPath string) (string, error) {
 		parts = append(parts, "Year: "+year)
 	}
 	return truncateRunes(strings.Join(parts, "; "), MaxEmbedChars), nil
+}
+
+func readZIPEntryBounded(file *zip.File, maxBytes int64) ([]byte, bool) {
+	if file == nil || maxBytes <= 0 || file.UncompressedSize64 > uint64(maxBytes) {
+		return nil, false
+	}
+	rc, err := file.Open()
+	if err != nil {
+		return nil, false
+	}
+	defer rc.Close()
+	data, err := io.ReadAll(io.LimitReader(rc, maxBytes+1))
+	if err != nil || int64(len(data)) > maxBytes {
+		return nil, false
+	}
+	return data, true
+}
+
+// cappedBuffer reports every byte as consumed while retaining only a bounded
+// prefix. This lets external extractors finish without buffering arbitrary
+// output in memory or blocking on a full stdout pipe.
+type cappedBuffer struct {
+	bytes.Buffer
+	max int
+}
+
+func (w *cappedBuffer) Write(p []byte) (int, error) {
+	written := len(p)
+	remaining := w.max - w.Len()
+	if remaining > 0 {
+		if len(p) > remaining {
+			p = p[:remaining]
+		}
+		_, _ = w.Buffer.Write(p)
+	}
+	return written, nil
+}
+
+func boundedCommandOutput(command string, args []string, maxBytes int) ([]byte, error) {
+	return boundedCommandOutputWithTimeout(command, args, maxBytes, externalExtractorTimeout)
+}
+
+func boundedCommandOutputWithTimeout(command string, args []string, maxBytes int, timeout time.Duration) ([]byte, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, command, args...)
+	output := cappedBuffer{max: maxBytes}
+	cmd.Stdout = &output
+	if err := cmd.Run(); err != nil {
+		if ctx.Err() != nil {
+			return nil, ctx.Err()
+		}
+		return nil, err
+	}
+	return output.Bytes(), nil
 }
 
 // extractDjVuValue достаёт значение из строки вида (Key "value") или (Key value).
@@ -308,13 +372,6 @@ func extractDjVuValue(line string) string {
 	}
 	return val
 }
-
-// Подавляем неиспользуемые-warning для bytes/errors (нужны при расширении).
-var (
-	_ = bytes.NewReader
-	_ = errors.New
-	_ = fmt.Sprintf
-)
 
 // Удобство для тестов: получить аннотацию по basename в каталоге.
 func extractFromPath(absPath string) (string, error) {

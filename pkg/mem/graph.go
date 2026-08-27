@@ -770,15 +770,36 @@ func (s *Store) upsertKnowledgeGraph(graph KnowledgeGraph, requireCurrentEvidenc
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	tx, err := s.db.Begin()
+	if err != nil {
+		return fmt.Errorf("begin knowledge graph update: %w", err)
+	}
+	rollback := func(cause error) error {
+		if rollbackErr := tx.Rollback(); rollbackErr != nil && rollbackErr != sql.ErrTxDone {
+			return fmt.Errorf("%v; knowledge graph rollback failed: %w", cause, rollbackErr)
+		}
+		return cause
+	}
 	if requireCurrentEvidence {
+		anchors := make([]EvidenceAnchor, 0)
 		for _, node := range graph.Nodes {
-			if err := s.requireCurrentKnowledgeEvidence(node.Evidence); err != nil {
-				return fmt.Errorf("knowledge node %q: %w", node.ID, err)
+			anchors = append(anchors, node.Evidence...)
+		}
+		for _, edge := range graph.Edges {
+			anchors = append(anchors, edge.Evidence...)
+		}
+		currentEntries, err := loadKnowledgeGraphEntriesForAnchors(tx, anchors)
+		if err != nil {
+			return rollback(fmt.Errorf("read current knowledge evidence: %w", err))
+		}
+		for _, node := range graph.Nodes {
+			if err := requireCurrentKnowledgeEvidence(node.Evidence, currentEntries); err != nil {
+				return rollback(fmt.Errorf("knowledge node %q: %w", node.ID, err))
 			}
 		}
 		for _, edge := range graph.Edges {
-			if err := s.requireCurrentKnowledgeEvidence(edge.Evidence); err != nil {
-				return fmt.Errorf("knowledge edge %q: %w", edge.ID, err)
+			if err := requireCurrentKnowledgeEvidence(edge.Evidence, currentEntries); err != nil {
+				return rollback(fmt.Errorf("knowledge edge %q: %w", edge.ID, err))
 			}
 		}
 	}
@@ -788,21 +809,21 @@ func (s *Store) upsertKnowledgeGraph(graph KnowledgeGraph, requireCurrentEvidenc
 		status KnowledgeStatus
 	}
 	existing := make(map[string]existingKnowledgeNode)
-	rows, err := s.db.Query(`SELECT id, kind, status FROM knowledge_nodes`)
+	rows, err := tx.Query(`SELECT id, kind, status FROM knowledge_nodes`)
 	if err != nil {
-		return fmt.Errorf("read existing knowledge nodes: %w", err)
+		return rollback(fmt.Errorf("read existing knowledge nodes: %w", err))
 	}
 	for rows.Next() {
 		var id string
 		var node existingKnowledgeNode
 		if err := rows.Scan(&id, &node.kind, &node.status); err != nil {
 			rows.Close()
-			return err
+			return rollback(err)
 		}
 		existing[id] = node
 	}
 	if err := rows.Close(); err != nil {
-		return err
+		return rollback(err)
 	}
 	for _, node := range graph.Nodes {
 		existing[node.ID] = existingKnowledgeNode{kind: node.Kind, status: node.Status}
@@ -811,7 +832,7 @@ func (s *Store) upsertKnowledgeGraph(graph KnowledgeGraph, requireCurrentEvidenc
 		_, fromExists := existing[edge.From]
 		_, toExists := existing[edge.To]
 		if !fromExists || !toExists {
-			return fmt.Errorf("knowledge edge %q references missing endpoint %q -> %q", edge.ID, edge.From, edge.To)
+			return rollback(fmt.Errorf("knowledge edge %q references missing endpoint %q -> %q", edge.ID, edge.From, edge.To))
 		}
 	}
 	if requireActiveExternalClaims {
@@ -828,29 +849,23 @@ func (s *Store) upsertKnowledgeGraph(graph KnowledgeGraph, requireCurrentEvidenc
 				checked[endpoint] = true
 				node := existing[endpoint]
 				if node.status != KnowledgeStatusActive || node.kind != KnowledgeNodeClaim {
-					return fmt.Errorf("%w: corpus endpoint %s is %s/%s", ErrKnowledgeEndpointsNotActive, endpoint, node.kind, node.status)
+					return rollback(fmt.Errorf("%w: corpus endpoint %s is %s/%s", ErrKnowledgeEndpointsNotActive, endpoint, node.kind, node.status))
 				}
-				anchors, err := loadKnowledgeEvidence(s.db, "knowledge_node_evidence", "node_id", endpoint)
+				anchors, err := loadKnowledgeEvidence(tx, "knowledge_node_evidence", "node_id", endpoint)
 				if err != nil {
-					return fmt.Errorf("read corpus endpoint evidence %q: %w", endpoint, err)
+					return rollback(fmt.Errorf("read corpus endpoint evidence %q: %w", endpoint, err))
 				}
-				if err := s.requireCurrentKnowledgeEvidence(anchors); err != nil {
-					return fmt.Errorf("corpus endpoint %q: %w", endpoint, err)
+				currentEntries, err := loadKnowledgeGraphEntriesForAnchors(tx, anchors)
+				if err != nil {
+					return rollback(fmt.Errorf("read corpus endpoint evidence %q: %w", endpoint, err))
+				}
+				if err := requireCurrentKnowledgeEvidence(anchors, currentEntries); err != nil {
+					return rollback(fmt.Errorf("corpus endpoint %q: %w", endpoint, err))
 				}
 			}
 		}
 	}
 
-	tx, err := s.db.Begin()
-	if err != nil {
-		return fmt.Errorf("begin knowledge graph update: %w", err)
-	}
-	rollback := func(cause error) error {
-		if rollbackErr := tx.Rollback(); rollbackErr != nil && rollbackErr != sql.ErrTxDone {
-			return fmt.Errorf("%v; knowledge graph rollback failed: %w", cause, rollbackErr)
-		}
-		return cause
-	}
 	for _, node := range graph.Nodes {
 		status, err := knowledgeStatusForUpsert(tx, "knowledge_nodes", "knowledge_node_evidence", "node_id", node.ID, node.Status, node.Origin, node.Evidence)
 		if err != nil {
@@ -912,7 +927,7 @@ confidence=excluded.confidence, updated=excluded.updated`,
 			}
 		}
 	}
-	if err := invalidateChangedKnowledgeNodeMerges(tx, s.entries); err != nil {
+	if err := invalidateChangedKnowledgeNodeMerges(tx); err != nil {
 		return rollback(err)
 	}
 	if _, err := tx.Exec(`UPDATE knowledge_edges
@@ -930,9 +945,9 @@ WHERE origin = ? AND status = ? AND (
 	return nil
 }
 
-func (s *Store) requireCurrentKnowledgeEvidence(anchors []EvidenceAnchor) error {
+func requireCurrentKnowledgeEvidence(anchors []EvidenceAnchor, entries []Entry) error {
 	for _, anchor := range anchors {
-		resolution := resolveEvidenceAnchorFromEntries(anchor, s.entries)
+		resolution := resolveEvidenceAnchorFromEntries(anchor, entries)
 		if resolution.State != EvidenceCurrent {
 			return fmt.Errorf("%w: %s is %s", ErrKnowledgeEvidenceNotCurrent, anchor.CitationID, resolution.State)
 		}
@@ -1156,8 +1171,11 @@ source_path, page, block_index, block_chunk_index, excerpt FROM %s WHERE %s = ? 
 }
 
 func (s *Store) ResolveEvidenceAnchor(anchor EvidenceAnchor) EvidenceResolution {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if err := s.refreshEntryCacheIfStaleUnlocked("evidence resolution"); err != nil {
+		return resolveEvidenceAnchorFromEntries(anchor, nil)
+	}
 	return resolveEvidenceAnchorFromEntries(anchor, s.entries)
 }
 

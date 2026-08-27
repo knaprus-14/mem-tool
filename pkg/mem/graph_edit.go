@@ -163,7 +163,7 @@ func (s *Store) EditKnowledgeObject(request KnowledgeEditRequest) (KnowledgeEdit
 	if err != nil {
 		return rollback(err)
 	}
-	evidenceDigest, resolutions, err := loadPinnedCurrentKnowledgeEvidence(tx, evidenceTable, ownerColumn, request.ID, request.ExpectedEvidenceDigest, s.entries)
+	evidenceDigest, resolutions, err := loadPinnedCurrentKnowledgeEvidence(tx, evidenceTable, ownerColumn, request.ID, request.ExpectedEvidenceDigest)
 	if err != nil {
 		return rollback(err)
 	}
@@ -264,7 +264,7 @@ func (s *Store) UndoKnowledgeEdit(request KnowledgeEditUndoRequest) (KnowledgeEd
 	if err != nil {
 		return rollback(err)
 	}
-	evidenceDigest, resolutions, err := loadPinnedCurrentKnowledgeEvidence(tx, evidenceTable, ownerColumn, request.ID, request.ExpectedEvidenceDigest, s.entries)
+	evidenceDigest, resolutions, err := loadPinnedCurrentKnowledgeEvidence(tx, evidenceTable, ownerColumn, request.ID, request.ExpectedEvidenceDigest)
 	if err != nil {
 		return rollback(err)
 	}

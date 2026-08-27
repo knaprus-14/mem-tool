@@ -3,8 +3,10 @@ package main
 import (
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 	"time"
+	"unicode"
 
 	"github.com/chzyer/readline"
 
@@ -41,13 +43,19 @@ func runRepl(cfg *Config, store *Store) {
 	// поэтому линия рисуется в самом prompt и появляется перед каждой строкой ввода.
 	promptLine := "\x1b[2m" + strings.Repeat("─", 60) + "\x1b[0m\n"
 	prompt := promptLine + "mem> "
+	historyPath := memHistoryPath()
+	if err := sanitizeReplHistory(historyPath); err != nil {
+		fmt.Fprintf(os.Stderr, "Предупреждение: небезопасная история REPL отключена: %v\n", err)
+		historyPath = ""
+	}
 
 	rl, err := readline.NewEx(&readline.Config{
-		Prompt:          prompt,
-		HistoryFile:     memHistoryPath(),
-		InterruptPrompt: "^C",
-		EOFPrompt:       "exit",
-		AutoComplete:    NewMemCompleter(),
+		Prompt:                 prompt,
+		HistoryFile:            historyPath,
+		DisableAutoSaveHistory: true,
+		InterruptPrompt:        "^C",
+		EOFPrompt:              "exit",
+		AutoComplete:           NewMemCompleter(),
 	})
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Ошибка запуска REPL: %v\n", err)
@@ -66,6 +74,11 @@ func runRepl(cfg *Config, store *Store) {
 		line = strings.TrimSpace(line)
 		if line == "" {
 			continue
+		}
+		if shouldSaveReplHistory(line) {
+			if err := rl.SaveHistory(line); err != nil {
+				fmt.Fprintf(os.Stderr, "Предупреждение: история REPL не сохранена: %v\n", err)
+			}
 		}
 
 		// Псевдо-popup: ввели только "/" — показать список команд
@@ -87,21 +100,94 @@ func memHistoryPath() string {
 	return memDir() + "/history.txt"
 }
 
+// shouldSaveReplHistory prevents credentials entered through configuration
+// commands from being persisted as plain text. readline auto-history is
+// disabled, and only lines accepted by this predicate are saved explicitly.
+func shouldSaveReplHistory(line string) bool {
+	cmd, args, err := parseReplCommandLine(line)
+	if err != nil {
+		// A malformed command must not reach dispatch and is not persisted:
+		// failing closed also prevents a broken quote from bypassing redaction.
+		return false
+	}
+	if len(args) < 1 {
+		return true
+	}
+	return cmd != "config" || strings.ToLower(args[0]) != "set-polza-key"
+}
+
+// sanitizeReplHistory removes credentials written by versions which enabled
+// readline auto-history. The replacement is written and flushed before an
+// atomic same-directory rename; on failure runRepl disables history entirely.
+func sanitizeReplHistory(path string) error {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return err
+	}
+	lines := strings.Split(string(data), "\n")
+	kept := make([]string, 0, len(lines))
+	changed := false
+	for _, line := range lines {
+		if !shouldSaveReplHistory(strings.TrimSuffix(line, "\r")) {
+			changed = true
+			continue
+		}
+		kept = append(kept, line)
+	}
+	if !changed {
+		return nil
+	}
+
+	dir := filepath.Dir(path)
+	tmp, err := os.CreateTemp(dir, ".history-sanitize-*.tmp")
+	if err != nil {
+		return err
+	}
+	tmpPath := tmp.Name()
+	cleanup := true
+	defer func() {
+		if cleanup {
+			_ = os.Remove(tmpPath)
+		}
+	}()
+	if err := tmp.Chmod(0o600); err != nil {
+		_ = tmp.Close()
+		return err
+	}
+	if _, err := tmp.WriteString(strings.Join(kept, "\n")); err != nil {
+		_ = tmp.Close()
+		return err
+	}
+	if err := tmp.Sync(); err != nil {
+		_ = tmp.Close()
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		return err
+	}
+	if err := replaceReplHistoryFile(tmpPath, path); err != nil {
+		return err
+	}
+	cleanup = false
+	return nil
+}
+
 // dispatchReplLine выполняет одну строку ввода REPL.
 func dispatchReplLine(cfg *Config, store *Store, line string) bool {
-	var cmd string
-	var args []string
-
-	if strings.HasPrefix(line, "/") {
-		parts := strings.Fields(line)
-		if len(parts) == 0 {
-			return false
-		}
-		cmd = strings.ToLower(strings.TrimPrefix(parts[0], "/"))
-		args = parts[1:]
-	} else {
-		cmd = "search"
-		args = []string{line}
+	cmd, args, err := parseReplCommandLine(line)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Ошибка разбора команды: %v\n", err)
+		return false
+	}
+	if cmd == "" {
+		return false
+	}
+	if err := validateReplCommandArgs(cmd, args); err != nil {
+		fmt.Fprintf(os.Stderr, "Ошибка: %v\n", err)
+		return false
 	}
 
 	switch cmd {
@@ -146,6 +232,10 @@ func dispatchReplLine(cfg *Config, store *Store, line string) bool {
 	case "config":
 		if err := handleConfig(args); err != nil {
 			fmt.Fprintf(os.Stderr, "Ошибка: %v\n", err)
+		} else if refreshed, err := loadConfig(); err != nil {
+			fmt.Fprintf(os.Stderr, "Ошибка обновления конфигурации REPL: %v\n", err)
+		} else {
+			*cfg = *refreshed
 		}
 	case "clear":
 		// \x1b[2J — clear screen, \x1b[H — cursor home
@@ -163,6 +253,106 @@ func dispatchReplLine(cfg *Config, store *Store, line string) bool {
 		fmt.Fprintln(os.Stderr, "Введите /help для списка команд")
 	}
 	return false
+}
+
+func validateReplCommandArgs(command string, args []string) error {
+	if err := validateTopLevelCommandArgs(command, args); err != nil {
+		return err
+	}
+	switch command {
+	case "clear", "clear-history", "help", "?", "exit", "quit", "q":
+		_, err := exactCommandPositionals(command, args, 0, "")
+		return err
+	default:
+		return nil
+	}
+}
+
+// parseReplCommandLine keeps plain text as one search query and tokenizes only
+// slash commands. This preserves the REPL shorthand while allowing quoted
+// multiword flag values and paths in the same form as the regular CLI.
+func parseReplCommandLine(line string) (string, []string, error) {
+	line = strings.TrimSpace(line)
+	if line == "" {
+		return "", nil, nil
+	}
+	if !strings.HasPrefix(line, "/") {
+		return "search", []string{line}, nil
+	}
+	parts, err := splitReplArguments(strings.TrimPrefix(line, "/"))
+	if err != nil {
+		return "", nil, err
+	}
+	if len(parts) == 0 {
+		return "", nil, nil
+	}
+	return strings.ToLower(parts[0]), parts[1:], nil
+}
+
+// splitReplArguments is a small shell-like tokenizer with no external
+// dependencies. Both quote styles preserve whitespace; inside a quote, a
+// backslash escapes a matching quote only when that quote is followed by a
+// non-space rune. This leaves a quote after a terminal Windows path separator
+// available to close the argument. Outside quotes a backslash escapes whitespace
+// or a quote. Backslashes before another backslash stay literal so Windows UNC
+// paths such as \\\\server\\share are not collapsed.
+func splitReplArguments(line string) ([]string, error) {
+	var (
+		parts        []string
+		current      strings.Builder
+		quote        rune
+		tokenStarted bool
+	)
+	runes := []rune(line)
+	flush := func() {
+		if !tokenStarted {
+			return
+		}
+		parts = append(parts, current.String())
+		current.Reset()
+		tokenStarted = false
+	}
+
+	for i := 0; i < len(runes); i++ {
+		r := runes[i]
+		if quote != 0 {
+			if r == quote {
+				quote = 0
+				continue
+			}
+			if r == '\\' && i+2 < len(runes) && runes[i+1] == quote &&
+				!unicode.IsSpace(runes[i+2]) {
+				i++
+				current.WriteRune(runes[i])
+				tokenStarted = true
+				continue
+			}
+			current.WriteRune(r)
+			tokenStarted = true
+			continue
+		}
+
+		switch {
+		case r == '\'' || r == '"':
+			quote = r
+			tokenStarted = true
+		case unicode.IsSpace(r):
+			flush()
+		case r == '\\' && i+1 < len(runes) &&
+			(unicode.IsSpace(runes[i+1]) || runes[i+1] == '\'' || runes[i+1] == '"'):
+			i++
+			current.WriteRune(runes[i])
+			tokenStarted = true
+		default:
+			current.WriteRune(r)
+			tokenStarted = true
+		}
+	}
+	if quote != 0 {
+		return nil, fmt.Errorf("незакрытая кавычка %q", string(quote))
+	}
+	flush()
+	return parts, nil
 }
 
 // clearReplHistory удаляет файл .mem/history.txt.

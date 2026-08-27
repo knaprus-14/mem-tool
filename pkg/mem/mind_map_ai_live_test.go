@@ -3,6 +3,7 @@ package mem
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"strings"
@@ -157,6 +158,19 @@ func TestClassicMindMapAIWorkspaceCancelDoesNotHideCommittedPreview(t *testing.T
 	if !ok || current.Status != string(ClassicMindMapAIPreviewReady) || current.Preview == nil {
 		t.Fatalf("committed preview was hidden by cancellation: %#v, found=%v", current, ok)
 	}
+	shutdownWorkspace := NewClassicMindMapAIWorkspace(context.Background(), service)
+	shutdownJobID := "job-at-preview-shutdown-boundary"
+	shutdownWorkspace.jobs[shutdownJobID] = &classicMindMapAIWorkspaceJob{
+		ID: shutdownJobID, RunID: preview.RunID, Status: "running", Phase: "validating",
+		Started: preview.Created, Updated: preview.Created, cancel: func() {},
+	}
+	if err := shutdownWorkspace.Shutdown(context.Background()); err != nil {
+		t.Fatalf("shutdown at preview commit boundary failed: %v", err)
+	}
+	shutdownCurrent, ok := shutdownWorkspace.get(shutdownJobID)
+	if !ok || shutdownCurrent.Status != string(ClassicMindMapAIPreviewReady) || shutdownCurrent.Preview == nil {
+		t.Fatalf("shutdown hid committed preview: %#v, found=%v", shutdownCurrent, ok)
+	}
 	loaded, err := store.LoadClassicMindMapAIPreview(preview.RunID)
 	if err != nil || loaded.Status != ClassicMindMapAIPreviewReady {
 		t.Fatalf("durable preview status=%q err=%v", loaded.Status, err)
@@ -166,6 +180,125 @@ func TestClassicMindMapAIWorkspaceCancelDoesNotHideCommittedPreview(t *testing.T
 	})
 	if err != nil || published.Document.Map.Revision != 1 {
 		t.Fatalf("preview committed before cancellation was not publishable: %#v, %v", published, err)
+	}
+}
+
+func TestClassicMindMapAIWorkspaceShutdownCancelsWaitsAndCloses(t *testing.T) {
+	store, _ := newClassicMindMapAITestStore(t)
+	workspace := NewClassicMindMapAIWorkspace(context.Background(), classicMindMapAITestService(store, classicMindMapAIBlockingProvider{}))
+	started, err := workspace.start(ClassicMindMapAIPreviewRequest{
+		Action: ClassicMindMapAINewMap, Prompt: "Ждать остановки", Title: "Shutdown",
+		Scope: ClassicMindMapAIScope{AllowUngrounded: true},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	deadline := time.Now().Add(3 * time.Second)
+	for started.RunID == "" && time.Now().Before(deadline) {
+		if current, ok := workspace.get(started.ID); ok {
+			started = current
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	if started.RunID == "" {
+		t.Fatal("AI job did not create its durable run")
+	}
+
+	shutdownCtx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	if err := workspace.Shutdown(shutdownCtx); err != nil {
+		t.Fatalf("workspace shutdown failed: %v", err)
+	}
+	current, ok := workspace.get(started.ID)
+	if !ok || current.Status != "cancelled" || current.Phase != "cancelled" || current.Error != "" {
+		t.Fatalf("job did not reach a safe terminal state: %#v, found=%v", current, ok)
+	}
+	var durableStatus string
+	if err := store.db.QueryRow(`SELECT status FROM mind_map_generation_runs WHERE id=?`, started.RunID).Scan(&durableStatus); err != nil {
+		t.Fatal(err)
+	}
+	if durableStatus != string(ClassicMindMapAICancelled) {
+		t.Fatalf("durable run status=%q, want cancelled", durableStatus)
+	}
+	if _, err := workspace.start(ClassicMindMapAIPreviewRequest{
+		Action: ClassicMindMapAINewMap, Prompt: "После закрытия", Scope: ClassicMindMapAIScope{AllowUngrounded: true},
+	}); !errors.Is(err, errClassicMindMapAIWorkspaceClosed) {
+		t.Fatalf("closed workspace accepted work: %v", err)
+	}
+	// Shutdown is idempotent and never reopens the worker set.
+	if err := workspace.Shutdown(context.Background()); err != nil {
+		t.Fatalf("second shutdown failed: %v", err)
+	}
+}
+
+func TestClassicMindMapAIWorkspaceShutdownDoesNotOutliveStoreWithCancelIgnoringProvider(t *testing.T) {
+	store, _ := newClassicMindMapAITestStore(t)
+	provider := &classicMindMapAICancelIgnoringProvider{started: make(chan struct{}), release: make(chan struct{})}
+	workspace := NewClassicMindMapAIWorkspace(context.Background(), classicMindMapAITestService(store, provider))
+	if _, err := workspace.start(ClassicMindMapAIPreviewRequest{
+		Action: ClassicMindMapAINewMap, Prompt: "Ждать принудительной остановки", Title: "Slow shutdown",
+		Scope: ClassicMindMapAIScope{AllowUngrounded: true},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-provider.started:
+	case <-time.After(3 * time.Second):
+		t.Fatal("provider did not start")
+	}
+
+	shutdownCtx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
+	defer cancel()
+	shutdownDone := make(chan error, 1)
+	go func() { shutdownDone <- workspace.Shutdown(shutdownCtx) }()
+	select {
+	case err := <-shutdownDone:
+		t.Fatalf("Shutdown returned while provider worker was still alive: %v", err)
+	case <-time.After(80 * time.Millisecond):
+	}
+	if err := store.db.Ping(); err != nil {
+		t.Fatalf("Store became unusable while Shutdown was waiting: %v", err)
+	}
+	close(provider.release)
+	select {
+	case err := <-shutdownDone:
+		if !errors.Is(err, context.DeadlineExceeded) {
+			t.Fatalf("Shutdown error=%v, want deadline report after safe wait", err)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("Shutdown did not finish after provider released")
+	}
+}
+
+func TestClassicMindMapAIWorkspaceDoesNotExposeProviderErrors(t *testing.T) {
+	store, _ := newClassicMindMapAITestStore(t)
+	const secret = "upstream body: API_KEY=secret failed to parse grammar"
+	workspace := NewClassicMindMapAIWorkspace(context.Background(), classicMindMapAITestService(store, classicMindMapAIErrorProvider{err: errors.New(secret)}))
+	started, err := workspace.start(ClassicMindMapAIPreviewRequest{
+		Action: ClassicMindMapAINewMap, Prompt: "Ошибка модели", Title: "Failure",
+		Scope: ClassicMindMapAIScope{AllowUngrounded: true},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var current classicMindMapAIWorkspaceJob
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		current, _ = workspace.get(started.ID)
+		if current.Status == "failed" {
+			break
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	if current.Status != "failed" {
+		t.Fatalf("AI job did not fail: %#v", current)
+	}
+	encoded, err := json.Marshal(current)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(encoded), secret) || strings.Contains(string(encoded), "API_KEY") || current.Error != classicMindMapAIHTTPFailureMessage(errors.New(secret)) {
+		t.Fatalf("HTTP job exposed provider diagnostics: %s", encoded)
 	}
 }
 
@@ -237,6 +370,23 @@ type classicMindMapAIBlockingProvider struct{}
 func (classicMindMapAIBlockingProvider) Generate(ctx context.Context, _ AnswerRequest) (string, error) {
 	<-ctx.Done()
 	return "", ctx.Err()
+}
+
+type classicMindMapAICancelIgnoringProvider struct {
+	started chan struct{}
+	release chan struct{}
+}
+
+func (p *classicMindMapAICancelIgnoringProvider) Generate(ctx context.Context, _ AnswerRequest) (string, error) {
+	close(p.started)
+	<-p.release
+	return "", ctx.Err()
+}
+
+type classicMindMapAIErrorProvider struct{ err error }
+
+func (p classicMindMapAIErrorProvider) Generate(context.Context, AnswerRequest) (string, error) {
+	return "", p.err
 }
 
 func waitClassicMindMapAIWorkspacePreview(t *testing.T, handler http.Handler, jobID string) classicMindMapAIHTTPPreview {

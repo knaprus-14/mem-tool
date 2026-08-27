@@ -83,64 +83,37 @@ func FileIndexMetaPathIn(dir string) string {
 // Ollama http://localhost:11434 (bge-m3) или Polza. Chunking-поля в config
 // присутствуют (безвредны), но игнорируются mem-index.
 func InitFileIndex() error {
-	if FileIndexExists() {
-		return fmt.Errorf(".fileindex/ уже существует в текущей папке")
-	}
-	if err := os.MkdirAll(FileIndexDirName, 0700); err != nil {
-		return fmt.Errorf("не удалось создать %s/: %w", FileIndexDirName, err)
-	}
-
 	cfg := defaultFileIndexConfig()
-	data, err := json.MarshalIndent(cfg, "", "  ")
+	configData, err := json.MarshalIndent(cfg, "", "  ")
 	if err != nil {
-		os.RemoveAll(FileIndexDirName)
 		return fmt.Errorf("ошибка сериализации config: %w", err)
 	}
-	if err := os.WriteFile(FileIndexConfigPath(), data, 0600); err != nil {
-		os.RemoveAll(FileIndexDirName)
-		return fmt.Errorf("не удалось записать %s: %w", FileIndexConfigPath(), err)
-	}
-
 	cwd, _ := os.Getwd()
-	name := filepath.Base(cwd)
 	meta := MemMeta{
-		Name:      name,
+		Name:      filepath.Base(cwd),
 		CreatedAt: time.Now().UTC().Format(time.RFC3339),
 	}
-	data, err = json.MarshalIndent(meta, "", "  ")
+	metaData, err := json.MarshalIndent(meta, "", "  ")
 	if err != nil {
-		os.RemoveAll(FileIndexDirName)
 		return fmt.Errorf("ошибка сериализации meta: %w", err)
 	}
-	if err := os.WriteFile(FileIndexMetaPath(), data, 0600); err != nil {
-		os.RemoveAll(FileIndexDirName)
-		return fmt.Errorf("не удалось записать %s: %w", FileIndexMetaPath(), err)
+	if err := createFileIndexDirectory(FileIndexDirName, configData, metaData); err != nil {
+		if os.IsExist(err) {
+			return fmt.Errorf(".fileindex/ уже существует в текущей папке")
+		}
+		return fmt.Errorf("не удалось инициализировать %s/: %w", FileIndexDirName, err)
 	}
-
 	return nil
 }
 
 // InitFileIndexIn создаёт .fileindex/ в указанной директории (с config.json
 // и meta.json). Если уже существует — ошибка. name используется в meta.json.
 func InitFileIndexIn(dir, name string) error {
-	if FileIndexExistsIn(dir) {
-		return fmt.Errorf("%s/ уже существует", dir)
-	}
-	if err := os.MkdirAll(dir, 0700); err != nil {
-		return fmt.Errorf("не удалось создать %s/: %w", dir, err)
-	}
-
 	cfg := defaultFileIndexConfig()
-	data, err := json.MarshalIndent(cfg, "", "  ")
+	configData, err := json.MarshalIndent(cfg, "", "  ")
 	if err != nil {
-		os.RemoveAll(dir)
 		return fmt.Errorf("сериализация config: %w", err)
 	}
-	if err := os.WriteFile(FileIndexConfigPathIn(dir), data, 0600); err != nil {
-		os.RemoveAll(dir)
-		return fmt.Errorf("запись config: %w", err)
-	}
-
 	if name == "" {
 		name = filepath.Base(filepath.Dir(dir))
 		if name == "." || name == "/" {
@@ -151,15 +124,41 @@ func InitFileIndexIn(dir, name string) error {
 		Name:      name,
 		CreatedAt: time.Now().UTC().Format(time.RFC3339),
 	}
-	data, err = json.MarshalIndent(meta, "", "  ")
+	metaData, err := json.MarshalIndent(meta, "", "  ")
 	if err != nil {
-		os.RemoveAll(dir)
 		return fmt.Errorf("сериализация meta: %w", err)
 	}
-	if err := os.WriteFile(FileIndexMetaPathIn(dir), data, 0600); err != nil {
-		os.RemoveAll(dir)
-		return fmt.Errorf("запись meta: %w", err)
+	parent := filepath.Dir(filepath.Clean(dir))
+	if err := os.MkdirAll(parent, 0700); err != nil {
+		return fmt.Errorf("создание родительского каталога %s: %w", parent, err)
 	}
-
+	if err := createFileIndexDirectory(dir, configData, metaData); err != nil {
+		if os.IsExist(err) {
+			return fmt.Errorf("%s/ уже существует", dir)
+		}
+		return fmt.Errorf("инициализация %s/: %w", dir, err)
+	}
 	return nil
 }
+
+func createFileIndexDirectory(dir string, configData, metaData []byte) error {
+	if err := os.Mkdir(dir, 0700); err != nil {
+		return err
+	}
+	configPath := FileIndexConfigPathIn(dir)
+	if err := writeFileIndexInitializationFile(configPath, configData, 0600); err != nil {
+		_ = os.Remove(configPath)
+		_ = os.Remove(dir)
+		return fmt.Errorf("запись config: %w", err)
+	}
+	metaPath := FileIndexMetaPathIn(dir)
+	if err := writeFileIndexInitializationFile(metaPath, metaData, 0600); err != nil {
+		_ = os.Remove(metaPath)
+		_ = os.Remove(configPath)
+		_ = os.Remove(dir)
+		return fmt.Errorf("запись meta: %w", err)
+	}
+	return nil
+}
+
+var writeFileIndexInitializationFile = os.WriteFile

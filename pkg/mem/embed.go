@@ -22,6 +22,12 @@ const maxEmbedChars = MaxEmbeddingChars
 // Контекст вызывающего кода может завершить запрос раньше.
 const embeddingHTTPTimeout = 5 * time.Minute
 
+const (
+	maxEmbeddingResponseBytes = 8 * 1024 * 1024
+	maxEmbeddingErrorBytes    = 64 * 1024
+	maxEmbeddingDimensions    = 64 * 1024
+)
+
 // Один клиент переиспользует TCP-соединения между последовательными чанками.
 var embeddingHTTPClient = &http.Client{Timeout: embeddingHTTPTimeout}
 
@@ -64,17 +70,27 @@ func embedOllamaContext(ctx context.Context, cfg *Config, text string) ([]float3
 	defer resp.Body.Close()
 
 	if resp.StatusCode != 200 {
-		respBody, _ := io.ReadAll(resp.Body)
+		respBody, readErr := readEmbeddingHTTPBody(resp.Body, maxEmbeddingErrorBytes)
+		if readErr != nil {
+			return nil, fmt.Errorf("ollama: статус %d: %w", resp.StatusCode, readErr)
+		}
 		return nil, fmt.Errorf("ollama: статус %d: %s", resp.StatusCode, string(respBody))
 	}
 
+	respBody, err := readEmbeddingHTTPBody(resp.Body, maxEmbeddingResponseBytes)
+	if err != nil {
+		return nil, fmt.Errorf("ollama: ошибка ответа: %w", err)
+	}
 	var result ollamaEmbedResponse
-	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+	if err := json.Unmarshal(respBody, &result); err != nil {
 		return nil, fmt.Errorf("ollama: ошибка ответа: %w", err)
 	}
 
 	if len(result.Embedding) == 0 {
 		return nil, fmt.Errorf("ollama: пустой эмбеддинг")
+	}
+	if len(result.Embedding) > maxEmbeddingDimensions {
+		return nil, fmt.Errorf("ollama: слишком большая размерность эмбеддинга: %d, максимум %d", len(result.Embedding), maxEmbeddingDimensions)
 	}
 
 	return result.Embedding, nil
@@ -132,20 +148,41 @@ func embedPolzaContext(ctx context.Context, cfg *Config, text string) ([]float32
 	defer resp.Body.Close()
 
 	if resp.StatusCode != 200 {
-		respBody, _ := io.ReadAll(resp.Body)
+		respBody, readErr := readEmbeddingHTTPBody(resp.Body, maxEmbeddingErrorBytes)
+		if readErr != nil {
+			return nil, fmt.Errorf("polza: статус %d: %w", resp.StatusCode, readErr)
+		}
 		return nil, fmt.Errorf("polza: статус %d: %s", resp.StatusCode, string(respBody))
 	}
 
+	respBody, err := readEmbeddingHTTPBody(resp.Body, maxEmbeddingResponseBytes)
+	if err != nil {
+		return nil, fmt.Errorf("polza: ошибка ответа: %w", err)
+	}
 	var result polzaEmbedResponse
-	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+	if err := json.Unmarshal(respBody, &result); err != nil {
 		return nil, fmt.Errorf("polza: ошибка ответа: %w", err)
 	}
 
 	if len(result.Data) == 0 || len(result.Data[0].Embedding) == 0 {
 		return nil, fmt.Errorf("polza: пустой эмбеддинг")
 	}
+	if len(result.Data[0].Embedding) > maxEmbeddingDimensions {
+		return nil, fmt.Errorf("polza: слишком большая размерность эмбеддинга: %d, максимум %d", len(result.Data[0].Embedding), maxEmbeddingDimensions)
+	}
 
 	return result.Data[0].Embedding, nil
+}
+
+func readEmbeddingHTTPBody(body io.Reader, maxBytes int64) ([]byte, error) {
+	data, err := io.ReadAll(io.LimitReader(body, maxBytes+1))
+	if err != nil {
+		return nil, err
+	}
+	if int64(len(data)) > maxBytes {
+		return nil, fmt.Errorf("ответ превышает лимит %d байт", maxBytes)
+	}
+	return data, nil
 }
 
 func validateEmbeddingText(text string) error {

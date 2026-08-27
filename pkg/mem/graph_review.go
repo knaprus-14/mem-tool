@@ -316,7 +316,6 @@ func (s *Store) approveKnowledgeObjects(requests []KnowledgeApprovalRequest, req
 		}
 		return KnowledgeBatchApprovalResult{}, cause
 	}
-
 	prepared := make([]preparedKnowledgeApproval, 0, len(requests))
 	plannedNodes := make(map[string]bool)
 	seen := make(map[string]bool, len(requests))
@@ -366,9 +365,13 @@ func (s *Store) approveKnowledgeObjects(requests []KnowledgeApprovalRequest, req
 		if request.ExpectedEvidenceDigest != "" && request.ExpectedEvidenceDigest != item.digest {
 			return rollback(fmt.Errorf("%w: knowledge %s %q expected %s, current %s", ErrKnowledgeEvidenceChanged, request.ObjectType, request.ID, request.ExpectedEvidenceDigest, item.digest))
 		}
+		currentEntries, err := loadKnowledgeGraphEntriesForAnchors(tx, anchors)
+		if err != nil {
+			return rollback(fmt.Errorf("read current knowledge approval evidence: %w", err))
+		}
 		item.resolutions = make([]EvidenceResolution, 0, len(anchors))
 		for _, anchor := range anchors {
-			resolution := resolveEvidenceAnchorFromEntries(anchor, s.entries)
+			resolution := resolveEvidenceAnchorFromEntries(anchor, currentEntries)
 			item.resolutions = append(item.resolutions, resolution)
 			if resolution.State != EvidenceCurrent {
 				return rollback(fmt.Errorf("%w: %s is %s", ErrKnowledgeEvidenceNotCurrent, anchor.CitationID, resolution.State))
@@ -534,7 +537,7 @@ func (s *Store) transitionKnowledgeObject(request KnowledgeReviewMutationRequest
 		return rollback(fmt.Errorf("%w: knowledge %s %q has status %q; %s requires %q",
 			ErrKnowledgeReviewChanged, request.ObjectType, request.ID, previous, action, from))
 	}
-	digest, resolutions, err := loadPinnedCurrentKnowledgeEvidence(tx, evidenceTable, ownerColumn, request.ID, request.ExpectedEvidenceDigest, s.entries)
+	digest, resolutions, err := loadPinnedCurrentKnowledgeEvidence(tx, evidenceTable, ownerColumn, request.ID, request.ExpectedEvidenceDigest)
 	if err != nil {
 		return rollback(err)
 	}
@@ -606,7 +609,7 @@ func (s *Store) UndoKnowledgeReview(request KnowledgeReviewMutationRequest) (Kno
 	if latest.Action != KnowledgeReviewActionApprove && latest.Action != KnowledgeReviewActionReject && latest.Action != KnowledgeReviewActionReopen {
 		return rollback(fmt.Errorf("%w: latest action is %q", ErrKnowledgeReviewNotReversible, latest.Action))
 	}
-	digest, resolutions, err := loadPinnedCurrentKnowledgeEvidence(tx, evidenceTable, ownerColumn, request.ID, request.ExpectedEvidenceDigest, s.entries)
+	digest, resolutions, err := loadPinnedCurrentKnowledgeEvidence(tx, evidenceTable, ownerColumn, request.ID, request.ExpectedEvidenceDigest)
 	if err != nil {
 		return rollback(err)
 	}
@@ -650,7 +653,7 @@ func (s *Store) UndoKnowledgeReview(request KnowledgeReviewMutationRequest) (Kno
 	}, nil
 }
 
-func loadPinnedCurrentKnowledgeEvidence(q schemaQuerier, evidenceTable, ownerColumn, id, expectedDigest string, entries []Entry) (string, []EvidenceResolution, error) {
+func loadPinnedCurrentKnowledgeEvidence(q schemaQuerier, evidenceTable, ownerColumn, id, expectedDigest string) (string, []EvidenceResolution, error) {
 	anchors, err := loadKnowledgeEvidence(q, evidenceTable, ownerColumn, id)
 	if err != nil {
 		return "", nil, fmt.Errorf("read knowledge review evidence: %w", err)
@@ -664,6 +667,10 @@ func loadPinnedCurrentKnowledgeEvidence(q schemaQuerier, evidenceTable, ownerCol
 	}
 	if expectedDigest != digest {
 		return "", nil, fmt.Errorf("%w: expected %s, current %s", ErrKnowledgeEvidenceChanged, expectedDigest, digest)
+	}
+	entries, err := loadKnowledgeGraphEntriesForAnchors(q, anchors)
+	if err != nil {
+		return "", nil, fmt.Errorf("read current knowledge evidence: %w", err)
 	}
 	resolutions := make([]EvidenceResolution, 0, len(anchors))
 	for _, anchor := range anchors {

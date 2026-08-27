@@ -3,7 +3,6 @@ package mem
 import (
 	"encoding/json"
 	"errors"
-	"fmt"
 	"io"
 	"mime"
 	"net/http"
@@ -14,6 +13,8 @@ import (
 )
 
 const MaxClassicMindMapRequestJSON = 1 << 20
+
+const classicMindMapSourceSandboxPolicy = "sandbox; default-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'"
 
 // NewClassicMindMapWorkspaceHandler exposes a loopback-only library and tree
 // editor. Every data request requires the short-lived capability embedded in
@@ -304,6 +305,9 @@ func serveClassicMindMapLoad(w http.ResponseWriter, r *http.Request, store *Stor
 		return
 	}
 	doc, err := store.LoadClassicMindMap(request.MapID)
+	if err == nil {
+		err = validateClassicMindMapBrowserRender(doc.Nodes)
+	}
 	writeClassicMindMapResult(w, doc, err)
 }
 
@@ -583,14 +587,46 @@ func serveClassicMindMapSourceAdd(w http.ResponseWriter, r *http.Request, store 
 	if !decodeClassicMindMapJSON(w, r, &request) {
 		return
 	}
+	if request.Kind == ClassicMindMapSourceExternalFile {
+		path := strings.TrimSpace(request.Locator)
+		if !filepath.IsAbs(path) || filepath.Clean(path) != path {
+			http.Error(w, "локальный файл должен быть указан абсолютным нормализованным путём", http.StatusBadRequest)
+			return
+		}
+	}
+	if !classicMindMapSourceAddFieldsMatchKind(request) {
+		http.Error(w, "источник содержит поля другого типа", http.StatusBadRequest)
+		return
+	}
 	doc, source, err := store.AttachClassicMindMapSource(request.MapID, request.NodeID, ClassicMindMapSource{
 		Kind: request.Kind, Title: request.Title, Locator: request.Locator,
 		URL: request.URL, KnowledgeNodeID: request.KnowledgeNodeID,
 	}, request.ExpectedRevision, "browser", "привязан внешний источник")
+	var pathErr *os.PathError
+	if request.Kind == ClassicMindMapSourceExternalFile && errors.As(err, &pathErr) {
+		http.Error(w, "локальный файл не найден или недоступен", http.StatusBadRequest)
+		return
+	}
 	writeClassicMindMapResult(w, struct {
 		Document ClassicMindMapDocument `json:"document"`
 		Source   ClassicMindMapSource   `json:"source"`
 	}{doc, source}, err)
+}
+
+func classicMindMapSourceAddFieldsMatchKind(request classicMindMapSourceAddRequest) bool {
+	locator := strings.TrimSpace(request.Locator)
+	webURL := strings.TrimSpace(request.URL)
+	knowledgeNodeID := strings.TrimSpace(request.KnowledgeNodeID)
+	switch request.Kind {
+	case ClassicMindMapSourceExternalFile:
+		return locator != "" && webURL == "" && knowledgeNodeID == ""
+	case ClassicMindMapSourceURL:
+		return locator == "" && webURL != "" && knowledgeNodeID == ""
+	case ClassicMindMapSourceKnowledgeNode:
+		return locator == "" && webURL == "" && knowledgeNodeID != ""
+	default:
+		return false
+	}
 }
 
 func serveClassicMindMapSourceUpload(w http.ResponseWriter, r *http.Request, store *Store) {
@@ -615,7 +651,11 @@ func serveClassicMindMapSourceUpload(w http.ResponseWriter, r *http.Request, sto
 	}
 	path, digest, err := store.ImportClassicMindMapAttachment(header.Filename, file)
 	if err != nil {
-		writeClassicMindMapResult(w, nil, err)
+		if strings.Contains(err.Error(), "превышает лимит") {
+			http.Error(w, "выбранный файл превышает допустимый размер", http.StatusRequestEntityTooLarge)
+		} else {
+			http.Error(w, "не удалось безопасно сохранить выбранный файл", http.StatusInternalServerError)
+		}
 		return
 	}
 	title := strings.TrimSpace(r.FormValue("title"))
@@ -668,7 +708,9 @@ func serveClassicMindMapSourceFile(w http.ResponseWriter, r *http.Request, store
 	}
 	resolved, err := store.ResolveClassicMindMapFileSource(mapIDs[0], sourceIDs[0])
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusConflict)
+		// Resolution errors can contain absolute paths and storage details. The
+		// browser only needs to know that its pinned source is no longer usable.
+		http.Error(w, "источник недоступен или изменён", http.StatusConflict)
 		return
 	}
 	file, err := os.Open(resolved.Path)
@@ -682,9 +724,32 @@ func serveClassicMindMapSourceFile(w http.ResponseWriter, r *http.Request, store
 		http.Error(w, "файл источника недоступен", http.StatusGone)
 		return
 	}
-	w.Header().Set("Content-Type", resolved.MediaType)
-	w.Header().Set("Content-Disposition", mime.FormatMediaType("inline", map[string]string{"filename": filepath.Base(resolved.Path)}))
+	mediaType, disposition := classicMindMapSourcePresentation(resolved.MediaType)
+	w.Header().Set("Content-Type", mediaType)
+	w.Header().Set("Content-Disposition", mime.FormatMediaType(disposition, map[string]string{"filename": filepath.Base(resolved.Path)}))
+	// Source documents share the editor's loopback origin. Give even otherwise
+	// safe inline formats a scriptless unique-origin sandbox. Active formats
+	// such as HTML, SVG and XML are additionally forced to octet-stream and
+	// attachment so they cannot inherit the editor origin or read its token.
+	w.Header().Set("Content-Security-Policy", classicMindMapSourceSandboxPolicy)
 	http.ServeContent(w, r, filepath.Base(resolved.Path), info.ModTime(), file)
+}
+
+func classicMindMapSourcePresentation(rawMediaType string) (mediaType, disposition string) {
+	mediaType, _, err := mime.ParseMediaType(strings.TrimSpace(rawMediaType))
+	if err != nil {
+		return "application/octet-stream", "attachment"
+	}
+	mediaType = strings.ToLower(mediaType)
+	switch mediaType {
+	case "application/pdf", "text/plain", "text/csv", "text/markdown",
+		"image/png", "image/jpeg", "image/gif", "image/webp", "image/avif", "image/bmp", "image/x-icon":
+		return mediaType, "inline"
+	}
+	if strings.HasPrefix(mediaType, "audio/") || strings.HasPrefix(mediaType, "video/") {
+		return mediaType, "inline"
+	}
+	return "application/octet-stream", "attachment"
 }
 
 func serveClassicMindMapHistory(w http.ResponseWriter, r *http.Request, store *Store) {
@@ -777,13 +842,15 @@ func writeClassicMindMapResult(w http.ResponseWriter, result any, err error) {
 			status = http.StatusNotFound
 		case errors.Is(err, ErrClassicMindMapRevisionConflict), errors.Is(err, ErrClassicMindMapLocked):
 			status = http.StatusConflict
+		case errors.Is(err, ErrClassicMindMapRenderLimit):
+			status = http.StatusUnprocessableEntity
 		}
 		http.Error(w, strings.TrimSpace(err.Error()), status)
 		return
 	}
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
 	if err := json.NewEncoder(w).Encode(result); err != nil {
-		http.Error(w, fmt.Sprintf("encode mind map response: %v", err), http.StatusInternalServerError)
+		http.Error(w, "не удалось сформировать ответ редактора", http.StatusInternalServerError)
 	}
 }
 

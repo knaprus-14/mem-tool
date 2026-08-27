@@ -191,12 +191,16 @@ func writeDocumentImportManifestTx(tx *sql.Tx, manifest DocumentImportManifest, 
 // callers can explain that a re-import is required instead of inventing pages.
 func (s *Store) CurrentDocumentImportManifests(selector string) ([]DocumentImportManifest, error) {
 	selector = strings.TrimSpace(selector)
-	s.mu.RLock()
+	s.mu.Lock()
+	if err := s.refreshEntryCacheIfStaleUnlocked("current import manifests"); err != nil {
+		s.mu.Unlock()
+		return nil, err
+	}
 	entries := make([]Entry, len(s.entries))
 	for index := range s.entries {
 		entries[index] = cloneEntry(s.entries[index])
 	}
-	s.mu.RUnlock()
+	s.mu.Unlock()
 
 	type currentDocument struct{ id, revision, source, media string }
 	documents := make(map[string]currentDocument)

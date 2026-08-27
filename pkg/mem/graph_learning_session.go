@@ -325,10 +325,10 @@ func (s *Store) startKnowledgeLearningSessionAt(request KnowledgeLearningSession
 		_ = tx.Rollback()
 		return KnowledgeLearningSession{}, cause
 	}
-	if err := verifyKnowledgeSelectionManifestTx(tx, manifest, s.entries); err != nil {
+	if err := verifyKnowledgeSelectionManifestTx(tx, manifest); err != nil {
 		return rollback(err)
 	}
-	if err := verifyKnowledgeLearningRouteRelationsTx(tx, route, s.entries); err != nil {
+	if err := verifyKnowledgeLearningRouteRelationsTx(tx, route); err != nil {
 		return rollback(err)
 	}
 	if _, err := tx.Exec(`INSERT INTO knowledge_learning_sessions
@@ -348,8 +348,12 @@ func (s *Store) startKnowledgeLearningSessionAt(request KnowledgeLearningSession
 		if digestErr != nil || currentContent != item.ContentDigest || currentEvidence != item.EvidenceDigest {
 			return rollback(ErrKnowledgeLearningItemChanged)
 		}
-		for _, anchor := range node.Evidence {
-			if resolveEvidenceAnchorFromEntries(anchor, s.entries).State != EvidenceCurrent {
+		resolutions, resolveErr := resolveEvidenceAnchorsFromQuerier(tx, node.Evidence)
+		if resolveErr != nil {
+			return rollback(resolveErr)
+		}
+		for _, resolution := range resolutions {
+			if resolution.State != EvidenceCurrent {
 				return rollback(ErrKnowledgeLearningItemChanged)
 			}
 		}
@@ -369,7 +373,7 @@ VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, result.ID, item.Ordinal, item.NodeID, it
 	return result, nil
 }
 
-func verifyKnowledgeLearningRouteRelationsTx(tx *sql.Tx, route KnowledgeLearningRoute, entries []Entry) error {
+func verifyKnowledgeLearningRouteRelationsTx(tx *sql.Tx, route KnowledgeLearningRoute) error {
 	for _, relation := range route.Relations {
 		var from, to string
 		var kind KnowledgeRelationKind
@@ -384,8 +388,12 @@ func verifyKnowledgeLearningRouteRelationsTx(tx *sql.Tx, route KnowledgeLearning
 		if err != nil || len(anchors) == 0 {
 			return ErrKnowledgeLearningItemChanged
 		}
-		for _, anchor := range anchors {
-			if resolveEvidenceAnchorFromEntries(anchor, entries).State != EvidenceCurrent {
+		resolutions, resolveErr := resolveEvidenceAnchorsFromQuerier(tx, anchors)
+		if resolveErr != nil {
+			return ErrKnowledgeLearningItemChanged
+		}
+		for _, resolution := range resolutions {
+			if resolution.State != EvidenceCurrent {
 				return ErrKnowledgeLearningItemChanged
 			}
 		}
@@ -456,8 +464,12 @@ FROM knowledge_learning_session_items i WHERE i.session_id = ? AND i.node_id = ?
 	if err != nil {
 		return rollback(ErrKnowledgeLearningItemChanged)
 	}
-	for _, anchor := range node.Evidence {
-		if resolveEvidenceAnchorFromEntries(anchor, s.entries).State != EvidenceCurrent {
+	resolutions, resolveErr := resolveEvidenceAnchorsFromQuerier(tx, node.Evidence)
+	if resolveErr != nil {
+		return rollback(ErrKnowledgeLearningItemChanged)
+	}
+	for _, resolution := range resolutions {
+		if resolution.State != EvidenceCurrent {
 			return rollback(ErrKnowledgeLearningItemChanged)
 		}
 	}

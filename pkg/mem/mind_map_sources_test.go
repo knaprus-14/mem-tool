@@ -285,6 +285,157 @@ func TestClassicMindMapWorkspaceSourceAPIAndPhysicalPage(t *testing.T) {
 	}
 }
 
+func TestClassicMindMapWorkspaceIsolatesActiveSourceContent(t *testing.T) {
+	storeDir := t.TempDir()
+	store, err := NewStore(storeDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	doc, err := store.CreateClassicMindMap("Source isolation", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	tests := []struct {
+		name, contents, contentType, disposition string
+	}{
+		{"payload.html", `<script>fetch('/').then(r=>r.text()).then(console.log)</script>`, "application/octet-stream", "attachment"},
+		{"payload.svg", `<svg xmlns="http://www.w3.org/2000/svg"><script>alert(1)</script></svg>`, "application/octet-stream", "attachment"},
+		{"manual.pdf", "%PDF-1.4\nfixture", "application/pdf", "inline"},
+		{"notes.txt", "plain notes", "text/plain", "inline"},
+	}
+	sources := make(map[string]ClassicMindMapSource, len(tests))
+	for _, test := range tests {
+		path := filepath.Join(storeDir, test.name)
+		if err := os.WriteFile(path, []byte(test.contents), 0600); err != nil {
+			t.Fatal(err)
+		}
+		var source ClassicMindMapSource
+		doc, source, err = store.AttachClassicMindMapSource(doc.Map.ID, doc.Map.RootNodeID, ClassicMindMapSource{
+			Kind: ClassicMindMapSourceExternalFile, Locator: path,
+		}, doc.Map.Revision, "test", "source isolation")
+		if err != nil {
+			t.Fatal(err)
+		}
+		sources[test.name] = source
+	}
+
+	handler := NewClassicMindMapWorkspaceHandler(store, "isolation-session")
+	pageRequest := httptest.NewRequest(http.MethodGet, "http://127.0.0.1:9030/", nil)
+	pageRequest.Host = "127.0.0.1:9030"
+	pageResponse := httptest.NewRecorder()
+	handler.ServeHTTP(pageResponse, pageRequest)
+	cookies := pageResponse.Result().Cookies()
+	if len(cookies) != 1 {
+		t.Fatalf("source capability cookie missing: %#v", cookies)
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			source := sources[test.name]
+			request := httptest.NewRequest(http.MethodGet, "http://127.0.0.1:9030/api/source/mindmap?map_id="+doc.Map.ID+"&source_id="+source.ID, nil)
+			request.Host = "127.0.0.1:9030"
+			request.Header.Set("Sec-Fetch-Site", "same-origin")
+			request.AddCookie(cookies[0])
+			response := httptest.NewRecorder()
+			handler.ServeHTTP(response, request)
+			if response.Code != http.StatusOK {
+				t.Fatalf("status=%d body=%q", response.Code, response.Body.String())
+			}
+			if got := response.Header().Get("Content-Type"); got != test.contentType {
+				t.Fatalf("content type=%q, want %q", got, test.contentType)
+			}
+			if got := response.Header().Get("Content-Disposition"); !strings.HasPrefix(got, test.disposition+";") || !strings.Contains(got, test.name) {
+				t.Fatalf("content disposition=%q, want %s with filename", got, test.disposition)
+			}
+			if got := response.Header().Get("Content-Security-Policy"); got != classicMindMapSourceSandboxPolicy || strings.Contains(got, "unsafe-inline") {
+				t.Fatalf("source sandbox policy=%q", got)
+			}
+			if response.Header().Get("X-Content-Type-Options") != "nosniff" || response.Header().Get("X-Frame-Options") != "DENY" {
+				t.Fatalf("source hardening headers missing: %#v", response.Header())
+			}
+		})
+	}
+}
+
+func TestClassicMindMapWorkspaceExternalPathMustBeAbsoluteAndClean(t *testing.T) {
+	storeDir := t.TempDir()
+	store, err := NewStore(storeDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	doc, err := store.CreateClassicMindMap("Path boundary", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	handler := NewClassicMindMapWorkspaceHandler(store, "path-session")
+	traversal := filepath.Join(storeDir, "nested") + string(os.PathSeparator) + ".." + string(os.PathSeparator) + "secret.txt"
+	for _, locator := range []string{"relative.html", traversal} {
+		response := classicMindMapWorkspaceRequest(t, handler, "/api/sources/add", "127.0.0.1:9040", "http://127.0.0.1:9040", "path-session", map[string]any{
+			"map_id": doc.Map.ID, "node_id": doc.Map.RootNodeID, "kind": "external_file", "locator": locator,
+			"title": "", "url": "", "knowledge_node_id": "", "expected_revision": doc.Map.Revision,
+		})
+		if response.Code != http.StatusBadRequest || !strings.Contains(response.Body.String(), "абсолютным нормализованным") {
+			t.Fatalf("unsafe locator %q status=%d body=%q", locator, response.Code, response.Body.String())
+		}
+	}
+	mixed := classicMindMapWorkspaceRequest(t, handler, "/api/sources/add", "127.0.0.1:9040", "http://127.0.0.1:9040", "path-session", map[string]any{
+		"map_id": doc.Map.ID, "node_id": doc.Map.RootNodeID, "kind": "external_file", "locator": filepath.Join(storeDir, "safe.txt"),
+		"title": "", "url": "https://example.org/smuggled", "knowledge_node_id": "", "expected_revision": doc.Map.Revision,
+	})
+	if mixed.Code != http.StatusBadRequest || !strings.Contains(mixed.Body.String(), "поля другого типа") {
+		t.Fatalf("mixed source fields status=%d body=%q", mixed.Code, mixed.Body.String())
+	}
+	missingPath := filepath.Join(storeDir, "not-present.txt")
+	missing := classicMindMapWorkspaceRequest(t, handler, "/api/sources/add", "127.0.0.1:9040", "http://127.0.0.1:9040", "path-session", map[string]any{
+		"map_id": doc.Map.ID, "node_id": doc.Map.RootNodeID, "kind": "external_file", "locator": missingPath,
+		"title": "", "url": "", "knowledge_node_id": "", "expected_revision": doc.Map.Revision,
+	})
+	if missing.Code != http.StatusBadRequest || strings.Contains(missing.Body.String(), missingPath) {
+		t.Fatalf("missing source leaked its local path: status=%d body=%q", missing.Code, missing.Body.String())
+	}
+	loaded, err := store.LoadClassicMindMap(doc.Map.ID)
+	if err != nil || loaded.Map.Revision != doc.Map.Revision || len(loaded.Nodes[0].Sources) != 0 {
+		t.Fatalf("rejected paths changed map: revision=%d sources=%d err=%v", loaded.Map.Revision, len(loaded.Nodes[0].Sources), err)
+	}
+
+	path := filepath.Join(storeDir, "safe.txt")
+	if err := os.WriteFile(path, []byte("safe"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	response := classicMindMapWorkspaceRequest(t, handler, "/api/sources/add", "127.0.0.1:9040", "http://127.0.0.1:9040", "path-session", map[string]any{
+		"map_id": doc.Map.ID, "node_id": doc.Map.RootNodeID, "kind": "external_file", "locator": path,
+		"title": "", "url": "", "knowledge_node_id": "", "expected_revision": doc.Map.Revision,
+	})
+	var attached struct {
+		Document ClassicMindMapDocument `json:"document"`
+		Source   ClassicMindMapSource   `json:"source"`
+	}
+	decodeClassicMindMapTestResponse(t, response, http.StatusOK, &attached)
+	if attached.Source.Locator != path {
+		t.Fatalf("normal absolute source path changed: %#v", attached.Source)
+	}
+
+	if err := os.Remove(path); err != nil {
+		t.Fatal(err)
+	}
+	pageRequest := httptest.NewRequest(http.MethodGet, "http://127.0.0.1:9040/", nil)
+	pageRequest.Host = "127.0.0.1:9040"
+	pageResponse := httptest.NewRecorder()
+	handler.ServeHTTP(pageResponse, pageRequest)
+	cookie := pageResponse.Result().Cookies()[0]
+	openRequest := httptest.NewRequest(http.MethodGet, "http://127.0.0.1:9040/api/source/mindmap?map_id="+doc.Map.ID+"&source_id="+attached.Source.ID, nil)
+	openRequest.Host = "127.0.0.1:9040"
+	openRequest.Header.Set("Sec-Fetch-Site", "same-origin")
+	openRequest.AddCookie(cookie)
+	openResponse := httptest.NewRecorder()
+	handler.ServeHTTP(openResponse, openRequest)
+	if openResponse.Code != http.StatusConflict || strings.Contains(openResponse.Body.String(), path) {
+		t.Fatalf("resolution leaked local path: status=%d body=%q", openResponse.Code, openResponse.Body.String())
+	}
+}
+
 func TestClassicMindMapWorkspaceUploadsAttachment(t *testing.T) {
 	store, err := NewStore(t.TempDir())
 	if err != nil {

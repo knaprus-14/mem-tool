@@ -26,6 +26,11 @@ const (
 	maxClassicMindMapAICorrections       = 2
 )
 
+var (
+	ErrClassicMindMapAIInvalidRequest = errors.New("classic mind map AI request is invalid")
+	ErrClassicMindMapAIResourceLimit  = errors.New("classic mind map AI resource limit exceeded")
+)
+
 // The original mind_map_generation_runs table remains the compact run ledger
 // introduced with the classic map model. These companion tables retain exact
 // evidence, immutable validated checkpoints, the review preview and the one
@@ -275,14 +280,19 @@ func PrepareClassicMindMapAIPreview(ctx context.Context, service *ClassicMindMap
 func (s *Store) prepareClassicMindMapAIPreview(ctx context.Context, service *ClassicMindMapAIService, request ClassicMindMapAIPreviewRequest, progress ClassicMindMapAIProgressFunc) (result ClassicMindMapAIPreview, resultErr error) {
 	request, base, target, evidence, err := s.normalizeClassicMindMapAIRequest(request)
 	if err != nil {
-		return ClassicMindMapAIPreview{}, err
+		if errors.Is(err, ErrClassicMindMapAIResourceLimit) || errors.Is(err, ErrClassicMindMapRevisionConflict) ||
+			errors.Is(err, ErrClassicMindMapLocked) || errors.Is(err, ErrClassicMindMapNotFound) ||
+			errors.Is(err, ErrClassicMindMapNodeNotFound) {
+			return ClassicMindMapAIPreview{}, err
+		}
+		return ClassicMindMapAIPreview{}, fmt.Errorf("%w: %v", ErrClassicMindMapAIInvalidRequest, err)
 	}
 	grounded := len(evidence) > 0
 	if request.Action == ClassicMindMapAIFindSources && !grounded {
-		return ClassicMindMapAIPreview{}, errors.New("для поиска источников нужны актуальные фрагменты базы; выберите документ, диапазон страниц или точные фрагменты")
+		return ClassicMindMapAIPreview{}, fmt.Errorf("%w: для поиска источников нужны актуальные фрагменты базы; выберите документ, диапазон страниц или точные фрагменты", ErrClassicMindMapAIInvalidRequest)
 	}
 	if !grounded && !request.Scope.AllowUngrounded {
-		return ClassicMindMapAIPreview{}, errors.New("не найдены актуальные фрагменты для проверяемого предпросмотра; выберите документ, страницы или точные фрагменты либо включите источники ветви")
+		return ClassicMindMapAIPreview{}, fmt.Errorf("%w: не найдены актуальные фрагменты для проверяемого предпросмотра; выберите документ, страницы или точные фрагменты либо включите источники ветви", ErrClassicMindMapAIInvalidRequest)
 	}
 
 	answerCfg := service.Config.WithMapGenerationDefaults()
@@ -459,8 +469,11 @@ func (s *Store) normalizeClassicMindMapAIRequest(request ClassicMindMapAIPreview
 
 	var base ClassicMindMapDocument
 	var target ClassicMindMapNode
-	s.mu.RLock()
-	defer s.mu.RUnlock()
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if err := s.refreshEntryCacheIfStaleUnlocked("classic mind map AI evidence"); err != nil {
+		return request, base, target, nil, err
+	}
 	if request.Action == ClassicMindMapAINewMap {
 		if request.MapRef != "" || request.NodeRef != "" || request.Scope.UseNodeSources {
 			return request, base, target, nil, errors.New("new_map must not target an existing map or node")
@@ -632,7 +645,7 @@ func (s *Store) selectClassicMindMapAIEntriesLocked(entries []Entry, request Cla
 		return result[i].ID < result[j].ID
 	})
 	if request.Scope.Limit == 0 && len(result) > DefaultClassicMindMapAIEvidenceLimit {
-		return nil, fmt.Errorf("выбрано %d актуальных фрагментов — больше безопасного автоматического порога %d; сузьте документ, страницы, поиск или точные фрагменты либо укажите явный лимит от 1 до %d в дополнительных настройках (--limit в CLI)", len(result), DefaultClassicMindMapAIEvidenceLimit, MaxClassicMindMapAIEvidence)
+		return nil, fmt.Errorf("%w: выбрано %d актуальных фрагментов — больше безопасного автоматического порога %d; сузьте документ, страницы, поиск или точные фрагменты либо укажите явный лимит от 1 до %d в дополнительных настройках (--limit в CLI)", ErrClassicMindMapAIResourceLimit, len(result), DefaultClassicMindMapAIEvidenceLimit, MaxClassicMindMapAIEvidence)
 	}
 	if request.Scope.Limit > 0 && len(result) > request.Scope.Limit {
 		result = result[:request.Scope.Limit]
@@ -1700,6 +1713,9 @@ func (s *Store) publishExistingClassicMindMapAIPreview(preview ClassicMindMapAIP
 			}
 			switch preview.Action {
 			case ClassicMindMapAIExpand:
+				if err := validateClassicMindMapAIExpansionLimits(current.Nodes, target.ID, selected); err != nil {
+					return "", err
+				}
 				if err := applyClassicMindMapAIExpansionTx(tx, item.ID, target, selected); err != nil {
 					return "", err
 				}
@@ -1743,6 +1759,47 @@ VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`, preview.RunID, item.ID, item.Revision, item
 		return ClassicMindMapAIApplyResult{}, err
 	}
 	return ClassicMindMapAIApplyResult{Document: doc, RunID: preview.RunID, ProposalIDs: selectedIDs, PublicationID: publicationID}, nil
+}
+
+func validateClassicMindMapAIExpansionLimits(current []ClassicMindMapNode, targetID string, selected []ClassicMindMapAIProposal) error {
+	if len(current)+len(selected) > MaxClassicMindMapNodes {
+		return fmt.Errorf("%w: AI-расширение превысит лимит карты в %d узлов", ErrClassicMindMapAIResourceLimit, MaxClassicMindMapNodes)
+	}
+	parent := make(map[string]string, len(selected))
+	for _, proposal := range selected {
+		parent[proposal.ID] = proposal.ParentProposalID
+	}
+	maxProposalDepth := 0
+	depths := make(map[string]int, len(selected))
+	for _, proposal := range selected {
+		path := make([]string, 0, 8)
+		seen := make(map[string]bool, 8)
+		cursor := proposal.ID
+		baseDepth := 0
+		for cursor != "" {
+			if seen[cursor] {
+				return fmt.Errorf("AI-расширение содержит цикл через proposal %q", cursor)
+			}
+			if known := depths[cursor]; known != 0 {
+				baseDepth = known
+				break
+			}
+			seen[cursor] = true
+			path = append(path, cursor)
+			cursor = parent[cursor]
+		}
+		for i := len(path) - 1; i >= 0; i-- {
+			baseDepth++
+			depths[path[i]] = baseDepth
+			if baseDepth > maxProposalDepth {
+				maxProposalDepth = baseDepth
+			}
+		}
+	}
+	if classicMindMapNodeDepth(current, targetID)+maxProposalDepth > MaxClassicMindMapDepth {
+		return fmt.Errorf("%w: AI-расширение превысит лимит глубины карты в %d уровней", ErrClassicMindMapAIResourceLimit, MaxClassicMindMapDepth)
+	}
+	return nil
 }
 
 func applyClassicMindMapAIExpansionTx(tx *sql.Tx, mapID string, target ClassicMindMapNode, selected []ClassicMindMapAIProposal) error {

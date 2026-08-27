@@ -487,7 +487,7 @@ func (s *Store) SaveKnowledgeLearningCandidates(request KnowledgeLearningSaveReq
 		}
 		return KnowledgeLearningSaveResult{}, cause
 	}
-	if err := verifyKnowledgeSelectionManifestTx(tx, manifest, s.entries); err != nil {
+	if err := verifyKnowledgeSelectionManifestTx(tx, manifest); err != nil {
 		return rollback(err)
 	}
 	for _, index := range indexes {

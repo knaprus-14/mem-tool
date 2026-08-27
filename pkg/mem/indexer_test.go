@@ -90,6 +90,106 @@ func TestIndexFileRemovesStaleTailAfterShorterReindex(t *testing.T) {
 	}
 }
 
+func TestIndexFileRemovesAllChunksWhenSourceBecomesEmpty(t *testing.T) {
+	root := t.TempDir()
+	store, err := NewStore(filepath.Join(root, "db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	path := filepath.Join(root, "document.txt")
+	if err := os.WriteFile(path, []byte("old searchable text"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := indexFileWithEmbedder(testConfig(100, "paragraph"), store, path, fakeEmbedding); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	result, err := indexFileWithEmbedder(testConfig(100, "paragraph"), store, path, func(*Config, string) ([]float32, error) {
+		t.Fatal("empty document must not call the embedder")
+		return nil, nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Skipped || result.Chunks != 0 || result.Failed != 0 {
+		t.Fatalf("unexpected empty reindex result: %#v", result)
+	}
+	source, _ := CanonicalSourcePath(path)
+	if entries := store.GetBySourceFile(source); len(entries) != 0 {
+		t.Fatalf("empty source left %d stale searchable chunks", len(entries))
+	}
+	snapshots, err := store.ListDocumentHistorySnapshots(source)
+	if err != nil || len(snapshots) != 1 || snapshots[0].ChunkCount != 1 {
+		t.Fatalf("empty replacement did not preserve the prior document: snapshots=%#v err=%v", snapshots, err)
+	}
+	plan, err := store.BuildDocumentRestorePlan(source, snapshots[0].SnapshotID)
+	if err != nil {
+		t.Fatalf("preview restore from empty state: %v", err)
+	}
+	run, err := store.ApplyDocumentRestore(source, snapshots[0].SnapshotID, plan.PlanDigest)
+	if err != nil {
+		t.Fatalf("restore document removed by empty source: %v", err)
+	}
+	if entries := store.GetBySourceFile(source); len(entries) != 1 || entries[0].Text != "old searchable text" {
+		t.Fatalf("restore from empty state returned wrong document: %#v", entries)
+	}
+	rollback, err := store.BuildDocumentRestoreRollbackPlan(run.ID)
+	if err != nil {
+		t.Fatalf("preview rollback to empty state: %v", err)
+	}
+	if _, err := store.ApplyDocumentRestoreRollback(run.ID, rollback.PlanDigest); err != nil {
+		t.Fatalf("rollback to empty state: %v", err)
+	}
+	if entries := store.GetBySourceFile(source); len(entries) != 0 {
+		t.Fatalf("rollback did not restore empty state: %#v", entries)
+	}
+	if err := os.WriteFile(path, []byte("new searchable text"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := indexFileWithEmbedder(testConfig(100, "paragraph"), store, path, fakeEmbedding); err != nil {
+		t.Fatalf("replace empty state with new content: %v", err)
+	}
+	snapshots, err = store.ListDocumentHistorySnapshots(source)
+	if err != nil {
+		t.Fatal(err)
+	}
+	emptySnapshotID := ""
+	for _, snapshot := range snapshots {
+		if snapshot.ChunkCount == 0 {
+			emptySnapshotID = snapshot.SnapshotID
+			break
+		}
+	}
+	if emptySnapshotID == "" {
+		t.Fatalf("empty -> non-empty transition was not archived: %#v", snapshots)
+	}
+	emptyPlan, err := store.BuildDocumentRestorePlan(source, emptySnapshotID)
+	if err != nil {
+		t.Fatalf("preview restored empty snapshot: %v", err)
+	}
+	emptyRun, err := store.ApplyDocumentRestore(source, emptySnapshotID, emptyPlan.PlanDigest)
+	if err != nil {
+		t.Fatalf("restore exact empty snapshot: %v", err)
+	}
+	if entries := store.GetBySourceFile(source); len(entries) != 0 {
+		t.Fatalf("empty snapshot remained searchable: %#v", entries)
+	}
+	newRollback, err := store.BuildDocumentRestoreRollbackPlan(emptyRun.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.ApplyDocumentRestoreRollback(emptyRun.ID, newRollback.PlanDigest); err != nil {
+		t.Fatalf("rollback empty restore to new content: %v", err)
+	}
+	if entries := store.GetBySourceFile(source); len(entries) != 1 || entries[0].Text != "new searchable text" {
+		t.Fatalf("rollback did not restore post-empty content: %#v", entries)
+	}
+}
+
 func TestIndexFileEmbeddingFailureLeavesExistingDocumentUntouched(t *testing.T) {
 	root := t.TempDir()
 	store, err := NewStore(filepath.Join(root, "db"))

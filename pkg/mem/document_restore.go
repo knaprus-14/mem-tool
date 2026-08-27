@@ -20,6 +20,7 @@ type DocumentRestorePlan struct {
 	SourcePath                   string             `json:"source_path"`
 	CurrentRevision              string             `json:"current_revision"`
 	TargetRevision               string             `json:"target_revision"`
+	TargetSnapshotID             string             `json:"target_snapshot_id"`
 	CurrentChunks                int                `json:"current_chunks"`
 	TargetChunks                 int                `json:"target_chunks"`
 	CurrentGraphSnapshotID       string             `json:"current_graph_snapshot_id"`
@@ -38,17 +39,19 @@ type DocumentRestorePlan struct {
 }
 
 type DocumentRestoreRun struct {
-	ID                    string `json:"id"`
-	DocumentID            string `json:"document_id"`
-	SourcePath            string `json:"source_path"`
-	FromRevision          string `json:"from_revision"`
-	TargetRevision        string `json:"target_revision"`
-	BeforeGraphSnapshotID string `json:"before_graph_snapshot_id"`
-	TargetGraphSnapshotID string `json:"target_graph_snapshot_id"`
-	PlanDigest            string `json:"plan_digest"`
-	RollbackOf            string `json:"rollback_of,omitempty"`
-	RestoredChunks        int    `json:"restored_chunks"`
-	Created               string `json:"created"`
+	ID                       string `json:"id"`
+	DocumentID               string `json:"document_id"`
+	SourcePath               string `json:"source_path"`
+	FromRevision             string `json:"from_revision"`
+	TargetRevision           string `json:"target_revision"`
+	BeforeDocumentSnapshotID string `json:"before_document_snapshot_id,omitempty"`
+	TargetDocumentSnapshotID string `json:"target_document_snapshot_id,omitempty"`
+	BeforeGraphSnapshotID    string `json:"before_graph_snapshot_id"`
+	TargetGraphSnapshotID    string `json:"target_graph_snapshot_id"`
+	PlanDigest               string `json:"plan_digest"`
+	RollbackOf               string `json:"rollback_of,omitempty"`
+	RestoredChunks           int    `json:"restored_chunks"`
+	Created                  string `json:"created"`
 }
 
 type knowledgeGraphSnapshot struct {
@@ -60,8 +63,11 @@ type knowledgeGraphSnapshot struct {
 }
 
 func (s *Store) BuildDocumentRestorePlan(document, revision string) (DocumentRestorePlan, error) {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if err := s.refreshEntryCacheIfStaleUnlocked("document restore preview"); err != nil {
+		return DocumentRestorePlan{}, err
+	}
 	return s.buildDocumentRestorePlanUnlocked(document, revision, "", "")
 }
 
@@ -70,9 +76,16 @@ func (s *Store) BuildDocumentRestoreRollbackPlan(runID string) (DocumentRestoreP
 	if err != nil {
 		return DocumentRestorePlan{}, err
 	}
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	return s.buildDocumentRestorePlanUnlocked(run.SourcePath, run.FromRevision, run.BeforeGraphSnapshotID, run.ID)
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if err := s.refreshEntryCacheIfStaleUnlocked("document restore rollback preview"); err != nil {
+		return DocumentRestorePlan{}, err
+	}
+	selector := run.BeforeDocumentSnapshotID
+	if selector == "" {
+		selector = run.FromRevision
+	}
+	return s.buildDocumentRestorePlanUnlocked(run.SourcePath, selector, run.BeforeGraphSnapshotID, run.ID)
 }
 
 func (s *Store) buildDocumentRestorePlanUnlocked(document, revision, targetGraphOverride, rollbackOf string) (DocumentRestorePlan, error) {
@@ -87,14 +100,23 @@ func (s *Store) buildDocumentRestorePlanUnlocked(document, revision, targetGraph
 			current = append(current, cloneEntry(entry))
 		}
 	}
+	var currentTombstone *documentTombstone
+	documentID, sourcePath, currentRevision := "", "", ""
 	if len(current) == 0 {
-		return DocumentRestorePlan{}, fmt.Errorf("current document %q was not found", document)
+		tombstone, err := loadDocumentTombstone(s.db, document)
+		if errors.Is(err, sql.ErrNoRows) {
+			return DocumentRestorePlan{}, fmt.Errorf("current document %q was not found", document)
+		}
+		if err != nil {
+			return DocumentRestorePlan{}, fmt.Errorf("load current empty document state: %w", err)
+		}
+		currentTombstone = &tombstone
+		documentID, sourcePath, currentRevision = tombstone.DocumentID, tombstone.SourcePath, tombstone.DocumentRevision
+	} else {
+		sort.Slice(current, func(i, j int) bool { return current[i].ChunkIndex < current[j].ChunkIndex })
+		documentID, sourcePath, currentRevision = current[0].DocumentID, current[0].SourcePath, current[0].DocumentRevision
 	}
-	sort.Slice(current, func(i, j int) bool { return current[i].ChunkIndex < current[j].ChunkIndex })
-	if current[0].DocumentRevision == revision {
-		return DocumentRestorePlan{}, fmt.Errorf("target revision %s is already current", revision)
-	}
-	targetEntries, targetSnapshot, err := s.loadHistoricalDocumentEntriesFull(current[0].DocumentID, revision)
+	targetEntries, targetSnapshot, err := s.loadHistoricalDocumentEntriesFull(documentID, revision)
 	if err != nil {
 		return DocumentRestorePlan{}, err
 	}
@@ -116,16 +138,37 @@ func (s *Store) buildDocumentRestorePlanUnlocked(document, revision, targetGraph
 	}
 	currentGraphDigest := prefixedSHA256(currentGraphJSON)
 	currentGraphID := graphSnapshotIDFromDigest(currentGraphDigest)
-	currentStateDigest, err := documentRestoreCurrentStateDigest(current, currentGraphDigest)
+	currentStateDigest := ""
+	if currentTombstone != nil {
+		currentStateDigest, err = emptyDocumentStateDigest(*currentTombstone, currentGraphDigest)
+	} else {
+		currentStateDigest, err = documentRestoreCurrentStateDigest(current, currentGraphDigest)
+	}
 	if err != nil {
 		return DocumentRestorePlan{}, err
 	}
-	diff := compareCorpusEntries(current[0].DocumentID, current[0].SourcePath,
-		current[0].DocumentRevision, revision, targetSnapshot.Created, current, targetEntries)
+	targetStateDigest := ""
+	if len(targetEntries) == 0 {
+		targetStateDigest, err = emptyDocumentStateDigest(documentTombstone{
+			DocumentID: targetSnapshot.DocumentID, SourcePath: targetSnapshot.SourcePath,
+			DocumentRevision: targetSnapshot.DocumentRevision, MediaType: targetSnapshot.MediaType,
+		}, targetGraph.Digest)
+	} else {
+		targetStateDigest, err = documentRestoreCurrentStateDigest(targetEntries, targetGraph.Digest)
+	}
+	if err != nil {
+		return DocumentRestorePlan{}, err
+	}
+	if currentStateDigest == targetStateDigest {
+		return DocumentRestorePlan{}, fmt.Errorf("target snapshot %s is already current", targetSnapshot.SnapshotID)
+	}
+	diff := compareCorpusEntries(documentID, sourcePath, currentRevision,
+		targetSnapshot.DocumentRevision, targetSnapshot.Created, current, targetEntries)
 	plan := DocumentRestorePlan{
-		DocumentID: current[0].DocumentID, SourcePath: current[0].SourcePath,
-		CurrentRevision: current[0].DocumentRevision, TargetRevision: revision,
-		CurrentChunks: len(current), TargetChunks: len(targetEntries),
+		DocumentID: documentID, SourcePath: sourcePath,
+		CurrentRevision: currentRevision, TargetRevision: targetSnapshot.DocumentRevision,
+		TargetSnapshotID: targetSnapshot.SnapshotID,
+		CurrentChunks:    len(current), TargetChunks: len(targetEntries),
 		CurrentGraphSnapshotID: currentGraphID, CurrentGraphDigest: currentGraphDigest,
 		CurrentStateDigest: currentStateDigest,
 		CurrentGraphNodes:  len(currentGraph.Nodes), CurrentGraphEdges: len(currentGraph.Edges),
@@ -135,14 +178,15 @@ func (s *Store) buildDocumentRestorePlanUnlocked(document, revision, targetGraph
 		Warning: "Восстановление заменит выбранный документ и весь knowledge graph снимком указанного момента; журналы review/edit/learning и именованные визуальные виды останутся append-only и не удаляются.",
 	}
 	pin := struct {
-		DocumentID, SourcePath, CurrentRevision, TargetRevision string
-		CurrentGraphDigest, TargetGraphDigest                   string
-		CurrentChunkPins                                        []string
-		TargetChunkPins                                         []string
-		RollbackOf                                              string
+		DocumentID, SourcePath, CurrentRevision, TargetRevision, TargetSnapshotID string
+		CurrentGraphDigest, TargetGraphDigest                                     string
+		CurrentChunkPins                                                          []string
+		TargetChunkPins                                                           []string
+		RollbackOf                                                                string
 	}{
 		DocumentID: plan.DocumentID, SourcePath: plan.SourcePath,
 		CurrentRevision: plan.CurrentRevision, TargetRevision: plan.TargetRevision,
+		TargetSnapshotID:   plan.TargetSnapshotID,
 		CurrentGraphDigest: plan.CurrentGraphDigest, TargetGraphDigest: plan.TargetGraphDigest,
 		RollbackOf: rollbackOf,
 	}
@@ -234,7 +278,11 @@ func (s *Store) ApplyDocumentRestoreRollback(runID, expectedPlanDigest string) (
 	if err != nil {
 		return DocumentRestoreRun{}, err
 	}
-	return s.applyDocumentRestore(previous.SourcePath, previous.FromRevision, previous.BeforeGraphSnapshotID, previous.ID, expectedPlanDigest)
+	selector := previous.BeforeDocumentSnapshotID
+	if selector == "" {
+		selector = previous.FromRevision
+	}
+	return s.applyDocumentRestore(previous.SourcePath, selector, previous.BeforeGraphSnapshotID, previous.ID, expectedPlanDigest)
 }
 
 func (s *Store) applyDocumentRestore(document, revision, targetGraphOverride, rollbackOf, expectedPlanDigest string) (DocumentRestoreRun, error) {
@@ -251,7 +299,7 @@ func (s *Store) applyDocumentRestore(document, revision, targetGraphOverride, ro
 	if plan.PlanDigest != expectedPlanDigest {
 		return DocumentRestoreRun{}, fmt.Errorf("%w: expected %s, current %s", ErrDocumentRestoreStateChanged, expectedPlanDigest, plan.PlanDigest)
 	}
-	targetEntries, _, err := s.loadHistoricalDocumentEntriesFull(plan.DocumentID, plan.TargetRevision)
+	targetEntries, targetSnapshot, err := s.loadHistoricalDocumentEntriesFull(plan.DocumentID, plan.TargetSnapshotID)
 	if err != nil {
 		return DocumentRestoreRun{}, err
 	}
@@ -259,14 +307,14 @@ func (s *Store) applyDocumentRestore(document, revision, targetGraphOverride, ro
 	if err != nil {
 		return DocumentRestoreRun{}, err
 	}
-	now := time.Now().UTC().Format(time.RFC3339)
+	now := time.Now().UTC().Format(time.RFC3339Nano)
 	runID, err := newKnowledgeLearningID("restore-run-")
 	if err != nil {
 		return DocumentRestoreRun{}, err
 	}
-	tx, err := s.db.Begin()
+	tx, cacheEntries, err := s.beginEntryMutationTx("document restore")
 	if err != nil {
-		return DocumentRestoreRun{}, fmt.Errorf("begin document restore: %w", err)
+		return DocumentRestoreRun{}, err
 	}
 	rollback := func(cause error) (DocumentRestoreRun, error) {
 		if rollbackErr := tx.Rollback(); rollbackErr != nil && rollbackErr != sql.ErrTxDone {
@@ -286,7 +334,21 @@ func (s *Store) applyDocumentRestore(document, revision, targetGraphOverride, ro
 	if err != nil {
 		return rollback(err)
 	}
-	transactionStateDigest, err := documentRestoreCurrentStateDigest(currentEntries, prefixedSHA256(currentGraphJSON))
+	currentGraphDigest := prefixedSHA256(currentGraphJSON)
+	var currentTombstone documentTombstone
+	transactionStateDigest := ""
+	if len(currentEntries) == 0 {
+		currentTombstone, err = loadDocumentTombstone(tx, plan.SourcePath)
+		if errors.Is(err, sql.ErrNoRows) {
+			return rollback(fmt.Errorf("current document %q disappeared before restore", plan.SourcePath))
+		}
+		if err != nil {
+			return rollback(fmt.Errorf("read current empty document state: %w", err))
+		}
+		transactionStateDigest, err = emptyDocumentStateDigest(currentTombstone, currentGraphDigest)
+	} else {
+		transactionStateDigest, err = documentRestoreCurrentStateDigest(currentEntries, currentGraphDigest)
+	}
 	if err != nil {
 		return rollback(err)
 	}
@@ -294,7 +356,13 @@ func (s *Store) applyDocumentRestore(document, revision, targetGraphOverride, ro
 		return rollback(fmt.Errorf("%w inside SQLite transaction: expected %s, current %s",
 			ErrDocumentRestoreStateChanged, plan.CurrentStateDigest, transactionStateDigest))
 	}
-	if err := archiveDocumentHistoryTx(tx, currentEntries, currentGraph, now, "before_document_restore"); err != nil {
+	var beforeDocumentSnapshot DocumentHistorySnapshot
+	if len(currentEntries) == 0 {
+		beforeDocumentSnapshot, err = writeEmptyDocumentHistoryVersionTx(tx, currentTombstone, currentGraph, now, "before_document_restore")
+	} else {
+		beforeDocumentSnapshot, err = archiveDocumentHistoryTx(tx, currentEntries, currentGraph, now, "before_document_restore")
+	}
+	if err != nil {
 		return rollback(err)
 	}
 	beforeGraphID, _, err := writeKnowledgeGraphSnapshotTx(tx, currentGraph, now)
@@ -308,10 +376,28 @@ func (s *Store) applyDocumentRestore(document, revision, targetGraphOverride, ro
 	if err := replaceKnowledgeGraphTx(tx, targetGraph.Graph); err != nil {
 		return rollback(err)
 	}
+	if len(targetEntries) == 0 {
+		if _, err := tx.Exec(`DELETE FROM document_current_tombstones
+WHERE document_id = ? OR `+sourcePathSQLPredicate("source_path"), targetSnapshot.DocumentID, plan.SourcePath); err != nil {
+			return rollback(fmt.Errorf("replace restored empty document marker: %w", err))
+		}
+		if err := upsertDocumentTombstoneTx(tx, documentTombstone{
+			DocumentID: targetSnapshot.DocumentID, SourcePath: plan.SourcePath,
+			DocumentRevision: targetSnapshot.DocumentRevision, MediaType: targetSnapshot.MediaType,
+			Created: now,
+		}); err != nil {
+			return rollback(fmt.Errorf("restore empty document marker: %w", err))
+		}
+	} else if _, err := tx.Exec(`DELETE FROM document_current_tombstones
+WHERE document_id = ? OR `+sourcePathSQLPredicate("source_path"), plan.DocumentID, plan.SourcePath); err != nil {
+		return rollback(fmt.Errorf("clear restored empty document marker: %w", err))
+	}
 	run := DocumentRestoreRun{
 		ID: runID, DocumentID: plan.DocumentID, SourcePath: plan.SourcePath,
 		FromRevision: plan.CurrentRevision, TargetRevision: plan.TargetRevision,
-		BeforeGraphSnapshotID: beforeGraphID, TargetGraphSnapshotID: plan.TargetGraphSnapshotID,
+		BeforeDocumentSnapshotID: beforeDocumentSnapshot.SnapshotID,
+		TargetDocumentSnapshotID: plan.TargetSnapshotID,
+		BeforeGraphSnapshotID:    beforeGraphID, TargetGraphSnapshotID: plan.TargetGraphSnapshotID,
 		PlanDigest: plan.PlanDigest, RollbackOf: rollbackOf, RestoredChunks: len(restored), Created: now,
 	}
 	if _, err := tx.Exec(`INSERT INTO knowledge_restore_runs
@@ -322,23 +408,20 @@ VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, run.ID, run.DocumentID, run.SourcePat
 		run.PlanDigest, run.RollbackOf, run.RestoredChunks, run.Created); err != nil {
 		return rollback(fmt.Errorf("record document restore: %w", err))
 	}
+	if _, err := tx.Exec(`INSERT INTO knowledge_restore_document_snapshots
+(run_id, before_document_snapshot_id, target_document_snapshot_id) VALUES (?, ?, ?)`,
+		run.ID, run.BeforeDocumentSnapshotID, run.TargetDocumentSnapshotID); err != nil {
+		return rollback(fmt.Errorf("record document restore snapshot references: %w", err))
+	}
+	finalGeneration, err := loadEntryCacheGeneration(tx)
+	if err != nil {
+		return rollback(err)
+	}
+	freshEntries, freshVectors := replaceSourceInEntryCache(cacheEntries, plan.SourcePath, restored)
 	if err := tx.Commit(); err != nil {
 		return DocumentRestoreRun{}, fmt.Errorf("commit document restore: %w", err)
 	}
-	entries := s.entries[:0]
-	vectors := s.vectors[:0]
-	for i := range s.entries {
-		if coveragePathsEqual(s.entries[i].SourcePath, plan.SourcePath) {
-			continue
-		}
-		entries = append(entries, s.entries[i])
-		vectors = append(vectors, s.vectors[i])
-	}
-	for i := range restored {
-		entries = append(entries, restored[i])
-		vectors = append(vectors, restored[i].Embedding)
-	}
-	s.entries, s.vectors, s.lexicalDirty = entries, vectors, true
+	s.entries, s.vectors, s.entryGeneration, s.lexicalDirty = freshEntries, freshVectors, finalGeneration, true
 	return run, nil
 }
 
@@ -347,54 +430,18 @@ type documentRestoreQuerier interface {
 }
 
 func loadDocumentEntriesForRestore(q documentRestoreQuerier, sourcePath string) ([]Entry, error) {
-	rows, err := q.Query(`SELECT id, title, text, tags, created, backend, embedding_model, embedding_space, dims, embedding,
-source_file, chunk_label, chunk_index, total_chunks, document_id, document_revision, chunk_hash,
-source_path, media_type, page, block_index, block_marker, block_chunk_index, block_total_chunks,
-extraction_method, ocr_confidence, warnings, important
-FROM entries WHERE source_file = ? ORDER BY chunk_index`, sourcePath)
+	entries, err := loadEntriesBySource(q, sourcePath)
 	if err != nil {
 		return nil, err
-	}
-	defer rows.Close()
-	var entries []Entry
-	for rows.Next() {
-		var entry Entry
-		var tagsJSON, warningsJSON string
-		var embedding []byte
-		var important int
-		if err := rows.Scan(&entry.ID, &entry.Title, &entry.Text, &tagsJSON, &entry.Created,
-			&entry.Backend, &entry.EmbeddingModel, &entry.EmbeddingSpace, &entry.Dims, &embedding,
-			&entry.SourceFile, &entry.ChunkLabel, &entry.ChunkIndex, &entry.TotalChunks,
-			&entry.DocumentID, &entry.DocumentRevision, &entry.ChunkHash, &entry.SourcePath,
-			&entry.MediaType, &entry.Page, &entry.BlockIndex, &entry.BlockMarker,
-			&entry.BlockChunkIndex, &entry.BlockTotalChunks, &entry.ExtractionMethod,
-			&entry.OCRConfidence, &warningsJSON, &important); err != nil {
-			return nil, err
-		}
-		entry.Tags, err = tagsFromJSON(tagsJSON)
-		if err != nil {
-			return nil, err
-		}
-		entry.Embedding, err = bytesToFloats(embedding)
-		if err != nil || len(entry.Embedding) != entry.Dims {
-			return nil, fmt.Errorf("current restore chunk %d has invalid embedding dimensions", entry.ChunkIndex)
-		}
-		if err := json.Unmarshal([]byte(warningsJSON), &entry.Warnings); err != nil {
-			return nil, err
-		}
-		entry.Important = important != 0
-		entries = append(entries, entry)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	if len(entries) == 0 {
-		return nil, fmt.Errorf("current document %q disappeared before restore", sourcePath)
 	}
 	return entries, nil
 }
 
 func restoreDocumentEntriesTx(tx *sql.Tx, sourcePath string, entries []Entry) ([]Entry, error) {
+	if _, err := tx.Exec(`DELETE FROM entries WHERE `+sourcePathSQLPredicate("source_file")+` AND source_file <> ?`,
+		sourcePath, sourcePath); err != nil {
+		return nil, fmt.Errorf("normalize restored document source path: %w", err)
+	}
 	restored := make([]Entry, len(entries))
 	for i := range entries {
 		entry := cloneEntry(entries[i])
@@ -426,7 +473,7 @@ func restoreDocumentEntriesTx(tx *sql.Tx, sourcePath string, entries []Entry) ([
 		}
 		restored[i] = entry
 	}
-	if _, err := tx.Exec(`DELETE FROM entries WHERE source_file = ? AND chunk_index >= ?`, sourcePath, len(entries)); err != nil {
+	if _, err := tx.Exec(`DELETE FROM entries WHERE `+sourcePathSQLPredicate("source_file")+` AND chunk_index >= ?`, sourcePath, len(entries)); err != nil {
 		return nil, fmt.Errorf("prune restored document tail: %w", err)
 	}
 	return restored, nil
@@ -523,9 +570,12 @@ func (s *Store) ListDocumentRestoreRuns(limit int) ([]DocumentRestoreRun, error)
 	if limit <= 0 || limit > 10000 {
 		limit = 100
 	}
-	rows, err := s.db.Query(`SELECT id, document_id, source_path, from_revision, target_revision,
-before_graph_snapshot_id, target_graph_snapshot_id, plan_digest, rollback_of, restored_chunks, created
-FROM knowledge_restore_runs ORDER BY created DESC, id DESC LIMIT ?`, limit)
+	rows, err := s.db.Query(`SELECT r.id, r.document_id, r.source_path, r.from_revision, r.target_revision,
+r.before_graph_snapshot_id, r.target_graph_snapshot_id, r.plan_digest, r.rollback_of,
+r.restored_chunks, r.created, COALESCE(d.before_document_snapshot_id, ''),
+COALESCE(d.target_document_snapshot_id, '')
+FROM knowledge_restore_runs r LEFT JOIN knowledge_restore_document_snapshots d ON d.run_id = r.id
+ORDER BY r.created DESC, r.id DESC LIMIT ?`, limit)
 	if err != nil {
 		return nil, err
 	}
@@ -535,7 +585,8 @@ FROM knowledge_restore_runs ORDER BY created DESC, id DESC LIMIT ?`, limit)
 		var run DocumentRestoreRun
 		if err := rows.Scan(&run.ID, &run.DocumentID, &run.SourcePath, &run.FromRevision,
 			&run.TargetRevision, &run.BeforeGraphSnapshotID, &run.TargetGraphSnapshotID,
-			&run.PlanDigest, &run.RollbackOf, &run.RestoredChunks, &run.Created); err != nil {
+			&run.PlanDigest, &run.RollbackOf, &run.RestoredChunks, &run.Created,
+			&run.BeforeDocumentSnapshotID, &run.TargetDocumentSnapshotID); err != nil {
 			return nil, err
 		}
 		result = append(result, run)
@@ -545,11 +596,15 @@ FROM knowledge_restore_runs ORDER BY created DESC, id DESC LIMIT ?`, limit)
 
 func (s *Store) GetDocumentRestoreRun(id string) (DocumentRestoreRun, error) {
 	var run DocumentRestoreRun
-	err := s.db.QueryRow(`SELECT id, document_id, source_path, from_revision, target_revision,
-before_graph_snapshot_id, target_graph_snapshot_id, plan_digest, rollback_of, restored_chunks, created
-FROM knowledge_restore_runs WHERE id = ?`, strings.TrimSpace(id)).Scan(&run.ID, &run.DocumentID,
+	err := s.db.QueryRow(`SELECT r.id, r.document_id, r.source_path, r.from_revision, r.target_revision,
+r.before_graph_snapshot_id, r.target_graph_snapshot_id, r.plan_digest, r.rollback_of,
+r.restored_chunks, r.created, COALESCE(d.before_document_snapshot_id, ''),
+COALESCE(d.target_document_snapshot_id, '')
+FROM knowledge_restore_runs r LEFT JOIN knowledge_restore_document_snapshots d ON d.run_id = r.id
+WHERE r.id = ?`, strings.TrimSpace(id)).Scan(&run.ID, &run.DocumentID,
 		&run.SourcePath, &run.FromRevision, &run.TargetRevision, &run.BeforeGraphSnapshotID,
-		&run.TargetGraphSnapshotID, &run.PlanDigest, &run.RollbackOf, &run.RestoredChunks, &run.Created)
+		&run.TargetGraphSnapshotID, &run.PlanDigest, &run.RollbackOf, &run.RestoredChunks,
+		&run.Created, &run.BeforeDocumentSnapshotID, &run.TargetDocumentSnapshotID)
 	if errors.Is(err, sql.ErrNoRows) {
 		return run, fmt.Errorf("document restore run %q was not found", id)
 	}

@@ -1,5 +1,7 @@
 package mem
 
+import "github.com/knaprus-14/mem-tool/internal/applog"
+
 import (
 	"crypto/sha256"
 	"database/sql"
@@ -143,7 +145,9 @@ type corpusAnalysisPlanManifest struct {
 // PrepareCorpusAnalysisRun creates an idempotent durable run for an exact
 // deterministic plan. A supplied resume ID pins the plan and is rejected if
 // focus, options, claim text, or evidence changed since the earlier attempt.
-func (s *Store) PrepareCorpusAnalysisRun(focus string, contextChars, maxBatches int, plan CorpusAnalysisPlan, answer AnswerConfig, resumeID string) (CorpusAnalysisRun, error) {
+func (s *Store) PrepareCorpusAnalysisRun(focus string, contextChars, maxBatches int, plan CorpusAnalysisPlan, answer AnswerConfig, resumeID string) (applogResult0 CorpusAnalysisRun, applogResult1 error) {
+	defer applog.Track("pkg.mem.Store.PrepareCorpusAnalysisRun")(&applogResult1)
+
 	manifest, planDigest, runID, err := buildCorpusAnalysisRunIdentity(focus, contextChars, maxBatches, plan, answer)
 	if err != nil {
 		return CorpusAnalysisRun{}, err
@@ -283,7 +287,9 @@ func validateCorpusAnalysisRunAgainstManifest(run CorpusAnalysisRun, manifest co
 	return nil
 }
 
-func (s *Store) LoadCorpusAnalysisRun(runID string) (CorpusAnalysisRun, error) {
+func (s *Store) LoadCorpusAnalysisRun(runID string) (applogResult0 CorpusAnalysisRun, applogResult1 error) {
+	defer applog.Track("pkg.mem.Store.LoadCorpusAnalysisRun")(&applogResult1)
+
 	runID = strings.TrimSpace(runID)
 	if runID == "" {
 		return CorpusAnalysisRun{}, errors.New("analysis run ID is empty")
@@ -295,7 +301,9 @@ func (s *Store) LoadCorpusAnalysisRun(runID string) (CorpusAnalysisRun, error) {
 
 // ListCorpusAnalysisRuns returns newest runs first without loading stored graph
 // fragments. An empty status includes both running and completed runs.
-func (s *Store) ListCorpusAnalysisRuns(limit int, status CorpusAnalysisRunStatus) ([]CorpusAnalysisRunSummary, error) {
+func (s *Store) ListCorpusAnalysisRuns(limit int, status CorpusAnalysisRunStatus) (applogResult0 []CorpusAnalysisRunSummary, applogResult1 error) {
+	defer applog.Track("pkg.mem.Store.ListCorpusAnalysisRuns")(&applogResult1)
+
 	if limit < 1 || limit > 1000 {
 		return nil, errors.New("analysis run limit must be between 1 and 1000")
 	}
@@ -366,7 +374,9 @@ func listCorpusAnalysisRuns(q interface {
 // PruneCompletedCorpusAnalysisRuns removes only completed runs older than the
 // cutoff. The newest keepLatest completed runs are protected regardless of
 // age. Running runs, including those with failed batches, are never candidates.
-func (s *Store) PruneCompletedCorpusAnalysisRuns(completedBefore time.Time, keepLatest int, dryRun bool) (CorpusAnalysisRunPruneResult, error) {
+func (s *Store) PruneCompletedCorpusAnalysisRuns(completedBefore time.Time, keepLatest int, dryRun bool) (applogResult0 CorpusAnalysisRunPruneResult, applogResult1 error) {
+	defer applog.Track("pkg.mem.Store.PruneCompletedCorpusAnalysisRuns")(&applogResult1)
+
 	if completedBefore.IsZero() {
 		return CorpusAnalysisRunPruneResult{}, errors.New("analysis run prune cutoff is required")
 	}
@@ -518,7 +528,9 @@ func loadCorpusAnalysisRun(q interface {
 	return run, nil
 }
 
-func (s *Store) SaveCorpusAnalysisBatchGraph(runID, batchID string, graph KnowledgeGraph) error {
+func (s *Store) SaveCorpusAnalysisBatchGraph(runID, batchID string, graph KnowledgeGraph) (applogResult0 error) {
+	defer applog.Track("pkg.mem.Store.SaveCorpusAnalysisBatchGraph")(&applogResult0)
+
 	graph = normalizeKnowledgeGraph(graph)
 	if err := validateCorpusAnalysisFragment(graph); err != nil {
 		return err
@@ -533,7 +545,9 @@ func (s *Store) SaveCorpusAnalysisBatchGraph(runID, batchID string, graph Knowle
 	return s.saveCorpusAnalysisBatch(runID, batchID, CorpusAnalysisBatchCompleted, string(encoded), digestCorpusAnalysisBytes(encoded), "")
 }
 
-func (s *Store) SaveCorpusAnalysisBatchInsufficient(runID, batchID, reason string) error {
+func (s *Store) SaveCorpusAnalysisBatchInsufficient(runID, batchID, reason string) (applogResult0 error) {
+	defer applog.Track("pkg.mem.Store.SaveCorpusAnalysisBatchInsufficient")(&applogResult0)
+
 	reason = strings.TrimSpace(reason)
 	if reason == "" {
 		reason = "Недостаточно подтверждённых данных для междокументного анализа."
@@ -541,7 +555,9 @@ func (s *Store) SaveCorpusAnalysisBatchInsufficient(runID, batchID, reason strin
 	return s.saveCorpusAnalysisBatch(runID, batchID, CorpusAnalysisBatchInsufficient, "", "", reason)
 }
 
-func (s *Store) SaveCorpusAnalysisBatchFailure(runID, batchID string, cause error) error {
+func (s *Store) SaveCorpusAnalysisBatchFailure(runID, batchID string, cause error) (applogResult0 error) {
+	defer applog.Track("pkg.mem.Store.SaveCorpusAnalysisBatchFailure")(&applogResult0)
+
 	reason := "analysis batch failed"
 	if cause != nil && strings.TrimSpace(cause.Error()) != "" {
 		reason = strings.TrimSpace(cause.Error())
@@ -594,7 +610,9 @@ func (s *Store) saveCorpusAnalysisBatch(runID, batchID string, status CorpusAnal
 	return nil
 }
 
-func (s *Store) CompleteCorpusAnalysisRun(runID string) error {
+func (s *Store) CompleteCorpusAnalysisRun(runID string) (applogResult0 error) {
+	defer applog.Track("pkg.mem.Store.CompleteCorpusAnalysisRun")(&applogResult0)
+
 	now := time.Now().UTC().Format(time.RFC3339)
 	s.mu.Lock()
 	defer s.mu.Unlock()

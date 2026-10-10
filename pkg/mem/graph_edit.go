@@ -1,5 +1,7 @@
 package mem
 
+import "github.com/knaprus-14/mem-tool/internal/applog"
+
 import (
 	"crypto/sha256"
 	"database/sql"
@@ -88,7 +90,8 @@ type KnowledgeEditResult struct {
 
 // KnowledgeContentDigest pins the user-visible content independently from
 // source evidence and review status.
-func KnowledgeContentDigest(objectType KnowledgeObjectType, label, body string) (string, error) {
+func KnowledgeContentDigest(objectType KnowledgeObjectType, label, body string) (applogResult0 string, applogResult1 error) {
+
 	if objectType != KnowledgeObjectNode && objectType != KnowledgeObjectEdge {
 		return "", fmt.Errorf("unsupported knowledge object type %q", objectType)
 	}
@@ -110,7 +113,9 @@ func KnowledgeContentDigest(objectType KnowledgeObjectType, label, body string) 
 	return "sha256:" + hex.EncodeToString(sum[:]), nil
 }
 
-func (s *Store) EditKnowledgeObject(request KnowledgeEditRequest) (KnowledgeEditResult, error) {
+func (s *Store) EditKnowledgeObject(request KnowledgeEditRequest) (applogResult0 KnowledgeEditResult, applogResult1 error) {
+	defer applog.Track("pkg.mem.Store.EditKnowledgeObject")(&applogResult1)
+
 	request, err := normalizeKnowledgeEditRequest(request)
 	if err != nil {
 		return KnowledgeEditResult{}, err
@@ -218,7 +223,9 @@ WHERE id = ? AND status = ? AND label = ?`, request.Label, newStatus, now,
 	}, nil
 }
 
-func (s *Store) UndoKnowledgeEdit(request KnowledgeEditUndoRequest) (KnowledgeEditResult, error) {
+func (s *Store) UndoKnowledgeEdit(request KnowledgeEditUndoRequest) (applogResult0 KnowledgeEditResult, applogResult1 error) {
+	defer applog.Track("pkg.mem.Store.UndoKnowledgeEdit")(&applogResult1)
+
 	request, err := normalizeKnowledgeEditUndoRequest(request)
 	if err != nil {
 		return KnowledgeEditResult{}, err
@@ -489,7 +496,9 @@ VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, record.ObjectType, rec
 	return record, nil
 }
 
-func (s *Store) ListLatestKnowledgeEdits() ([]KnowledgeEditRecord, error) {
+func (s *Store) ListLatestKnowledgeEdits() (applogResult0 []KnowledgeEditRecord, applogResult1 error) {
+	defer applog.Track("pkg.mem.Store.ListLatestKnowledgeEdits")(&applogResult1)
+
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	rows, err := s.db.Query(`SELECT e.id, e.object_type, e.object_id, e.action, e.previous_status, e.new_status,
@@ -520,7 +529,9 @@ ORDER BY e.id DESC`)
 	return records, nil
 }
 
-func (s *Store) ListKnowledgeEdits(limit int) ([]KnowledgeEditRecord, error) {
+func (s *Store) ListKnowledgeEdits(limit int) (applogResult0 []KnowledgeEditRecord, applogResult1 error) {
+	defer applog.Track("pkg.mem.Store.ListKnowledgeEdits")(&applogResult1)
+
 	if limit <= 0 || limit > 1000 {
 		return nil, errors.New("knowledge edit limit must be between 1 and 1000")
 	}

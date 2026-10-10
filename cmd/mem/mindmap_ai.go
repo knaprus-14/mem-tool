@@ -1,5 +1,7 @@
 package main
 
+import "github.com/knaprus-14/mem-tool/internal/applog"
+
 import (
 	"context"
 	"errors"
@@ -29,7 +31,9 @@ type mindMapAIOptions struct {
 	positional    []string
 }
 
-func handleMindMapAI(cfg *Config, store *Store, args []string) error {
+func handleMindMapAI(cfg *Config, store *Store, args []string) (applogResult0 error) {
+	defer applog.Track("cmd.mem.handleMindMapAI")(&applogResult0)
+
 	if store == nil || len(args) == 0 {
 		return errors.New(mindMapUsage)
 	}

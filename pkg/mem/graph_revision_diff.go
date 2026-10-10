@@ -1,5 +1,7 @@
 package mem
 
+import "github.com/knaprus-14/mem-tool/internal/applog"
+
 import (
 	"fmt"
 	"sort"
@@ -82,7 +84,9 @@ type KnowledgeRevisionDiffReport struct {
 // the map with the current versioned chunks in the active database. It is
 // read-only and never calls a model. The report deliberately does not claim a
 // complete textual diff: old non-cited chunks are not retained by Store.
-func (s *Store) BuildKnowledgeRevisionDiff(options KnowledgeRevisionDiffOptions) (KnowledgeRevisionDiffReport, error) {
+func (s *Store) BuildKnowledgeRevisionDiff(options KnowledgeRevisionDiffOptions) (applogResult0 KnowledgeRevisionDiffReport, applogResult1 error) {
+	defer applog.Track("pkg.mem.Store.BuildKnowledgeRevisionDiff")(&applogResult1)
+
 	snapshot, err := s.buildKnowledgeGraphSnapshot(false, true)
 	if err != nil {
 		return KnowledgeRevisionDiffReport{}, err

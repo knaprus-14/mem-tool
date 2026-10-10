@@ -1,0 +1,7 @@
+pkg\ingest\markdown_test.go
+internal\buildinfo\version.go
+cmd\mem\usage.go
+cmd\mem\repl_completer.go
+pkg\ui\color.go
+pkg\mem\graph_view_test.go
+pkg\mem\graph_view_regression_test.go

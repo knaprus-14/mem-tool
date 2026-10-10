@@ -1,0 +1,52 @@
+package mem
+
+import (
+	"context"
+	"strings"
+	"testing"
+)
+
+// This regression probe deliberately fails while a stale approval can certify
+// text the reviewer never saw. Its only database is graphStoreAndAnchor's temp DB.
+func TestReviewProbeApprovalRejectsChangedContent(t *testing.T) {
+	store, anchor := graphStoreAndAnchor(t)
+	defer store.Close()
+	const id = "review-probe-stale-approval"
+	if err := store.UpsertKnowledgeGraph(KnowledgeGraph{Nodes: []KnowledgeNode{{
+		ID: id, Kind: KnowledgeNodeClaim, Label: "Original reviewed claim", Body: "Reviewed text",
+		Status: KnowledgeStatusDraft, Origin: KnowledgeOriginGenerated, Evidence: []EvidenceAnchor{anchor},
+	}}}); err != nil { t.Fatal(err) }
+	seen := knowledgeReviewItemByID(t, store, KnowledgeObjectNode, id)
+	if _, err := store.EditKnowledgeObject(KnowledgeEditRequest{
+		ObjectType: KnowledgeObjectNode, ID: id, Editor: "second-tab", Label: "Different unreviewed claim", Body: "Changed text",
+		ExpectedStatus: seen.Status, ExpectedContentDigest: seen.ContentDigest, ExpectedEvidenceDigest: seen.EvidenceDigest,
+	}); err != nil { t.Fatal(err) }
+	result, err := store.ApproveKnowledgeObjects([]KnowledgeApprovalRequest{{
+		ObjectType: KnowledgeObjectNode, ID: id, Reviewer: "first-tab", ExpectedEvidenceDigest: seen.EvidenceDigest,
+	}})
+	if err == nil {
+		now := knowledgeReviewItemByID(t, store, KnowledgeObjectNode, id)
+		t.Fatalf("stale review approved changed content: status=%s content_changed=%t evidence_unchanged=%t approvals=%d", now.Status, now.ContentDigest != seen.ContentDigest, now.EvidenceDigest == seen.EvidenceDigest, len(result.Approved))
+	}
+}
+
+// The production overlay adds only a scheduling hook after queued-task selection.
+// The cancellation is real ActWebOperationIn against the isolated fixture DB.
+func TestReviewProbeCancellationDuringClaim(t *testing.T) {
+	dir, _, cfg := queryFixture(t)
+	cfg.Answer.Model = "test-chat"
+	if err := SaveConfigIn(dir, cfg); err != nil { t.Fatal(err) }
+	ctx := context.Background()
+	input := WebOperationInput{RequestID: strings.Repeat("b", 32), Kind: "graph-analyze", ConfigRevision: cfg.Revision(), Focus: "topics", Batches: 1, ContextChars: 12000}
+	if _, err := StartWebOperationIn(ctx, dir, "alice", input, true); err != nil { t.Fatal(err) }
+	webOperationClaimProbe = func(id string) {
+		if err := ActWebOperationIn(ctx, dir, "alice", id, "cancel"); err != nil { t.Fatal(err) }
+		items, err := ListWebOperationsIn(ctx, dir, "alice")
+		if err != nil || len(items) != 1 || items[0].Status != "cancelled" { t.Fatalf("cancellation failed: %v %v", items, err) }
+	}
+	defer func() { webOperationClaimProbe = nil }()
+	if _, err := ProcessWebOperationIn(ctx, dir, "alice"); err != nil { t.Fatal(err) }
+	items, err := ListWebOperationsIn(ctx, dir, "alice")
+	if err != nil { t.Fatal(err) }
+	if len(items) != 1 || items[0].Status != "cancelled" { t.Fatalf("successful cancellation was overwritten by worker: %+v", items) }
+}

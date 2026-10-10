@@ -1,0 +1,66 @@
+error acquiring upload token: creating token file: open C:\Users\ZMII\AppData\Roaming\go\telemetry\local\upload.token: Access is denied.
+=== RUN   TestReviewKnowledgeGraphSeesExternalDocumentRevision
+--- PASS: TestReviewKnowledgeGraphSeesExternalDocumentRevision (0.10s)
+=== RUN   TestKnowledgeMapBrowserScriptHasValidJavaScriptSyntax
+--- PASS: TestKnowledgeMapBrowserScriptHasValidJavaScriptSyntax (0.13s)
+=== RUN   TestReviewFixedChunkStopsAtEnd
+--- PASS: TestReviewFixedChunkStopsAtEnd (0.00s)
+=== RUN   TestReviewParagraphRespectsMaxSize
+--- PASS: TestReviewParagraphRespectsMaxSize (0.00s)
+=== RUN   TestReviewFilteredSearchIgnoresExcludedLexicalHits
+--- PASS: TestReviewFilteredSearchIgnoresExcludedLexicalHits (0.07s)
+=== RUN   TestReviewDateIncludesEntireLastDay
+--- PASS: TestReviewDateIncludesEntireLastDay (0.00s)
+=== RUN   TestReviewSQLiteWaitsForShortExternalWrite
+--- PASS: TestReviewSQLiteWaitsForShortExternalWrite (0.17s)
+=== RUN   TestReviewIndexExplicitHiddenRoot
+[DIR] Сканирую: C:\Users\ZMII\AppData\Local\Temp\TestReviewIndexExplicitHiddenRoot2851103010\001\.notes
+
+  [FILE] empty.txt — 0 чанков
+
+[STATS] Результат: 1 файлов, 0 чанков
+--- PASS: TestReviewIndexExplicitHiddenRoot (0.23s)
+=== RUN   TestReviewSourceDoesNotServeChangedPDF
+--- PASS: TestReviewSourceDoesNotServeChangedPDF (0.05s)
+=== RUN   TestSingleEntryMutationsKeepCacheGenerationCurrent
+--- PASS: TestSingleEntryMutationsKeepCacheGenerationCurrent (0.05s)
+=== RUN   TestFTSSyncTouchesOnlyChangedRows
+--- PASS: TestFTSSyncTouchesOnlyChangedRows (0.10s)
+=== RUN   TestPhysicalSourceFingerprintSurvivesReopenAndRejectsLegacy
+--- PASS: TestPhysicalSourceFingerprintSurvivesReopenAndRejectsLegacy (0.06s)
+=== RUN   TestImportRejectsSourceChangedDuringEmbedding
+--- PASS: TestImportRejectsSourceChangedDuringEmbedding (0.04s)
+PASS
+ok  	github.com/knaprus-14/mem-tool/pkg/mem	1.067s
+=== RUN   TestReviewScanInvalidatesChangedContentVector
+--- PASS: TestReviewScanInvalidatesChangedContentVector (0.03s)
+=== RUN   TestScanRefreshesStaleAnnotationAfterReopen
+--- PASS: TestScanRefreshesStaleAnnotationAfterReopen (0.05s)
+=== RUN   TestFileLookupIndexesSurviveDeleteAndReopen
+--- PASS: TestFileLookupIndexesSurviveDeleteAndReopen (0.04s)
+=== RUN   TestScanFailuresNeverKeepChangedContentVector
+=== RUN   TestScanFailuresNeverKeepChangedContentVector/.txt
+=== RUN   TestScanFailuresNeverKeepChangedContentVector/.epub
+    review_20260905_test.go:185: failed extraction lost retry marker
+--- FAIL: TestScanFailuresNeverKeepChangedContentVector (0.06s)
+    --- PASS: TestScanFailuresNeverKeepChangedContentVector/.txt (0.03s)
+    --- FAIL: TestScanFailuresNeverKeepChangedContentVector/.epub (0.03s)
+FAIL
+FAIL	github.com/knaprus-14/mem-tool/pkg/fileindex	0.227s
+=== RUN   TestReadTextLimitsAndCancellation
+=== RUN   TestReadTextLimitsAndCancellation/unicode
+=== RUN   TestReadTextLimitsAndCancellation/binary
+=== RUN   TestReadTextLimitsAndCancellation/invalid_UTF-8
+--- PASS: TestReadTextLimitsAndCancellation (0.01s)
+    --- PASS: TestReadTextLimitsAndCancellation/unicode (0.00s)
+    --- PASS: TestReadTextLimitsAndCancellation/binary (0.00s)
+    --- PASS: TestReadTextLimitsAndCancellation/invalid_UTF-8 (0.00s)
+=== RUN   TestSnapshotPinsVerifiedBytes
+--- PASS: TestSnapshotPinsVerifiedBytes (0.01s)
+PASS
+ok  	github.com/knaprus-14/mem-tool/internal/sourcefile	0.048s
+=== RUN   TestBusyTimeoutAppliesToEachConnection
+--- PASS: TestBusyTimeoutAppliesToEachConnection (0.01s)
+PASS
+ok  	github.com/knaprus-14/mem-tool/internal/sqliteutil	0.051s
+FAIL

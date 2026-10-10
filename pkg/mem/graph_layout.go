@@ -1,5 +1,7 @@
 package mem
 
+import "github.com/knaprus-14/mem-tool/internal/applog"
+
 import (
 	"bytes"
 	"database/sql"
@@ -13,7 +15,7 @@ import (
 )
 
 const (
-	KnowledgeMapLayoutVersion = 9
+	KnowledgeMapLayoutVersion = 10
 	knowledgeMapLayoutV1      = 1
 	knowledgeMapLayoutV2      = 2
 	knowledgeMapLayoutV3      = 3
@@ -22,6 +24,7 @@ const (
 	knowledgeMapLayoutV6      = 6
 	knowledgeMapLayoutV7      = 7
 	knowledgeMapLayoutV8      = 8
+	knowledgeMapLayoutV9      = 9
 	DefaultKnowledgeMapView   = "default"
 	MaxKnowledgeMapViewNodes  = 10000
 	MaxKnowledgeMapLayoutJSON = 1 << 20
@@ -50,6 +53,7 @@ const (
 
 const (
 	KnowledgeMapRepresentationGraph        KnowledgeMapRepresentation = "graph"
+	KnowledgeMapRepresentationTopics       KnowledgeMapRepresentation = "topics"
 	KnowledgeMapRepresentationDocumentTree KnowledgeMapRepresentation = "document-tree"
 	KnowledgeMapRepresentationCausal       KnowledgeMapRepresentation = "causal"
 	KnowledgeMapRepresentationProcedure    KnowledgeMapRepresentation = "procedure-sequence"
@@ -119,7 +123,9 @@ type KnowledgeMapViewSummary struct {
 	Representation KnowledgeMapRepresentation `json:"representation,omitempty"`
 }
 
-func (s *Store) LoadKnowledgeMapLayout(name string) (*KnowledgeMapLayout, error) {
+func (s *Store) LoadKnowledgeMapLayout(name string) (applogResult0 *KnowledgeMapLayout, applogResult1 error) {
+	defer applog.Track("pkg.mem.Store.LoadKnowledgeMapLayout")(&applogResult1)
+
 	name, err := validateKnowledgeMapViewName(name)
 	if err != nil {
 		return nil, err
@@ -140,7 +146,9 @@ func (s *Store) LoadKnowledgeMapLayout(name string) (*KnowledgeMapLayout, error)
 	return &layout, nil
 }
 
-func (s *Store) SaveKnowledgeMapLayout(name string, layout KnowledgeMapLayout) (KnowledgeMapLayout, error) {
+func (s *Store) SaveKnowledgeMapLayout(name string, layout KnowledgeMapLayout) (applogResult0 KnowledgeMapLayout, applogResult1 error) {
+	defer applog.Track("pkg.mem.Store.SaveKnowledgeMapLayout")(&applogResult1)
+
 	name, err := validateKnowledgeMapViewName(name)
 	if err != nil {
 		return KnowledgeMapLayout{}, err
@@ -217,7 +225,9 @@ ON CONFLICT(name) DO UPDATE SET layout_json = excluded.layout_json, updated = ex
 
 // ListKnowledgeMapViews returns lightweight, user-facing saved-view metadata.
 // The default view is always present even before its first layout save.
-func (s *Store) ListKnowledgeMapViews() ([]KnowledgeMapViewSummary, error) {
+func (s *Store) ListKnowledgeMapViews() (applogResult0 []KnowledgeMapViewSummary, applogResult1 error) {
+	defer applog.Track("pkg.mem.Store.ListKnowledgeMapViews")(&applogResult1)
+
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	rows, err := s.db.Query(`SELECT name, layout_json, updated FROM knowledge_map_views ORDER BY name LIMIT ?`, MaxKnowledgeMapViews+1)
@@ -258,7 +268,9 @@ func (s *Store) ListKnowledgeMapViews() ([]KnowledgeMapViewSummary, error) {
 	return views, nil
 }
 
-func (s *Store) DeleteKnowledgeMapLayout(name string) error {
+func (s *Store) DeleteKnowledgeMapLayout(name string) (applogResult0 error) {
+	defer applog.Track("pkg.mem.Store.DeleteKnowledgeMapLayout")(&applogResult0)
+
 	name, err := validateKnowledgeMapViewName(name)
 	if err != nil {
 		return err
@@ -312,7 +324,7 @@ func validateKnowledgeMapLayout(layout KnowledgeMapLayout) error {
 		layout.Version != knowledgeMapLayoutV3 && layout.Version != knowledgeMapLayoutV4 &&
 		layout.Version != knowledgeMapLayoutV5 && layout.Version != knowledgeMapLayoutV6 &&
 		layout.Version != knowledgeMapLayoutV7 && layout.Version != knowledgeMapLayoutV8 &&
-		layout.Version != KnowledgeMapLayoutVersion {
+		layout.Version != knowledgeMapLayoutV9 && layout.Version != KnowledgeMapLayoutVersion {
 		return fmt.Errorf("unsupported knowledge map layout version %d", layout.Version)
 	}
 	if len(layout.Nodes) > MaxKnowledgeMapViewNodes {
@@ -352,8 +364,12 @@ func validateKnowledgeMapViewState(version int, state KnowledgeMapViewState) err
 		state.Representation != KnowledgeMapRepresentationProcedure &&
 		state.Representation != KnowledgeMapRepresentationTimeline &&
 		state.Representation != KnowledgeMapRepresentationComparison &&
-		state.Representation != KnowledgeMapRepresentationFindings {
-		return errors.New("knowledge map representation must be graph, document-tree, causal, procedure-sequence, timeline, comparison-matrix, or findings-board")
+		state.Representation != KnowledgeMapRepresentationFindings &&
+		state.Representation != KnowledgeMapRepresentationTopics {
+		return errors.New("knowledge map representation must be graph, topics, document-tree, causal, procedure-sequence, timeline, comparison-matrix, or findings-board")
+	}
+	if version < KnowledgeMapLayoutVersion && state.Representation == KnowledgeMapRepresentationTopics {
+		return errors.New("knowledge map topics representation requires version 10")
 	}
 	if version < knowledgeMapLayoutV6 && state.Representation == KnowledgeMapRepresentationTimeline {
 		return errors.New("knowledge map timeline representation requires version 6")
@@ -364,7 +380,7 @@ func validateKnowledgeMapViewState(version int, state KnowledgeMapViewState) err
 	if version < knowledgeMapLayoutV8 && state.Representation == KnowledgeMapRepresentationFindings {
 		return errors.New("knowledge map findings-board representation requires version 8")
 	}
-	if version < KnowledgeMapLayoutVersion && (state.RelationLens != "" || state.SemanticZoom != "") {
+	if version < knowledgeMapLayoutV9 && (state.RelationLens != "" || state.SemanticZoom != "") {
 		return errors.New("knowledge map relation lens and semantic zoom require version 9")
 	}
 	if state.RelationLens != "" && state.RelationLens != KnowledgeMapRelationLensSmart &&

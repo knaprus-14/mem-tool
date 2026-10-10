@@ -1,0 +1,9 @@
+test_committed_wal_is_included (web_backup_test.RecoveryTests.test_committed_wal_is_included) ... ok
+test_corrupt_db_and_external_catalog_rejected (web_backup_test.RecoveryTests.test_corrupt_db_and_external_catalog_rejected) ... ok
+test_roundtrip_and_refuse_existing_target (web_backup_test.RecoveryTests.test_roundtrip_and_refuse_existing_target) ... ok
+test_traversal_and_hash_corruption_leave_no_target (web_backup_test.RecoveryTests.test_traversal_and_hash_corruption_leave_no_target) ... ok
+
+----------------------------------------------------------------------
+Ran 4 tests in 3.866s
+
+OK

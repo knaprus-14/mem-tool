@@ -1,5 +1,7 @@
 package mem
 
+import "github.com/knaprus-14/mem-tool/internal/applog"
+
 import (
 	"bytes"
 	"context"
@@ -46,6 +48,8 @@ type KnowledgeLabeledEvalManifest struct {
 type KnowledgeLabeledEvalMatching struct {
 	ClaimSimilarityThreshold *float64          `json:"claim_similarity_threshold,omitempty"`
 	Statuses                 []KnowledgeStatus `json:"statuses,omitempty"`
+	// Nil preserves the historical claim-only benchmark.
+	ClaimKinds []KnowledgeNodeKind `json:"claim_kinds,omitempty"`
 }
 
 type KnowledgeLabeledExpectedClaim struct {
@@ -54,6 +58,8 @@ type KnowledgeLabeledExpectedClaim struct {
 	Aliases             []string `json:"aliases,omitempty"`
 	NodeID              string   `json:"node_id,omitempty"`
 	AcceptedCitationIDs []string `json:"accepted_citation_ids,omitempty"`
+	// RequiredFragments are literal qualifiers whose loss invalidates a match.
+	RequiredFragments []string `json:"required_fragments,omitempty"`
 }
 
 type KnowledgeLabeledExpectedContradiction struct {
@@ -99,6 +105,7 @@ type KnowledgeLabeledEvidenceRef struct {
 
 type KnowledgeLabeledClaimPrediction struct {
 	NodeID   string                        `json:"node_id"`
+	Kind     KnowledgeNodeKind             `json:"kind"`
 	Label    string                        `json:"label"`
 	Body     string                        `json:"body,omitempty"`
 	Status   KnowledgeStatus               `json:"status"`
@@ -164,7 +171,9 @@ type knowledgeLabeledEvalSnapshot struct {
 
 // ParseKnowledgeLabeledEvalManifest decodes one strict JSON object, applies
 // explicit defaults and returns a canonical ordering suitable for hashing.
-func ParseKnowledgeLabeledEvalManifest(data []byte) (KnowledgeLabeledEvalManifest, error) {
+func ParseKnowledgeLabeledEvalManifest(data []byte) (applogResult0 KnowledgeLabeledEvalManifest, applogResult1 error) {
+	defer applog.Track("pkg.mem.ParseKnowledgeLabeledEvalManifest")(&applogResult1)
+
 	if len(data) == 0 {
 		return KnowledgeLabeledEvalManifest{}, errors.New("knowledge labeled eval manifest is empty")
 	}
@@ -211,6 +220,7 @@ func normalizeKnowledgeLabeledEvalManifest(manifest KnowledgeLabeledEvalManifest
 		manifest.Matching.Statuses = []KnowledgeStatus{KnowledgeStatusActive, KnowledgeStatusDraft}
 	}
 	sort.Slice(manifest.Matching.Statuses, func(i, j int) bool { return manifest.Matching.Statuses[i] < manifest.Matching.Statuses[j] })
+	sort.Slice(manifest.Matching.ClaimKinds, func(i, j int) bool { return manifest.Matching.ClaimKinds[i] < manifest.Matching.ClaimKinds[j] })
 	for i := range manifest.Claims {
 		claim := &manifest.Claims[i]
 		claim.ID = strings.TrimSpace(claim.ID)
@@ -222,6 +232,10 @@ func normalizeKnowledgeLabeledEvalManifest(manifest KnowledgeLabeledEvalManifest
 		for j := range claim.AcceptedCitationIDs {
 			claim.AcceptedCitationIDs[j] = strings.TrimSpace(claim.AcceptedCitationIDs[j])
 		}
+		for j := range claim.RequiredFragments {
+			claim.RequiredFragments[j] = strings.TrimSpace(claim.RequiredFragments[j])
+		}
+		sort.Strings(claim.RequiredFragments)
 		sort.Strings(claim.Aliases)
 		sort.Strings(claim.AcceptedCitationIDs)
 	}
@@ -270,6 +284,17 @@ func validateKnowledgeLabeledEvalManifest(manifest KnowledgeLabeledEvalManifest)
 		}
 	}
 	claimIDs := make(map[string]bool, len(manifest.Claims))
+	if manifest.Matching.ClaimKinds != nil && len(manifest.Matching.ClaimKinds) == 0 {
+		return errors.New("knowledge labeled eval matching.claim_kinds must not be empty")
+	}
+	for i, kind := range manifest.Matching.ClaimKinds {
+		if kind != KnowledgeNodeClaim && kind != KnowledgeNodeConstraint && kind != KnowledgeNodeProcedure {
+			return fmt.Errorf("knowledge labeled eval claim kind %q must be claim, constraint or procedure", kind)
+		}
+		if i > 0 && kind == manifest.Matching.ClaimKinds[i-1] {
+			return fmt.Errorf("knowledge labeled eval claim kind %q is duplicated", kind)
+		}
+	}
 	for _, claim := range manifest.Claims {
 		if err := validateKnowledgeID(claim.ID); err != nil {
 			return fmt.Errorf("knowledge labeled expected claim ID: %w", err)
@@ -283,6 +308,17 @@ func validateKnowledgeLabeledEvalManifest(manifest KnowledgeLabeledEvalManifest)
 		}
 		if len(claim.Aliases) > MaxKnowledgeLabeledEvalAliases || len(claim.AcceptedCitationIDs) > MaxKnowledgeLabeledEvalCitations {
 			return fmt.Errorf("knowledge labeled expected claim %q exceeds alias/citation limits %d/%d", claim.ID, MaxKnowledgeLabeledEvalAliases, MaxKnowledgeLabeledEvalCitations)
+		}
+		if len(claim.RequiredFragments) > MaxKnowledgeLabeledEvalAliases {
+			return fmt.Errorf("knowledge labeled expected claim %q exceeds required fragment limit", claim.ID)
+		}
+		for i, fragment := range claim.RequiredFragments {
+			if err := validateKnowledgeLabeledText("required fragment", fragment); err != nil {
+				return err
+			}
+			if i > 0 && fragment == claim.RequiredFragments[i-1] {
+				return fmt.Errorf("knowledge labeled expected claim %q has duplicate required fragment", claim.ID)
+			}
 		}
 		for i, alias := range claim.Aliases {
 			if err := validateKnowledgeLabeledText("claim alias", alias); err != nil {
@@ -381,7 +417,9 @@ func knowledgeLabeledRequirementCount(r KnowledgeLabeledEvalRequirements) int {
 // EvaluateKnowledgeLabeledQuality compares the current graph with a human
 // benchmark. It uses one read-only SQLite snapshot, never calls a model and
 // never mutates the database.
-func (s *Store) EvaluateKnowledgeLabeledQuality(manifest KnowledgeLabeledEvalManifest) (KnowledgeLabeledEvalReport, error) {
+func (s *Store) EvaluateKnowledgeLabeledQuality(manifest KnowledgeLabeledEvalManifest) (applogResult0 KnowledgeLabeledEvalReport, applogResult1 error) {
+	defer applog.Track("pkg.mem.Store.EvaluateKnowledgeLabeledQuality")(&applogResult1)
+
 	manifest = normalizeKnowledgeLabeledEvalManifest(manifest)
 	if err := validateKnowledgeLabeledEvalManifest(manifest); err != nil {
 		return KnowledgeLabeledEvalReport{}, err
@@ -480,8 +518,16 @@ func (s *Store) buildKnowledgeLabeledEvalSnapshot(manifest KnowledgeLabeledEvalM
 	}
 	snapshot := knowledgeLabeledEvalSnapshot{graphDigest: graphDigest, evidenceStateDigest: evidenceStateDigest}
 	claimByID := make(map[string]KnowledgeLabeledClaimPrediction)
+	kinds := manifest.Matching.ClaimKinds
+	if kinds == nil {
+		kinds = []KnowledgeNodeKind{KnowledgeNodeClaim}
+	}
+	kindAllowed := make(map[KnowledgeNodeKind]bool, len(kinds))
+	for _, kind := range kinds {
+		kindAllowed[kind] = true
+	}
 	for _, node := range graph.Nodes {
-		if node.Kind != KnowledgeNodeClaim || !statusAllowed[node.Status] {
+		if !kindAllowed[node.Kind] || !statusAllowed[node.Status] {
 			continue
 		}
 		evidence := knowledgeLabeledCurrentScopeEvidence(node.Evidence, selected)
@@ -490,8 +536,8 @@ func (s *Store) buildKnowledgeLabeledEvalSnapshot(manifest KnowledgeLabeledEvalM
 			continue
 		}
 		prediction := KnowledgeLabeledClaimPrediction{
-			NodeID: node.ID, Label: node.Label,
-			Body:   truncateRunes(node.Body, MaxKnowledgeLabeledEvalClaimTextRunes),
+			NodeID: node.ID, Kind: node.Kind, Label: node.Label,
+			Body:   node.Body,
 			Status: node.Status, Evidence: evidence,
 		}
 		snapshot.claims = append(snapshot.claims, prediction)
@@ -733,10 +779,17 @@ func knowledgeLabeledCitationAccepted(accepted []string, evidence []KnowledgeLab
 func knowledgeLabeledClaimSimilarity(expected KnowledgeLabeledExpectedClaim, prediction KnowledgeLabeledClaimPrediction) float64 {
 	expectedTexts := append([]string{expected.Text}, expected.Aliases...)
 	predictedTexts := []string{prediction.Label, prediction.Body, strings.TrimSpace(prediction.Label + " " + prediction.Body)}
+	// A short matching title must not hide a contradictory or incomplete body.
+	if strings.TrimSpace(prediction.Body) != "" {
+		predictedTexts = []string{prediction.Body}
+	}
 	best := 0.0
 	for _, left := range expectedTexts {
 		for _, right := range predictedTexts {
-			score := knowledgeLabeledTokenDice(left, right)
+			if !knowledgeLabeledQualifiersCompatible(left, right, expected.RequiredFragments) {
+				continue
+			}
+			score := knowledgeLabeledTokenDice(left, knowledgeLabeledRequirementScoringText(right))
 			if score > best {
 				best = score
 			}

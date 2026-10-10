@@ -12,13 +12,14 @@ Type=simple
 User=membot
 Group=membot
 UMask=0077
-WorkingDirectory=/opt/mem-bot
+WorkingDirectory=/opt/mem-bot/data
 ExecStart=/opt/mem-bot/mem-bot
 Restart=always
 RestartSec=5
 KillSignal=SIGTERM
 TimeoutStopSec=30s
 EnvironmentFile=/opt/mem-bot/.env
+Environment=MEM_BOT_DATA_DIR=/opt/mem-bot/data
 
 # Sandboxing
 NoNewPrivileges=true

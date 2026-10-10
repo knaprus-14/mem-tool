@@ -1,5 +1,7 @@
 package mem
 
+import "github.com/knaprus-14/mem-tool/internal/applog"
+
 import (
 	"context"
 	"errors"
@@ -69,6 +71,7 @@ type classicMindMapAIHTTPPreview struct {
 	CitationCount     int                            `json:"citation_count"`
 	BatchCount        int                            `json:"batch_count"`
 	CorrectionRetries int                            `json:"correction_retries,omitempty"`
+	Synthesis         *ClassicMindMapAISynthesis     `json:"synthesis,omitempty"`
 	Created           string                         `json:"created"`
 }
 
@@ -219,7 +222,9 @@ func (w *ClassicMindMapAIWorkspace) start(request ClassicMindMapAIPreviewRequest
 // Shutdown stops accepting work, cancels every in-flight job, makes all known
 // durable runs terminal and waits for the worker goroutines. The Store owner
 // must call it before closing SQLite.
-func (w *ClassicMindMapAIWorkspace) Shutdown(ctx context.Context) error {
+func (w *ClassicMindMapAIWorkspace) Shutdown(ctx context.Context) (applogResult0 error) {
+	defer applog.Track("pkg.mem.ClassicMindMapAIWorkspace.Shutdown")(&applogResult0)
+
 	if w == nil {
 		return nil
 	}
@@ -459,6 +464,7 @@ func classicMindMapAIHTTPPreviewFrom(preview ClassicMindMapAIPreview, batchCount
 		Grounded: preview.Grounded, ProposalDigest: preview.ProposalDigest, Title: preview.Title,
 		Description: preview.Description, EvidenceCount: len(preview.Evidence), BatchCount: batchCount,
 		CorrectionRetries: preview.CorrectionRetries, Created: preview.Created,
+		Synthesis: preview.Synthesis,
 		Proposals: make([]classicMindMapAIHTTPProposal, 0, len(preview.Proposals)),
 	}
 	for _, proposal := range preview.Proposals {

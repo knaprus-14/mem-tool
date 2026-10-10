@@ -1,5 +1,7 @@
 package mem
 
+import "github.com/knaprus-14/mem-tool/internal/applog"
+
 import (
 	"crypto/sha256"
 	"encoding/hex"
@@ -80,7 +82,9 @@ type KnowledgeLearningRoute struct {
 	Warnings       []KnowledgeLearningRouteWarning   `json:"warnings,omitempty"`
 }
 
-func (s *Store) BuildKnowledgeLearningRoute(request KnowledgeLearningRouteRequest) (KnowledgeLearningRoute, error) {
+func (s *Store) BuildKnowledgeLearningRoute(request KnowledgeLearningRouteRequest) (applogResult0 KnowledgeLearningRoute, applogResult1 error) {
+	defer applog.Track("pkg.mem.Store.BuildKnowledgeLearningRoute")(&applogResult1)
+
 	nodeIDs, err := normalizeKnowledgeSelectionIDs(request.Selection.NodeIDs, MaxKnowledgeSelectionNodes, "node")
 	if err != nil {
 		return KnowledgeLearningRoute{}, err

@@ -610,6 +610,23 @@ func TestHandleMapStatusAndApproveExposeReviewWorkflow(t *testing.T) {
 	if err := json.Unmarshal([]byte(statusJSON), &report); err != nil || report.Summary.Ready != 1 || len(report.Items) != 1 || report.Items[0].EvidenceState != mem.EvidenceCurrent {
 		t.Fatalf("status JSON lost review state: report=%#v err=%v output=%q", report, err, statusJSON)
 	}
+	if _, _, err := captureCLIStreams(func() error {
+		return handleMap(testCLIConfig(1500, "paragraph"), store, []string{"approve", "node", "review-cli", "--reviewer", "Руслан", "--review-digest", " "})
+	}); err == nil {
+		t.Fatal("explicit empty review pin fell back to current state")
+	}
+	seen := report.Items[0]
+	if seen.ReviewDigest == "" {
+		t.Fatal("status omitted review digest")
+	}
+	if _, err := store.EditKnowledgeObject(mem.KnowledgeEditRequest{ObjectType: mem.KnowledgeObjectNode, ID: "review-cli", Editor: "another client", Label: "Changed review CLI", ExpectedStatus: seen.Status, ExpectedContentDigest: seen.ContentDigest, ExpectedEvidenceDigest: seen.EvidenceDigest}); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := captureCLIStreams(func() error {
+		return handleMap(testCLIConfig(1500, "paragraph"), store, []string{"approve", "node", "review-cli", "--reviewer", "Руслан", "--review-digest", seen.ReviewDigest})
+	}); !errors.Is(err, mem.ErrKnowledgeContentChanged) {
+		t.Fatalf("CLI accepted stale explicit pin: %v", err)
+	}
 	stdout, stderr, err := captureCLIStreams(func() error {
 		return handleMap(testCLIConfig(1500, "paragraph"), store, []string{"approve", "node", "review-cli", "--reviewer", "Руслан", "--comment", "Проверено по источнику"})
 	})
@@ -621,7 +638,7 @@ func TestHandleMapStatusAndApproveExposeReviewWorkflow(t *testing.T) {
 		t.Fatalf("CLI approval was not persisted: graph=%#v err=%v", graph, err)
 	}
 	reviews, err := store.ListKnowledgeReviews(10)
-	if err != nil || len(reviews) != 1 || reviews[0].Reviewer != "Руслан" || reviews[0].Comment != "Проверено по источнику" {
+	if err != nil || len(reviews) != 1 || reviews[0].Reviewer != "Руслан" || reviews[0].Comment != "Проверено по источнику" || reviews[0].ReviewDigest == "" || reviews[0].ReviewDigest == seen.ReviewDigest {
 		t.Fatalf("CLI approval audit is incomplete: reviews=%#v err=%v", reviews, err)
 	}
 	human, _, err := captureCLIStreams(func() error {
@@ -885,7 +902,7 @@ func TestHandleMapApproveBatchAndReviews(t *testing.T) {
 		Reviewer: "Руслан", Comment: "Пакетная проверка",
 		Objects: []mem.KnowledgeApprovalTarget{{
 			ObjectType: mem.KnowledgeObjectNode, ID: "batch-cli",
-			ExpectedEvidenceDigest: report.Items[0].EvidenceDigest,
+			ExpectedEvidenceDigest: report.Items[0].EvidenceDigest, ExpectedReviewDigest: report.Items[0].ReviewDigest,
 		}},
 	}
 	encoded, err := json.Marshal(manifest)

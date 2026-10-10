@@ -1,0 +1,11 @@
+[Unit]
+Description=Daily verified mem-tool web backup
+
+[Timer]
+OnCalendar=*-*-* 03:30:00
+RandomizedDelaySec=15m
+Persistent=true
+Unit=mem-web-backup.service
+
+[Install]
+WantedBy=timers.target

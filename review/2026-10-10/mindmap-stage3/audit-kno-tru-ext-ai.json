@@ -1,0 +1,996 @@
+{
+  "meta": {
+    "schema_version": 1,
+    "date": "2026-10-10",
+    "source_catalog": "review/2026-10-09/mindmap-research/features.json",
+    "scope": "KNO/TRU/EXT/AI: 40 пунктов. Текущее dirty working tree после alpha.1–alpha.3 и интеграции annotation↔knowledge. SYN в исходном каталоге отсутствует: синтез относится к EXT.",
+    "method": "Read-only сверка core/API/UI и существующих регрессий. Модели, реальные базы и production не запускались. Ссылки проверены на наличие файла и строки; содержание прочитано в целевых разделах. Этот аудит не заменяет общий выпускной прогон root.",
+    "status_legend": {
+      "delivered": "Основной функциональный acceptance реализован; это не обещание экспериментального эффекта или браузерной приёмки.",
+      "partial": "Существенная часть есть, но указан конкретный оставшийся acceptance или требуемый общий интерфейс.",
+      "absent": "Именно запрошенная функция не найдена в проверенных core/API/UI; соседний механизм явно указан.",
+      "empirical": "Код основного механизма есть, но критерий зависит от размеченного отложенного корпуса или пилота; unit tests не являются его выполнением."
+    },
+    "tests_executed_in_task": [
+      {
+        "scope": "pkg/mem: TestAnnotationKnowledge*",
+        "result": "PASS",
+        "seconds": 3.713
+      },
+      {
+        "scope": "internal/webapp: TestAnnotationKnowledgeHTTPAccessAndWorkflow",
+        "result": "PASS",
+        "seconds": 2.423
+      },
+      {
+        "scope": "node internal/webapp/annotation_knowledge_test.cjs",
+        "result": "PASS 8/8; fake DOM component tests, not browser E2E"
+      },
+      {
+        "scope": "pkg/mem targeted Classic/web/selection/Q&A/learning exact excerpt and post-provider revalidation",
+        "result": "PASS earlier in same implementation task (8.416s); root owns final full rerun"
+      }
+    ],
+    "environment_note": "node --test child-process spawn received EPERM; direct node script passed. Go telemetry upload.token reported access denied; Go test processes above exited successfully. No release binaries built by this agent.",
+    "negative_search_scope": [
+      "pkg/mem + internal/webapp/assets: cross-link sidecar, canonical projections, alias/term persistence, focus question project, versioned task templates, calibration, prompt-injection/adversarial suite",
+      "Public API/type declarations and graph workspace/edit routes; existing native import/export and annotation transfer schema",
+      "Graph learning/export job managers and classic durable worker; special opt-in live benchmark compared with requested general runner"
+    ]
+  },
+  "features": [
+    {
+      "id": "TRU01",
+      "title": "Завершённость обработки по точной редакции",
+      "category": "TRU",
+      "milestone": "M0",
+      "status": "delivered",
+      "priority": "P0",
+      "original_acceptance": "Probe reimport вызывает provider повторно, создаёт generated evidence новой редакции и показывает pending до завершения второго прохода.",
+      "implemented": "Completion привязан к точному тексту, физической редакции, chunk и конфигурации; legacy completion не принимается без pin.",
+      "remaining": "Функционального пробела в исходном acceptance не найдено; повторное извлечение не означает доказанную полноту семантического разбора.",
+      "evidence": [
+        "pkg/mem/graph_document.go:73",
+        "pkg/mem/graph_document_revision_test.go:11",
+        "pkg/mem/graph_document_revision_test.go:212"
+      ],
+      "dependencies": [],
+      "verification": "static_current_tree; targeted tests are reported separately in meta"
+    },
+    {
+      "id": "TRU02",
+      "title": "Source fragment соответствует редакции",
+      "category": "TRU",
+      "milestone": "M0",
+      "status": "delivered",
+      "priority": "P0",
+      "original_acceptance": "После reimport новая root содержит current section с 9 bar; прежний 5 bar доступен как история, ручная заметка не потеряна.",
+      "implemented": "Source root/section получают идентичность редакции и точного anchor. Старые source nodes и ручные объекты сохраняются.",
+      "remaining": "Функционального пробела в исходном acceptance не найдено; исторический узел не должен ошибочно называться текущим.",
+      "evidence": [
+        "pkg/mem/graph_document.go:173",
+        "pkg/mem/graph_document.go:180",
+        "pkg/mem/graph_document_revision_test.go:11",
+        "pkg/mem/graph_document_revision_test.go:289"
+      ],
+      "dependencies": [],
+      "verification": "static_current_tree; targeted tests are reported separately in meta"
+    },
+    {
+      "id": "TRU03",
+      "title": "Единый контракт evidence anchors",
+      "category": "TRU",
+      "milestone": "M0",
+      "status": "delivered",
+      "priority": "P0",
+      "original_acceptance": "Одинаковый anchor возвращает одинаковое состояние в classic и graph до update, после update, удаления источника и restore.",
+      "implemented": "Classic web и CLI branch/AI/study используют общий resolver для direct evidence и knowledge_node; состояния current/stale/missing проверяются по тем же anchors. Аннотации используют тот же контракт exact evidence.",
+      "remaining": "Acceptance состояний покрыт адаптерами и regression current→update→delete→restore. Единого визуального reader для всех legacy поверхностей пока нет; это относится к SRC02/KNO02, а не к изменению anchor.",
+      "evidence": [
+        "pkg/mem/web_map_evidence.go:72",
+        "pkg/mem/web_map_evidence.go:200",
+        "pkg/mem/mind_map_workbench_evidence.go:19",
+        "pkg/mem/mind_map_workbench_evidence_test.go:10"
+      ],
+      "dependencies": [
+        "TRU01",
+        "TRU02"
+      ],
+      "verification": "static_current_tree; targeted tests are reported separately in meta"
+    },
+    {
+      "id": "TRU04",
+      "title": "Карта влияния новой редакции",
+      "category": "TRU",
+      "milestone": "M1",
+      "status": "partial",
+      "priority": "P1",
+      "original_acceptance": "Изменение одной цитаты перечисляет только зависимые объекты и учебные элементы; неизменённые ссылки сохраняют прежний статус.",
+      "implemented": "Revision diff перечисляет затронутые graph nodes/edges и редакции. Study pack отдельно знает актуальность основания.",
+      "remaining": "Нет общего документного impact-отчёта с classic nodes, review, saved learning objects и очередями. Требуется индекс зависимостей и одна приёмка изменения ровно одной цитаты.",
+      "evidence": [
+        "pkg/mem/graph_revision_diff.go:19",
+        "pkg/mem/graph_revision_diff.go:49",
+        "pkg/mem/graph_revision_diff.go:87",
+        "pkg/mem/web_map_evidence.go:200"
+      ],
+      "dependencies": [
+        "TRU03",
+        "KNO02"
+      ],
+      "verification": "static_current_tree; targeted tests are reported separately in meta"
+    },
+    {
+      "id": "TRU05",
+      "title": "Решение review закрепляет видимый текст",
+      "category": "TRU",
+      "milestone": "M0",
+      "status": "delivered",
+      "priority": "P0",
+      "original_acceptance": "Одобрение из старой вкладки после изменения label/body/edge endpoint получает conflict; ни один статус и audit batch не записан частично.",
+      "implemented": "Review digest закрепляет type/kind/label/body/origin и endpoints; batch/HTTP не подставляют текущий pin. Повторный generated upsert сохраняет reviewed status только при неизменном effective content и evidence.",
+      "remaining": "Основной критерий конфликта и атомарности реализован. Новые адаптеры должны продолжать использовать review_digest; это правило совместимости, а не незавершённая отдельная функция.",
+      "evidence": [
+        "pkg/mem/graph_review_pin.go:12",
+        "pkg/mem/graph_review_pin.go:46",
+        "pkg/mem/graph_review_pin_test.go:12",
+        "pkg/mem/graph_review_pin_test.go:198",
+        "pkg/mem/graph_review_pin_test.go:241"
+      ],
+      "dependencies": [],
+      "verification": "static_current_tree; targeted tests are reported separately in meta"
+    },
+    {
+      "id": "TRU06",
+      "title": "Исторический corpus restore",
+      "category": "TRU",
+      "milestone": "M2",
+      "status": "partial",
+      "priority": "P1",
+      "original_acceptance": "Пользователь видит plan до apply; изменение базы делает plan недействительным; rollback возвращает состояние без потери audit.",
+      "implemented": "Существуют Build/Apply restore и rollback с plan digest, снимками corpus/graph и immutable runs.",
+      "remaining": "Нет законченного браузерного мастера corpus restore с воздействием на документ/карты/аннотации и предупреждением о физическом оригинале. Не путать с готовым restore снимка classic.",
+      "evidence": [
+        "pkg/mem/document_restore.go:65",
+        "pkg/mem/document_restore.go:272",
+        "pkg/mem/document_restore.go:276"
+      ],
+      "dependencies": [
+        "TRU01",
+        "TRU02",
+        "TRU04"
+      ],
+      "verification": "static_current_tree; targeted tests are reported separately in meta"
+    },
+    {
+      "id": "TRU07",
+      "title": "Просмотр и восстановление снимка classic",
+      "category": "TRU",
+      "milestone": "M2",
+      "status": "delivered",
+      "priority": "P1",
+      "original_acceptance": "Восстановление снимка N создаёт новую ревизию, возвращает nodes/sources и отменяется undo; устаревший expected revision отклоняется.",
+      "implemented": "Добавлены read-only preview/diff снимка classic, atomic restore новой ревизией, pins, receipts и undo/redo.",
+      "remaining": "Исходный функциональный acceptance покрыт. Полный релизный и браузерный прогон фиксируется отдельно root, этот аудит его не подменяет.",
+      "evidence": [
+        "pkg/mem/web_map_snapshot_restore.go:44",
+        "pkg/mem/web_map_snapshot_restore.go:213",
+        "pkg/mem/web_map_snapshot_restore_test.go:25",
+        "pkg/mem/web_map_snapshot_restore_test.go:139"
+      ],
+      "dependencies": [
+        "OPS01",
+        "TRU03"
+      ],
+      "verification": "static_current_tree; targeted tests are reported separately in meta"
+    },
+    {
+      "id": "TRU08",
+      "title": "Происхождение вывода и преобразований",
+      "category": "TRU",
+      "milestone": "M1",
+      "status": "partial",
+      "priority": "P1",
+      "original_acceptance": "У выбранного вывода доступны источник, run/model/settings, ручные изменения и review; недостающие исторические поля помечены неизвестными.",
+      "implemented": "Есть run ledgers, edit/review/merge history; annotation→graph сохраняет исходные node/annotation revision и digests, отдельно показывает текущий объект.",
+      "remaining": "Нет одной читаемой цепочки source→run/model/settings→edit→review→learning/export с явными unknown для старых полей. Нужен resolver событий происхождения; новая локальная immutable link не закрывает весь lineage.",
+      "evidence": [
+        "pkg/mem/document_annotation_knowledge.go:48",
+        "pkg/mem/document_annotation_knowledge.go:360",
+        "pkg/mem/mind_map_ai.go:35",
+        "pkg/mem/graph_edit.go:30"
+      ],
+      "dependencies": [
+        "KNO02",
+        "TRU03"
+      ],
+      "verification": "static_current_tree; targeted tests are reported separately in meta"
+    },
+    {
+      "id": "TRU09",
+      "title": "Предложение перепривязки stale-аннотации",
+      "category": "TRU",
+      "milestone": "M1",
+      "status": "partial",
+      "priority": "P1",
+      "original_acceptance": "После вставки абзаца находится единственный точный кандидат; при двух совпадениях обязательный выбор; история содержит оба anchors.",
+      "implemented": "Ручной reanchor: пользователь явно выбирает новую цитату, видит сравнение и counts зависимых связей, подтверждает digest. Создаются новая запись и immutable lineage; прежняя запись не меняется.",
+      "remaining": "Нет автоматического поиска кандидатов по quote/context/геометрии. Исходный acceptance про единственный найденный кандидат и обязательный выбор при двух совпадениях ещё не выполнен.",
+      "evidence": [
+        "pkg/mem/document_annotation_reanchor.go:181",
+        "pkg/mem/document_annotation_reanchor.go:279",
+        "pkg/mem/document_annotation_reanchor_test.go:48",
+        "pkg/mem/document_annotation_reanchor_test.go:201"
+      ],
+      "dependencies": [
+        "SRC03",
+        "TRU04"
+      ],
+      "verification": "static_current_tree; targeted tests are reported separately in meta"
+    },
+    {
+      "id": "TRU10",
+      "title": "Сохранение provenance при обмене",
+      "category": "TRU",
+      "milestone": "M5",
+      "status": "partial",
+      "priority": "P1",
+      "original_acceptance": "Экспорт/импорт контрольной карты сохраняет IDs, источники и stale; неподдерживаемые поля перечислены, приватный путь не появляется в hosted artifact.",
+      "implemented": "Classic/graph экспорт несёт canonical provenance. Native classic import создаёт независимую копию с новыми IDs. JSON annotations v1 переносит записи и области с явным binding status; hosted DTO скрывают пути.",
+      "remaining": "Нет round-trip общего пакета с сохранением IDs, review/edit history, annotation↔graph/map links и lineage. Требуются версионированный manifest/sidecar и явный режим identity-preserving vs copy.",
+      "evidence": [
+        "pkg/mem/graph_portable_export.go:396",
+        "pkg/mem/mind_map_import.go:283",
+        "pkg/mem/document_annotations_transfer.go:309",
+        "pkg/mem/document_annotations_transfer.go:555"
+      ],
+      "dependencies": [
+        "KNO08",
+        "EXP02"
+      ],
+      "verification": "static_current_tree; targeted tests are reported separately in meta"
+    },
+    {
+      "id": "EXT01",
+      "title": "Полное текстовое основание документа",
+      "category": "EXT",
+      "milestone": "M0",
+      "status": "delivered",
+      "priority": "P0",
+      "original_acceptance": "Без модели число current source sections соответствует плану; после reimport нет sections старой редакции в current-представлении.",
+      "implemented": "Полное текстовое основание публикуется до модели; отсутствие/ошибка модели даёт видимую deferred работу. Разбиение длинного chunk на source windows сохраняет текст и точные anchors редакции.",
+      "remaining": "Критерий публикации текущих source sections реализован. Количество sections соответствует source windows, а не обязательно числу entries или авторских разделов.",
+      "evidence": [
+        "pkg/mem/graph_document.go:26",
+        "pkg/mem/graph_document.go:180",
+        "pkg/mem/graph_document.go:240",
+        "pkg/mem/graph_document_revision_test.go:11"
+      ],
+      "dependencies": [
+        "TRU01",
+        "TRU02"
+      ],
+      "verification": "static_current_tree; targeted tests are reported separately in meta"
+    },
+    {
+      "id": "EXT02",
+      "title": "Восстановление авторской структуры",
+      "category": "EXT",
+      "milestone": "M3",
+      "status": "absent",
+      "priority": "P2",
+      "original_acceptance": "На размеченных книгах отчёт показывает precision/recall границ разделов; неверный OCR-заголовок можно исправить без потери цитат.",
+      "implemented": "Есть техническое дерево документа и page/chunk/source windows.",
+      "remaining": "Не найдена отдельная модель авторского TOC/heading hierarchy с уверенностью, ручной правкой и precision/recall по границам. Сначала нужно расширение структуры и разметка книг; технические chunks не выдавать за главы.",
+      "evidence": [
+        "pkg/mem/graph_document.go:180",
+        "pkg/ingest/document.go:1"
+      ],
+      "dependencies": [
+        "OPS02",
+        "SRC03"
+      ],
+      "verification": "static_current_tree; targeted tests are reported separately in meta"
+    },
+    {
+      "id": "EXT03",
+      "title": "Условия и исключения требований",
+      "category": "EXT",
+      "milestone": "M3",
+      "status": "empirical",
+      "priority": "P1",
+      "original_acceptance": "Набор с отрицанием, диапазоном и исключением не теряет ни одну размеченную часть; изменение числа/единицы не принимается как нормализация.",
+      "implemented": "Requirements parser валидирует statement/conditions/exceptions/limits и точные цитаты; qualifier-aware evaluation различает отрицания, диапазоны, числа/единицы. Группировка сохраняет исходные proposal тексты.",
+      "remaining": "Нужен замороженный отложенный размеченный корпус, baseline и отчёт по каждой части требования. Имеющиеся unit cases подтверждают guards, но не гарантируют извлечение всех условий на книгах. Структурированный round-trip остаётся KNO09.",
+      "evidence": [
+        "pkg/mem/graph_requirement.go:25",
+        "pkg/mem/graph_requirement_test.go:1",
+        "pkg/mem/graph_labeled_requirements_test.go:1",
+        "pkg/mem/graph_labeled_qualifiers.go:1"
+      ],
+      "dependencies": [
+        "OPS02",
+        "KNO09"
+      ],
+      "verification": "static_current_tree; targeted tests are reported separately in meta"
+    },
+    {
+      "id": "EXT04",
+      "title": "Глобальное объединение тем после AI-пакетов",
+      "category": "EXT",
+      "milestone": "M3",
+      "status": "partial",
+      "priority": "P1",
+      "original_acceptance": "На корпусе из трёх документов повторяющиеся темы объединены в проверяемый план; отчёт показывает потерянные/перенесённые claims и citations.",
+      "implemented": "Для multi-batch new_map/expand работает отдельный глобальный план группировки целых поддеревьев; host проверяет полное покрытие roots, неизвестные/повторные refs и сохраняет исходные nodes/evidence. Preview содержит synthesis metadata.",
+      "remaining": "Это организационная группировка, не semantic merge эквивалентных claims. Требуется приёмка на трёх документах и corpus-метрики потерянных/перенесённых claims/citations; не объединять одинаковые titles автоматически.",
+      "evidence": [
+        "pkg/mem/mind_map_ai_synthesis.go:24",
+        "pkg/mem/mind_map_ai_synthesis.go:64",
+        "pkg/mem/mind_map_ai_synthesis.go:175",
+        "pkg/mem/mind_map_ai_synthesis_test.go:1"
+      ],
+      "dependencies": [
+        "OPS02",
+        "KNO02",
+        "TRU08"
+      ],
+      "verification": "static_current_tree; targeted tests are reported separately in meta"
+    },
+    {
+      "id": "EXT05",
+      "title": "Разрешение одинаковых понятий корпуса",
+      "category": "EXT",
+      "milestone": "M3",
+      "status": "partial",
+      "priority": "P2",
+      "original_acceptance": "Набор с синонимом и омонимом даёт отдельные объяснённые предложения; неподтверждённое слияние не меняет исходные объекты.",
+      "implemented": "Есть duplicate candidates, guarded merge и локальное раскрытие однозначных topic mentions.",
+      "remaining": "Нет корпусного entity resolution с определениями, scope редакции и объяснимыми synonym/homonym proposals. Сначала canonical terms/aliases и comparison UI, затем размеченный набор с омонимами.",
+      "evidence": [
+        "pkg/mem/graph_duplicates.go:123",
+        "pkg/mem/graph_duplicates.go:259",
+        "pkg/mem/web/knowledgeTopics.js:1"
+      ],
+      "dependencies": [
+        "KNO07",
+        "OPS02"
+      ],
+      "verification": "static_current_tree; targeted tests are reported separately in meta"
+    },
+    {
+      "id": "EXT06",
+      "title": "Извлечение под исследовательский вопрос",
+      "category": "EXT",
+      "milestone": "M3",
+      "status": "partial",
+      "priority": "P2",
+      "original_acceptance": "Два запуска с одним сохранённым вопросом имеют сопоставимые manifests; исключённый документ не попадает в prompts или выводы.",
+      "implemented": "Focus, extraction scope и manifests существуют в отдельных run/API; excluded documents можно не включать в scope.",
+      "remaining": "Нет сохраняемого исследовательского проекта с вопросом, corpus revision set, критериями включения/исключения и версиями. Нужен отдельный объект запроса, переиспользуемый между runs.",
+      "evidence": [
+        "pkg/mem/graph_extract_plan.go:1",
+        "pkg/mem/web_map_from_sources.go:1",
+        "pkg/mem/mind_map_ai.go:35"
+      ],
+      "dependencies": [
+        "KNO02",
+        "SRC01",
+        "AI01"
+      ],
+      "verification": "static_current_tree; targeted tests are reported separately in meta"
+    },
+    {
+      "id": "EXT07",
+      "title": "Проверяемые многоуровневые сводки",
+      "category": "EXT",
+      "milestone": "M3",
+      "status": "absent",
+      "priority": "P2",
+      "original_acceptance": "Любое предложение сводки открывает подтверждения; при удалении supporting claim сводка становится stale и не считается актуальной.",
+      "implemented": "Есть свободные summary/body и организационные themes; нет отдельной иерархии проверяемых сводок.",
+      "remaining": "Нужен contract chapter→document→corpus summary, sentence→support refs, coverage и invalidation при изменении supporting claim. Пустой summary организационного узла намеренно не заменяет этот механизм.",
+      "evidence": [
+        "pkg/mem/mind_map_ai_synthesis.go:213",
+        "pkg/mem/graph.go:117",
+        "pkg/mem/mind_map.go:94"
+      ],
+      "dependencies": [
+        "EXT02",
+        "EXT04",
+        "TRU08"
+      ],
+      "verification": "static_current_tree; targeted tests are reported separately in meta"
+    },
+    {
+      "id": "EXT08",
+      "title": "План извлечения и возобновление",
+      "category": "EXT",
+      "milestone": "M0",
+      "status": "partial",
+      "priority": "P1",
+      "original_acceptance": "Остановка после второго batch и повтор продолжают только незавершённые части; новая редакция или настройки требуют нового плана.",
+      "implemented": "Extract умеет deterministic plan/resume, persisted checkpoints и pin settings/evidence; full-document pipeline повторяет незавершённые окна и объясняет deferred.",
+      "remaining": "Не завершён общий документный UI плана/окна/resume reason для всех extraction путей. Нужна унифицированная приёмка stop-after-batch2 и изменение редакции/настроек через UI.",
+      "evidence": [
+        "pkg/mem/graph_extract_run.go:162",
+        "pkg/mem/graph_extract_run.go:234",
+        "pkg/mem/graph_extract_run.go:334",
+        "pkg/mem/graph_document.go:26"
+      ],
+      "dependencies": [
+        "TRU01",
+        "TRU02"
+      ],
+      "verification": "static_current_tree; targeted tests are reported separately in meta"
+    },
+    {
+      "id": "EXT09",
+      "title": "Уверенность с проверяемой интерпретацией",
+      "category": "EXT",
+      "milestone": "M3",
+      "status": "partial",
+      "priority": "P2",
+      "original_acceptance": "UI не показывает score как процент истинности; отчёт калибровки содержит размер выборки, bins и ошибки на отложенном корпусе.",
+      "implemented": "Модельный confidence хранится отдельно от review; inspector называет его уверенностью извлечения, не процентом истинности.",
+      "remaining": "Нет отчёта калибровки по отложенному корпусу с bins/error/sample size. Сначала определить измеряемую цель confidence и собирать human labels; вероятность истинности не обещать.",
+      "evidence": [
+        "pkg/mem/graph.go:117",
+        "pkg/mem/web/knowledgeMapHTMLSuffix.html:253",
+        "pkg/mem/graph_labeled_eval.go:1"
+      ],
+      "dependencies": [
+        "OPS02"
+      ],
+      "verification": "static_current_tree; targeted tests are reported separately in meta"
+    },
+    {
+      "id": "EXT10",
+      "title": "Человеческая правка предложенной структуры",
+      "category": "EXT",
+      "milestone": "M2",
+      "status": "delivered",
+      "priority": "P1",
+      "original_acceptance": "Правка предложения не переписывает цитату; повторная генерация сохраняет manual node, а конфликт review требует обновить просмотр.",
+      "implemented": "Guarded edit/review не переписывает evidence. Generated upsert учитывает effective manual override; изменённые body/kind/endpoints сбрасывают reviewed status. Classic выбор proposals сохраняет source anchors.",
+      "remaining": "Базовый acceptance защиты ручной правки реализован. Общий редактор предложений extraction до публикации остаётся расширением UX, не доказанным качеством синтеза.",
+      "evidence": [
+        "pkg/mem/graph_edit.go:116",
+        "pkg/mem/graph_review_pin_test.go:77",
+        "pkg/mem/graph_review_pin_test.go:130",
+        "pkg/mem/graph_review_pin_test.go:198"
+      ],
+      "dependencies": [
+        "TRU05",
+        "EDT10"
+      ],
+      "verification": "static_current_tree; targeted tests are reported separately in meta"
+    },
+    {
+      "id": "KNO01",
+      "title": "Типизированные объекты знаний",
+      "category": "KNO",
+      "milestone": "M1",
+      "status": "partial",
+      "priority": "P1",
+      "original_acceptance": "Экспорт словаря покрывает все текущие типы; неизвестный тип в старом клиенте отображается безопасно и не теряется при сохранении.",
+      "implemented": "Graph и classic имеют явные, разные enum kinds; новый annotation adapter допускает шесть manual kinds без смены существующих типов.",
+      "remaining": "Нет общего экспортируемого словаря/adapters и гарантированного round-trip неизвестного нового kind старым клиентом. Нынешняя строгая валидация безопасно отказывает, но не выполняет acceptance «сохранить неизвестный тип».",
+      "evidence": [
+        "pkg/mem/graph.go:1",
+        "pkg/mem/mind_map.go:49",
+        "pkg/mem/graph_workspace.go:219"
+      ],
+      "dependencies": [
+        "KNO08"
+      ],
+      "verification": "static_current_tree; targeted tests are reported separately in meta"
+    },
+    {
+      "id": "KNO02",
+      "title": "Общие адресуемые объекты через адаптеры",
+      "category": "KNO",
+      "milestone": "M1",
+      "status": "partial",
+      "priority": "P1",
+      "original_acceptance": "Один graph claim открыт из дерева, reader и карточки по reference; legacy IDs и данные остаются читаемыми без полного пересоздания.",
+      "implemented": "Есть устойчивые graph/сlassic IDs, knowledge_node sources, shared evidence resolver и практический annotation↔graph bridge с обратной навигацией.",
+      "remaining": "Нет универсального ObjectRef resolver для reader/tree/card и единой адресации всех kind/workspace/revision. Bridge создаёт самостоятельный manual node, а не проекцию произвольного graph claim.",
+      "evidence": [
+        "pkg/mem/mind_map.go:111",
+        "pkg/mem/web_map_evidence.go:143",
+        "pkg/mem/document_annotation_knowledge.go:94",
+        "internal/webapp/assets/annotation-knowledge.js:1"
+      ],
+      "dependencies": [
+        "TRU03"
+      ],
+      "verification": "static_current_tree; targeted tests are reported separately in meta"
+    },
+    {
+      "id": "KNO03",
+      "title": "Разделение цитаты и авторской мысли",
+      "category": "KNO",
+      "milestone": "M1",
+      "status": "delivered",
+      "priority": "P1",
+      "original_acceptance": "Изменение собственной заметки не меняет excerpt/hash; генеративное дополнение помечается отдельно от текста источника.",
+      "implemented": "DocumentAnnotation отделяет pinned quote/anchor от редактируемого note; история фиксирует прежнюю ревизию. Связанный graph node сохраняет ручной body отдельно и immutable creation snapshot.",
+      "remaining": "Базовый критерий note≠excerpt реализован и проверен тестами. Annotation edit не синхронизирует node body; это намеренная семантика, видимая пользователю. Автоматического AI-дополнения аннотации в этом API нет.",
+      "evidence": [
+        "pkg/mem/document_annotations.go:124",
+        "pkg/mem/document_annotations_test.go:46",
+        "pkg/mem/document_annotation_knowledge.go:65",
+        "pkg/mem/document_annotation_knowledge_test.go:22"
+      ],
+      "dependencies": [
+        "KNO02",
+        "SRC03"
+      ],
+      "verification": "static_current_tree; targeted tests are reported separately in meta"
+    },
+    {
+      "id": "KNO04",
+      "title": "Именованные смысловые отношения",
+      "category": "KNO",
+      "milestone": "M1",
+      "status": "partial",
+      "priority": "P1",
+      "original_acceptance": "Пользователь создаёт supports с evidence; смена цвета линии не меняет relation kind, экспорт сохраняет направление и тип.",
+      "implemented": "KnowledgeGraph хранит directed semantic relation kind/evidence, экспорт сохраняет их. Workspace creation создаёт ограниченные typed parent relations.",
+      "remaining": "Нет интегрированного редактора произвольного supports между выбранными существующими nodes с отдельным evidence. EditKnowledgeObject редактирует label/body, не создаёт relation. Нужны relation create/preview/pins и независимые style controls.",
+      "evidence": [
+        "pkg/mem/graph.go:1",
+        "pkg/mem/graph_workspace.go:219",
+        "pkg/mem/graph_edit.go:116",
+        "pkg/mem/graph_portable_export.go:530"
+      ],
+      "dependencies": [
+        "KNO02"
+      ],
+      "verification": "static_current_tree; targeted tests are reported separately in meta"
+    },
+    {
+      "id": "KNO05",
+      "title": "Поперечные связи классической карты",
+      "category": "KNO",
+      "milestone": "M2",
+      "status": "absent",
+      "priority": "P2",
+      "original_acceptance": "Cross-link связывает две ветви с подписью, не создаёт цикл parent; OPML сохраняет дерево и перечисляет связь в sidecar.",
+      "implemented": "Classic остаётся ordered single-parent tree; source knowledge_node является источником, а не cross-link между ветвями.",
+      "remaining": "Не найдены самостоятельные typed/labeled cross-links, UI и sidecar для OPML. Добавлять над parent tree, не менять parent для имитации связи.",
+      "evidence": [
+        "pkg/mem/mind_map.go:20",
+        "pkg/mem/mind_map.go:94",
+        "pkg/mem/mind_map.go:111",
+        "pkg/mem/mind_map_export.go:1"
+      ],
+      "dependencies": [
+        "KNO02",
+        "KNO04"
+      ],
+      "verification": "static_current_tree; targeted tests are reported separately in meta"
+    },
+    {
+      "id": "KNO06",
+      "title": "Один объект в нескольких картах",
+      "category": "KNO",
+      "milestone": "M1",
+      "status": "partial",
+      "priority": "P2",
+      "original_acceptance": "Редактирование canonical note видно в двух проекциях; редактирование независимой копии не меняет исходный объект.",
+      "implemented": "Graph views переиспользуют графовые объекты; classic node может иметь knowledge_node source, а duplicate создаёт независимую копию.",
+      "remaining": "Нет явных canonical object projections с выбором ссылка/копия, shared editing и синхронизацией body в двух деревьях. Наличие source reference не превращает локальный classic body в проекцию.",
+      "evidence": [
+        "pkg/mem/graph_layout.go:1",
+        "pkg/mem/web_map_duplicate.go:1",
+        "pkg/mem/mind_map.go:111"
+      ],
+      "dependencies": [
+        "KNO02"
+      ],
+      "verification": "static_current_tree; targeted tests are reported separately in meta"
+    },
+    {
+      "id": "KNO07",
+      "title": "Контролируемое объединение дубликатов",
+      "category": "KNO",
+      "milestone": "M3",
+      "status": "partial",
+      "priority": "P1",
+      "original_acceptance": "Изменение target после preview блокирует merge; подтверждённое объединение сохраняет все источники и запись о происхождении.",
+      "implemented": "Detect/Merge APIs проверяют content/evidence pins source+target, сохраняют merge audit и инвалидируют changed target.",
+      "remaining": "Нет законченного comparison preview UI до merge с наглядным переносом anchors/relations. При расширении учитывать immutable annotation backlinks: они остаются связью происхождения исходного node.",
+      "evidence": [
+        "pkg/mem/graph_duplicates.go:60",
+        "pkg/mem/graph_duplicates.go:259",
+        "pkg/mem/graph_duplicates_test.go:8",
+        "pkg/mem/graph_duplicates_test.go:169"
+      ],
+      "dependencies": [
+        "TRU05",
+        "EDT10"
+      ],
+      "verification": "static_current_tree; targeted tests are reported separately in meta"
+    },
+    {
+      "id": "KNO08",
+      "title": "Версионированные контракты и миграции",
+      "category": "KNO",
+      "milestone": "M1",
+      "status": "partial",
+      "priority": "P1",
+      "original_acceptance": "Старые fixtures обеих моделей открываются после миграции; прерванная миграция откатывается, новые поля не портят legacy exports.",
+      "implemented": "Legacy graph/classic schemas сохраняются; annotations добавлены отдельными таблицами; JSON annotation transfer имеет version1, strict parser и digest. Новые read paths не создают schema.",
+      "remaining": "Нет полного общего версионированного контракта ObjectRef и совокупного legacy fixture acceptance всех новых adapters/migrations. Не объявлять feature complete по наличию отдельной format version.",
+      "evidence": [
+        "pkg/mem/mind_map.go:24",
+        "pkg/mem/document_annotation_knowledge.go:82",
+        "pkg/mem/document_annotations_transfer.go:160",
+        "pkg/mem/document_annotations_test.go:225"
+      ],
+      "dependencies": [
+        "TRU03"
+      ],
+      "verification": "static_current_tree; targeted tests are reported separately in meta"
+    },
+    {
+      "id": "KNO09",
+      "title": "Структурированные нормативные требования",
+      "category": "KNO",
+      "milestone": "M3",
+      "status": "partial",
+      "priority": "P1",
+      "original_acceptance": "Требование с двумя условиями и исключением проходит round-trip без потери структуры; legacy body остаётся доступным.",
+      "implemented": "Requirement schema валидируется до materialize; body и anchors сохраняют текст и процитированное основание.",
+      "remaining": "Отдельного хранимого/versioned requirement extension с statement/conditions/exceptions/limits и anchor каждой части нет. Нужен lossless round-trip старое body+новое structured payload без повторного извлечения.",
+      "evidence": [
+        "pkg/mem/graph_requirement.go:13",
+        "pkg/mem/graph_requirement.go:25",
+        "pkg/mem/graph.go:117"
+      ],
+      "dependencies": [
+        "KNO08",
+        "TRU03"
+      ],
+      "verification": "static_current_tree; targeted tests are reported separately in meta"
+    },
+    {
+      "id": "KNO10",
+      "title": "Определения, синонимы и аббревиатуры",
+      "category": "KNO",
+      "milestone": "M3",
+      "status": "partial",
+      "priority": "P2",
+      "original_acceptance": "Две разные расшифровки одной аббревиатуры не сливаются; каждая alias-связь открывает определение и область применимости.",
+      "implemented": "Есть definition nodes и безопасное раскрытие однозначной явной аббревиатуры в Topics текущей редакции.",
+      "remaining": "Нет сохраняемых alias/term relationships с document/revision scope, review и объяснением. Две расшифровки одной аббревиатуры должны оставаться разными; UI topic expansion не равен общему терминологическому реестру.",
+      "evidence": [
+        "pkg/mem/graph.go:1",
+        "pkg/mem/web/knowledgeTopics.js:1",
+        "pkg/mem/web/knowledgeTopics.test.cjs:1"
+      ],
+      "dependencies": [
+        "KNO04",
+        "EXT05"
+      ],
+      "verification": "static_current_tree; targeted tests are reported separately in meta"
+    },
+    {
+      "id": "AI01",
+      "title": "Явный контекст каждого AI-запроса",
+      "category": "AI",
+      "milestone": "M2",
+      "status": "partial",
+      "priority": "P1",
+      "original_acceptance": "Preview контекста перечисляет все фактически отправленные evidence; knowledge_node source не исчезает молча и не расширяет запрос вне scope.",
+      "implemented": "Classic web/CLI и graph selection используют pinned manifests; исправлен resolver knowledge_node и сохранены разные exact excerpts одного CitationID через пары CitationID/EvidenceHash.",
+      "remaining": "Нужен единый видимый до отправки список фактически вошедших в prompt выдержек и явно исключённых items/типов на каждой AI-поверхности. Backend manifest сам по себе не доказывает полноту UI preview ограниченного context.",
+      "evidence": [
+        "pkg/mem/web_map_evidence.go:200",
+        "pkg/mem/mind_map_workbench_evidence.go:19",
+        "pkg/mem/graph_selection.go:67",
+        "pkg/mem/answer_evidence_refs.go:1"
+      ],
+      "dependencies": [
+        "KNO02",
+        "TRU03"
+      ],
+      "verification": "static_current_tree; targeted tests are reported separately in meta"
+    },
+    {
+      "id": "AI02",
+      "title": "Предложения с выборочным применением",
+      "category": "AI",
+      "milestone": "M2",
+      "status": "partial",
+      "priority": "P1",
+      "original_acceptance": "Выбор дочернего предложения включает требуемого родителя; stale preview не применяется и не меняет дерево/граф частично.",
+      "implemented": "Classic preview/select/apply включает родителей выбранного child и атомарно сверяет исходное состояние; graph learning имеет отдельный preview/save контракт.",
+      "remaining": "Общий UX diff/dependencies для обоих слоёв отсутствует; graph extraction не следует считать тем же review-preview workflow. Существующие guards должны сохраниться при объединении интерфейса.",
+      "evidence": [
+        "pkg/mem/mind_map_ai.go:57",
+        "pkg/mem/mind_map_ai_test.go:110",
+        "pkg/mem/mind_map_ai_test.go:368",
+        "pkg/mem/graph_learning.go:1"
+      ],
+      "dependencies": [
+        "TRU05",
+        "EDT10"
+      ],
+      "verification": "static_current_tree; targeted tests are reported separately in meta"
+    },
+    {
+      "id": "AI03",
+      "title": "Вопрос по ветви или выделению",
+      "category": "AI",
+      "milestone": "M2",
+      "status": "delivered",
+      "priority": "P0",
+      "original_acceptance": "Вопрос по двум цитатам не использует третью вне scope; изменение evidence до ответа даёт stale/error вместо уверенного результата.",
+      "implemented": "Classic branch и graph selection перепроверяют manifest после provider и schema-retry. Manifest включает review content/edge endpoints. Ответы используют точные refs разных excerpts одного chunk; legacy citation-only отвергается при неоднозначности.",
+      "remaining": "Scoped acceptance change-during-answer и exact citations покрыт regression. Ответ не доказывает истинность модели; единый reader entrypoint относится к AI01/SRC02.",
+      "evidence": [
+        "pkg/mem/answer_manifest_revalidation_test.go:16",
+        "pkg/mem/answer_manifest_revalidation_test.go:84",
+        "pkg/mem/answer_excerpt_refs_test.go:9",
+        "pkg/mem/answer_excerpt_refs_test.go:66",
+        "pkg/mem/query_excerpt_refs_test.go:12"
+      ],
+      "dependencies": [
+        "AI01",
+        "SRC02"
+      ],
+      "verification": "static_current_tree; targeted tests are reported separately in meta"
+    },
+    {
+      "id": "AI04",
+      "title": "Сохранение результата диалога в работу",
+      "category": "AI",
+      "milestone": "M2",
+      "status": "absent",
+      "priority": "P2",
+      "original_acceptance": "Сохранённый абзац содержит происхождение ответа и цитаты; повторная отправка не создаёт дубль, текст не становится approved автоматически.",
+      "implemented": "Ручные workspace/annotation nodes и отдельные AI proposals создавать можно.",
+      "remaining": "Не найдено действие «сохранить выбранный абзац ответа» с query/manifest/evidence lineage и idempotent receipt. Ручное копирование текста в note не удовлетворяет критерию происхождения AI-ответа.",
+      "evidence": [
+        "pkg/mem/graph_workspace.go:58",
+        "pkg/mem/graph_selection.go:87",
+        "pkg/mem/document_annotation_knowledge.go:94"
+      ],
+      "dependencies": [
+        "AI03",
+        "TRU08",
+        "KNO03"
+      ],
+      "verification": "static_current_tree; targeted tests are reported separately in meta"
+    },
+    {
+      "id": "AI05",
+      "title": "Шаблоны задач ассистента",
+      "category": "AI",
+      "milestone": "M3",
+      "status": "absent",
+      "priority": "P2",
+      "original_acceptance": "Две версии шаблона имеют разные IDs/digests в runs; повтор прежнего run использует сохранённую версию и параметры.",
+      "implemented": "Есть фиксированные tree templates/actions и настройки model runs.",
+      "remaining": "Нет версионированных пользовательских assistant-task templates с goal/scope/output schema, сохранённой версией в run и воспроизведением прежних параметров. Шаблон структуры карты template_id не закрывает задачу.",
+      "evidence": [
+        "pkg/mem/mind_map_workbench.go:1",
+        "pkg/mem/mind_map_ai.go:35",
+        "pkg/mem/graph_analyze.go:1"
+      ],
+      "dependencies": [
+        "EXT06",
+        "TRU08"
+      ],
+      "verification": "static_current_tree; targeted tests are reported separately in meta"
+    },
+    {
+      "id": "AI06",
+      "title": "Бюджеты, прогресс и пределы модели",
+      "category": "AI",
+      "milestone": "M0",
+      "status": "partial",
+      "priority": "P1",
+      "original_acceptance": "Fixture с token exhaustion даёт конкретный совет; превышение context не обрезает цитату, прогресс различает обработку и публикацию.",
+      "implemented": "Token ceilings, bounded retries/timeouts, source job budget и progress реализованы. Synthesis fail-closed при нехватке полного контекста; web token exhaustion имеет actionable error.",
+      "remaining": "План всех ограничений до запуска и различение processing/publishing не унифицированы для всех pipeline. Некоторые prompt builders допускают bounded prefixes с явным evidence contract: не обещать «вся цитата всегда отправляется целиком».",
+      "evidence": [
+        "pkg/mem/web_map_ai_worker.go:184",
+        "pkg/mem/web_map_ai_worker.go:205",
+        "pkg/mem/web_map_ai_test.go:291",
+        "pkg/mem/mind_map_ai_synthesis.go:152"
+      ],
+      "dependencies": [],
+      "verification": "static_current_tree; targeted tests are reported separately in meta"
+    },
+    {
+      "id": "AI07",
+      "title": "Долговечные задания и результаты",
+      "category": "AI",
+      "milestone": "M0",
+      "status": "partial",
+      "priority": "P1",
+      "original_acceptance": "После остановки процесса каждое задание имеет объяснимый статус; committed result доступен, незавершённое не выдаётся за completed и повтор не дублирует публикацию.",
+      "implemented": "Web classic AI tasks/checkpoints/publications долговечны; graph learning/export managers ограничены по retention и корректно останавливаются, сохранённые learning runs существуют отдельно.",
+      "remaining": "Graph job status/queued work/export result остаются в памяти менеджера; для каждого job после process restart нет durable terminal status/recovery. Нужен адаптер хранения job lifecycle, не подмена его историей учёбы.",
+      "evidence": [
+        "pkg/mem/web_map_ai_worker.go:24",
+        "pkg/mem/graph_learning_jobs.go:87",
+        "pkg/mem/graph_learning_jobs.go:269",
+        "pkg/mem/graph_export_jobs.go:92"
+      ],
+      "dependencies": [
+        "AI08"
+      ],
+      "verification": "static_current_tree; targeted tests are reported separately in meta"
+    },
+    {
+      "id": "AI08",
+      "title": "Отмена и идемпотентное применение",
+      "category": "AI",
+      "milestone": "M0",
+      "status": "partial",
+      "priority": "P0",
+      "original_acceptance": "Гонки cancel с claim и publish завершаются одним согласованным результатом; retry одного request ID не создаёт вторую ревизию.",
+      "implemented": "Атомарный claim сохраняет cancel; web task apply использует receipts/pins, controller lifecycle защищён от поздней публикации. Новая annotation graph операция transactional с exact replay и concurrent nonce test.",
+      "remaining": "Нужна сводная приёмочная матрица cancel/claim/publish/restart/logout для всех job adapters; graph durability остаётся AI07. Пройденные targeted races не являются исчерпывающим доказательством всех scheduler interleavings.",
+      "evidence": [
+        "pkg/mem/web_operations.go:496",
+        "pkg/mem/web_operations_test.go:106",
+        "pkg/mem/web_map_ai_test.go:117",
+        "pkg/mem/web_graph_lifecycle_test.go:11",
+        "pkg/mem/document_annotation_knowledge_test.go:188"
+      ],
+      "dependencies": [
+        "OPS01"
+      ],
+      "verification": "static_current_tree; targeted tests are reported separately in meta"
+    },
+    {
+      "id": "AI09",
+      "title": "Недоверенные инструкции внутри документов",
+      "category": "AI",
+      "milestone": "M0",
+      "status": "partial",
+      "priority": "P1",
+      "original_acceptance": "Документ с просьбой игнорировать scope или раскрыть путь не расширяет evidence и не вызывает побочных действий; попытка фиксируется как текст источника.",
+      "implemented": "Prompts маркируют evidence как untrusted; JSON schemas/host refs ограничивают output, web провайдер редактирует private paths. Scope нельзя расширить произвольной citation модели.",
+      "remaining": "Не найден единый adversarial набор для всех AI actions со встроенными документными инструкциями, попытками раскрытия пути и side-effect requests. Добавить fake-provider guards отдельно от opt-in оценки устойчивости реальной модели.",
+      "evidence": [
+        "pkg/mem/answer.go:411",
+        "pkg/mem/graph_extract.go:26",
+        "pkg/mem/graph_learning.go:31",
+        "pkg/mem/web_map_ai_worker.go:236",
+        "pkg/mem/mind_map_ai_synthesis.go:45"
+      ],
+      "dependencies": [
+        "TRU03"
+      ],
+      "verification": "static_current_tree; targeted tests are reported separately in meta"
+    },
+    {
+      "id": "AI10",
+      "title": "Сравнение моделей и конфигураций",
+      "category": "AI",
+      "milestone": "M5",
+      "status": "partial",
+      "priority": "P2",
+      "original_acceptance": "Отчёт двух конфигураций содержит одинаковый manifest, quality metrics, ошибки, время и параметры; live-модель запускается только явно.",
+      "implemented": "Есть quality/labeled evaluation и opt-in live requirement benchmark/replay для специального корпуса с сохранением prompt, модели, времени и raw attempts.",
+      "remaining": "Нет общего benchmark runner сравнения двух configurations/providers на одном frozen manifest с общей таблицей quality/error/budget/time/cost. Не считать специальный hard-coded SP485 test универсальным продуктовым benchmark.",
+      "evidence": [
+        "pkg/mem/graph_live_benchmark_test.go:16",
+        "pkg/mem/graph_live_benchmark_test.go:61",
+        "pkg/mem/graph_live_benchmark_test.go:98",
+        "pkg/mem/graph_labeled_eval.go:1"
+      ],
+      "dependencies": [
+        "OPS02",
+        "AI05"
+      ],
+      "verification": "static_current_tree; targeted tests are reported separately in meta"
+    }
+  ],
+  "next_slices": [
+    {
+      "order": 1,
+      "id": "foundation-contracts",
+      "features": [
+        "KNO01",
+        "KNO02",
+        "KNO08",
+        "TRU08",
+        "TRU04"
+      ],
+      "priority": "P1",
+      "scope": "Versioned object refs и dictionary поверх существующих ID; provenance/dependency resolver для graph/classic/annotation/learning без массового rewrite.",
+      "acceptance": "Один объект открывается из tree/reader/card; обратные ссылки сохраняют snapshot/current; update одной цитаты перечисляет только зависимые объекты; legacy fixtures читаются."
+    },
+    {
+      "order": 2,
+      "id": "job-security-matrix",
+      "features": [
+        "AI07",
+        "AI08",
+        "AI09",
+        "AI06"
+      ],
+      "priority": "P1",
+      "scope": "Durable graph job adapter и единая матрица cancel/claim/publish/restart/logout; adversarial schemas/refs/path privacy fixtures и предзапускной budget summary.",
+      "acceptance": "Каждое job после restart имеет объяснимое состояние; exact retry не публикует дважды; документные инструкции не расширяют evidence и не вызывают side effects."
+    },
+    {
+      "order": 3,
+      "id": "revision-ui-and-reanchor-candidates",
+      "features": [
+        "TRU06",
+        "TRU09",
+        "TRU04"
+      ],
+      "priority": "P1",
+      "scope": "Браузерный corpus restore plan/apply/rollback и отдельные reanchor candidates; ручной reanchor из alpha.3 остаётся базовым безопасным действием.",
+      "acceptance": "Однозначный кандидат и выбор из двух; старый anchor неизменен; изменившийся restore plan отклоняется; явно показано состояние физического оригинала."
+    },
+    {
+      "order": 4,
+      "id": "semantic-objects-and-editing",
+      "features": [
+        "KNO04",
+        "KNO05",
+        "KNO06",
+        "KNO07",
+        "KNO09",
+        "KNO10"
+      ],
+      "priority": "P1/P2",
+      "scope": "Relation editor, duplicate comparison, versioned structured requirements и terms; затем cross-links/projections поверх дерева.",
+      "acceptance": "Условия проходят round-trip, supports сохраняет направление/evidence, merge конфликтует после изменения target, независимая копия не меняет canonical object."
+    },
+    {
+      "order": 5,
+      "id": "research-and-grounded-synthesis",
+      "features": [
+        "EXT02",
+        "EXT04",
+        "EXT05",
+        "EXT06",
+        "EXT07",
+        "EXT08",
+        "AI01",
+        "AI02",
+        "AI04",
+        "AI05"
+      ],
+      "priority": "P2",
+      "scope": "Saved research scope/task versions, author hierarchy и summary support refs; понятный preview/resume, сохранение ответа с lineage. Существующую grouping не переименовывать в semantic merge.",
+      "acceptance": "Одинаковый frozen manifest, исключённые документы не попадают в prompt, scope виден; изменение supporting claim делает summary stale; нет потерянных исходных claims/citations."
+    },
+    {
+      "order": 6,
+      "id": "portable-native-contract",
+      "features": [
+        "TRU10",
+        "KNO08"
+      ],
+      "priority": "P1/P2",
+      "scope": "Версионированный native pack/sidecar для object identity, links, review/edit history и аннотаций; explicit copy/restore policy и privacy.",
+      "acceptance": "Контрольный round-trip сохраняет поддерживаемые IDs/provenance/stale; неподдерживаемое перечислено до apply; hosted artifact не содержит private paths."
+    },
+    {
+      "order": 7,
+      "id": "empirical-quality-gate",
+      "features": [
+        "EXT03",
+        "EXT04",
+        "EXT09",
+        "AI10"
+      ],
+      "priority": "P1",
+      "scope": "Held-out размеченные документы, baseline, qualifier/coverage/error метрики и opt-in сравнение configurations. Не использовать unit fixtures как доказательство качества или учебного эффекта.",
+      "acceptance": "Отчёт содержит frozen manifest, sample size, качество по типам, ограничения, время/budgets и обе конфигурации; learning pilot оценивается отдельно от extraction."
+    }
+  ]
+}

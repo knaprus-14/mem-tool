@@ -1,0 +1,6 @@
+
+Owner          : DESKTOP-VMSCDU5\ZMII
+AccessToString : DESKTOP-VMSCDU5\CodexSandboxUsers Allow  ReadAndExecute, Synchronize
+                 NT AUTHORITY\СИСТЕМА Allow  FullControl
+                 BUILTIN\Администраторы Allow  FullControl
+                 DESKTOP-VMSCDU5\ZMII Allow  FullControl

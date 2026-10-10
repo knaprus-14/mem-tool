@@ -1,0 +1,3194 @@
+[
+  {
+    "id": "SRC01",
+    "category": "SRC",
+    "label": "Источники и чтение",
+    "title": "Выбор документного корпуса",
+    "state": "есть",
+    "layer": "shared",
+    "priority": "P1",
+    "milestone": "M2",
+    "current": "Код библиотеки и выбора полных документов есть; wizard классической карты ограничен 20 документами и 512 chunks.",
+    "proposal": "Показывать состав, редакции и размер корпуса перед любой картой или исследовательским запуском.",
+    "acceptance": "Выбор трёх документов создаёт manifest с тремя IDs и редакциями; превышение лимита показано до запуска, скрытой выборки нет.",
+    "sources": [
+      "P19",
+      "P20"
+    ],
+    "code": [
+      "pkg/mem/web_map_from_sources.go",
+      "internal/webapp/assets/map-from-sources.js"
+    ],
+    "dependencies": [
+      "TRU03"
+    ],
+    "verification": "static_audit"
+  },
+  {
+    "id": "SRC02",
+    "category": "SRC",
+    "label": "Источники и чтение",
+    "title": "Связанный читатель и карта",
+    "state": "частично",
+    "layer": "shared",
+    "priority": "P1",
+    "milestone": "M2",
+    "current": "Есть переход к evidence и контексту; graph и classic используют разные панели источников.",
+    "proposal": "Синхронизировать выбор passage и объекта карты в двух панелях с явным выключением связи.",
+    "acceptance": "Клик по трём цитатам открывает соответствующие страницы; обратный клик по выделению выбирает те же объекты без смены редакции.",
+    "sources": [
+      "P02",
+      "P03",
+      "P14"
+    ],
+    "code": [
+      "pkg/mem/web_map_document.go",
+      "internal/webapp/assets/map-document.js",
+      "pkg/mem/graph_source.go"
+    ],
+    "dependencies": [
+      "KNO02",
+      "SRC03"
+    ],
+    "verification": "static_audit"
+  },
+  {
+    "id": "SRC03",
+    "category": "SRC",
+    "label": "Источники и чтение",
+    "title": "Сохраняемые текстовые аннотации",
+    "state": "частично",
+    "layer": "shared",
+    "priority": "P1",
+    "milestone": "M1",
+    "current": "Evidence хранит цитату и координаты chunk; отдельного общего объекта пользовательского highlight нет.",
+    "proposal": "Добавить аннотацию с quote/position selectors, автором и ссылкой на неизменяемую редакцию; подключить оба редактора адаптерами.",
+    "acceptance": "Выделенная фраза переживает перезапуск, открывается из classic и graph и не меняется при редактировании комментария.",
+    "sources": [
+      "T02",
+      "P01",
+      "P15"
+    ],
+    "code": [
+      "pkg/mem/graph.go",
+      "pkg/mem/mind_map_sources.go"
+    ],
+    "dependencies": [
+      "TRU03",
+      "KNO02"
+    ],
+    "verification": "static_audit"
+  },
+  {
+    "id": "SRC04",
+    "category": "SRC",
+    "label": "Источники и чтение",
+    "title": "Областные аннотации страницы",
+    "state": "нет",
+    "layer": "shared",
+    "priority": "P2",
+    "milestone": "M1",
+    "current": "В EvidenceAnchor нет геометрии выделенной области страницы; page preview уже существует.",
+    "proposal": "Сохранять прямоугольники в координатах страницы для формул, схем и таблиц вместе с текстовой подписью.",
+    "acceptance": "После масштабирования и повторного открытия 5 областей совпадают с исходными координатами; другая редакция помечает их устаревшими.",
+    "sources": [
+      "T02",
+      "P04",
+      "P12"
+    ],
+    "code": [
+      "pkg/mem/graph.go",
+      "pkg/mem/graph_source_preview.go"
+    ],
+    "dependencies": [
+      "SRC03",
+      "TRU03"
+    ],
+    "verification": "static_audit"
+  },
+  {
+    "id": "SRC05",
+    "category": "SRC",
+    "label": "Источники и чтение",
+    "title": "Проверенный визуальный оригинал",
+    "state": "есть",
+    "layer": "graph",
+    "priority": "P1",
+    "milestone": "M2",
+    "current": "Graph умеет PNG/PDF по проверенному snapshot; renderer ограничен timeout и concurrency. Сейчас визуально не проверялось.",
+    "proposal": "Дать classic тот же preview через адаптер и явные сообщения о недоступном renderer.",
+    "acceptance": "Одна формула открывается одинаково из graph и classic; изменённый PDF отклоняется, отсутствие renderer не даёт пустой успешный preview.",
+    "sources": [
+      "P12",
+      "P14"
+    ],
+    "code": [
+      "pkg/mem/graph_source_preview.go",
+      "pkg/ingest/pdf_preview.go",
+      "internal/webapp/assets/map-document.js"
+    ],
+    "dependencies": [
+      "SRC02",
+      "OPS09"
+    ],
+    "verification": "static_audit"
+  },
+  {
+    "id": "SRC06",
+    "category": "SRC",
+    "label": "Источники и чтение",
+    "title": "Таблицы как проверяемые объекты",
+    "state": "частично",
+    "layer": "shared",
+    "priority": "P2",
+    "milestone": "M3",
+    "current": "Текстовые chunks и визуальный оригинал доступны; отдельная модель строк, колонок и ячеек в аудите не найдена.",
+    "proposal": "Извлекать таблицу с координатами ячеек, единицами и ссылкой на область; разрешать ручную коррекцию.",
+    "acceptance": "На фиксированном наборе таблиц каждая экспортированная ячейка открывает оригинал; объединённые ячейки и ошибки OCR отмечены явно.",
+    "sources": [
+      "P12",
+      "T02"
+    ],
+    "code": [
+      "pkg/ingest/pdf.go",
+      "pkg/mem/graph.go"
+    ],
+    "dependencies": [
+      "SRC04",
+      "OPS02"
+    ],
+    "verification": "static_audit"
+  },
+  {
+    "id": "SRC07",
+    "category": "SRC",
+    "label": "Источники и чтение",
+    "title": "Формулы и обозначения",
+    "state": "частично",
+    "layer": "graph",
+    "priority": "P2",
+    "milestone": "M3",
+    "current": "Тип formula и визуальный preview есть; структурированного разбора переменных, единиц и вычислительной проверки нет.",
+    "proposal": "Добавить необязательные поля обозначений и единиц, сохраняя оригинал как основание; отделить распознавание от проверки.",
+    "acceptance": "Для 10 размеченных формул доступны оригинал и разбор; непроверенные преобразования не маркируются вычислительно подтверждёнными.",
+    "sources": [
+      "P12",
+      "T02"
+    ],
+    "code": [
+      "pkg/mem/graph.go",
+      "pkg/mem/graph_source_preview.go"
+    ],
+    "dependencies": [
+      "SRC04",
+      "OPS02"
+    ],
+    "verification": "static_audit"
+  },
+  {
+    "id": "SRC08",
+    "category": "SRC",
+    "label": "Источники и чтение",
+    "title": "Проблемы извлечения текста и OCR",
+    "state": "частично",
+    "layer": "shared",
+    "priority": "P1",
+    "milestone": "M0",
+    "current": "Coverage учитывает OCR warnings и текст; успешный импорт не доказывает правильность формул и структуры.",
+    "proposal": "Связать предупреждения с точными страницами и исключать непроверенные проблемные области из утверждения о полном покрытии.",
+    "acceptance": "Fixture с пустой и испорченной OCR-страницей показывает обе проблемы и знаменатель покрытия; кнопка ведёт к нужному оригиналу.",
+    "sources": [
+      "P14",
+      "T03"
+    ],
+    "code": [
+      "pkg/mem/graph_coverage.go",
+      "pkg/ingest/document.go",
+      "pkg/ingest/pdf.go"
+    ],
+    "dependencies": [
+      "OPS04"
+    ],
+    "verification": "static_audit"
+  },
+  {
+    "id": "SRC09",
+    "category": "SRC",
+    "label": "Источники и чтение",
+    "title": "Печатные и физические номера страниц",
+    "state": "нет",
+    "layer": "shared",
+    "priority": "P2",
+    "milestone": "M2",
+    "current": "Сохраняется физическая страница; автоматическое соответствие печатной нумерации книги в audited-контуре отсутствует.",
+    "proposal": "Ввести проверяемую таблицу соответствия с ручной коррекцией и отдельными названиями обоих номеров.",
+    "acceptance": "На PDF с титулом и римским введением цитата хранит physical page, показывает printed label и открывается без смещения.",
+    "sources": [
+      "P14",
+      "T02"
+    ],
+    "code": [
+      "pkg/mem/graph.go",
+      "pkg/mem/web_map_document.go"
+    ],
+    "dependencies": [
+      "SRC03"
+    ],
+    "verification": "static_audit"
+  },
+  {
+    "id": "SRC10",
+    "category": "SRC",
+    "label": "Источники и чтение",
+    "title": "Рабочий набор открытых документов",
+    "state": "нет",
+    "layer": "shared",
+    "priority": "P2",
+    "milestone": "M2",
+    "current": "Можно открывать отдельные источники; постоянный набор вкладок и сопоставление нескольких passages в общем reader не найдены.",
+    "proposal": "Сохранять документы, страницы и сопоставленные выдержки как пользовательское рабочее пространство.",
+    "acceptance": "После перезапуска восстанавливаются три документа и позиции; изменение одной редакции не подменяет сохранённую выдержку новой.",
+    "sources": [
+      "P03",
+      "P19"
+    ],
+    "code": [
+      "internal/webapp/assets/map-document.js",
+      "pkg/mem/graph_source.go"
+    ],
+    "dependencies": [
+      "SRC02",
+      "NAV07"
+    ],
+    "verification": "static_audit"
+  },
+  {
+    "id": "TRU01",
+    "category": "TRU",
+    "label": "Происхождение и редакции",
+    "title": "Завершённость обработки по точной редакции",
+    "state": "риск",
+    "layer": "graph",
+    "priority": "P1",
+    "milestone": "M0",
+    "current": "Изолированный probe воспроизвёл: после 5→9 bar новый текст не анализируется, completed сохраняется по стабильному citation_id.",
+    "proposal": "Привязать ledger chunks/windows к редакции и hash точного входа; мигрировать старые записи без ложной завершённости.",
+    "acceptance": "Probe reimport вызывает provider повторно, создаёт generated evidence новой редакции и показывает pending до завершения второго прохода.",
+    "sources": [
+      "T03"
+    ],
+    "code": [
+      "pkg/mem/graph_document.go",
+      "pkg/mem/search.go"
+    ],
+    "dependencies": [],
+    "verification": "reproduced_probe_report"
+  },
+  {
+    "id": "TRU02",
+    "category": "TRU",
+    "label": "Происхождение и редакции",
+    "title": "Source fragment соответствует редакции",
+    "state": "риск",
+    "layer": "graph",
+    "priority": "P1",
+    "milestone": "M0",
+    "current": "Тот же probe получил current sections=0, stale=1: fragment ID и existence-check сохраняют старый body/evidence.",
+    "proposal": "Версионировать идентичность source fragment и contains по точному источнику, сохраняя историю и ручные заметки.",
+    "acceptance": "После reimport новая root содержит current section с 9 bar; прежний 5 bar доступен как история, ручная заметка не потеряна.",
+    "sources": [
+      "T03"
+    ],
+    "code": [
+      "pkg/mem/graph_document.go",
+      "pkg/mem/document_update.go"
+    ],
+    "dependencies": [],
+    "verification": "reproduced_probe_report"
+  },
+  {
+    "id": "TRU03",
+    "category": "TRU",
+    "label": "Происхождение и редакции",
+    "title": "Единый контракт evidence anchors",
+    "state": "есть",
+    "layer": "shared",
+    "priority": "P1",
+    "milestone": "M0",
+    "current": "Оба слоя хранят document/revision/chunk/evidence hashes, страницу и excerpt; наличие кода не равно проверке всего корпуса.",
+    "proposal": "Закрепить общий resolver и контракт current/stale/missing для новых аннотаций и всех UI через адаптеры.",
+    "acceptance": "Одинаковый anchor возвращает одинаковое состояние в classic и graph до update, после update, удаления источника и restore.",
+    "sources": [
+      "T02",
+      "T03"
+    ],
+    "code": [
+      "pkg/mem/graph.go",
+      "pkg/mem/mind_map_sources.go",
+      "pkg/mem/graph_source.go"
+    ],
+    "dependencies": [
+      "TRU01",
+      "TRU02"
+    ],
+    "verification": "static_audit"
+  },
+  {
+    "id": "TRU04",
+    "category": "TRU",
+    "label": "Происхождение и редакции",
+    "title": "Карта влияния новой редакции",
+    "state": "есть",
+    "layer": "graph",
+    "priority": "P1",
+    "milestone": "M1",
+    "current": "Графовый revision diff уже классифицирует current/changed/missing evidence и затронутые объекты.",
+    "proposal": "Показывать последствия для карт, review и учебных карточек в общем документном экране.",
+    "acceptance": "Изменение одной цитаты перечисляет только зависимые объекты и учебные элементы; неизменённые ссылки сохраняют прежний статус.",
+    "sources": [
+      "T03",
+      "P15"
+    ],
+    "code": [
+      "pkg/mem/graph_revision_diff.go",
+      "pkg/mem/graph_learning_session.go"
+    ],
+    "dependencies": [
+      "TRU03",
+      "KNO02"
+    ],
+    "verification": "static_audit"
+  },
+  {
+    "id": "TRU05",
+    "category": "TRU",
+    "label": "Происхождение и редакции",
+    "title": "Решение review закрепляет видимый текст",
+    "state": "есть",
+    "layer": "graph",
+    "priority": "P1",
+    "milestone": "M0",
+    "current": "Review pin включает содержимое, evidence и endpoints ребра; tests есть, в исследовании повторно не запускались.",
+    "proposal": "Сохранить контракт при новых редакторах, batch-операциях и миграциях; показывать причину отказа при конфликте.",
+    "acceptance": "Одобрение из старой вкладки после изменения label/body/edge endpoint получает conflict; ни один статус и audit batch не записан частично.",
+    "sources": [
+      "T03",
+      "P23"
+    ],
+    "code": [
+      "pkg/mem/graph_review_pin.go",
+      "pkg/mem/graph_review_test.go",
+      "pkg/mem/graph_review_pin_test.go"
+    ],
+    "dependencies": [],
+    "verification": "static_audit"
+  },
+  {
+    "id": "TRU06",
+    "category": "TRU",
+    "label": "Происхождение и редакции",
+    "title": "Исторический corpus restore",
+    "state": "есть",
+    "layer": "graph",
+    "priority": "P1",
+    "milestone": "M2",
+    "current": "CLI snapshots/corpus-diff/restore/restore-runs уже имеет plan, digest и rollback; полноценного браузерного мастера нет.",
+    "proposal": "Открыть существующий restore через UI с точной областью воздействия и предупреждением об отсутствующем физическом оригинале.",
+    "acceptance": "Пользователь видит plan до apply; изменение базы делает plan недействительным; rollback возвращает состояние без потери audit.",
+    "sources": [
+      "T03",
+      "P11"
+    ],
+    "code": [
+      "pkg/mem/document_restore.go",
+      "cmd/mem/commands_map.go"
+    ],
+    "dependencies": [
+      "TRU01",
+      "TRU02",
+      "TRU04"
+    ],
+    "verification": "static_audit"
+  },
+  {
+    "id": "TRU07",
+    "category": "TRU",
+    "label": "Происхождение и редакции",
+    "title": "Просмотр и восстановление снимка classic",
+    "state": "частично",
+    "layer": "classic",
+    "priority": "P1",
+    "milestone": "M2",
+    "current": "Snapshot create/list есть, произвольного restore snapshot в UI/CLI нет; restore карты сейчас означает корзину.",
+    "proposal": "Добавить read-only preview, diff и атомарное восстановление снимка как новое изменение истории.",
+    "acceptance": "Восстановление снимка N создаёт новую ревизию, возвращает nodes/sources и отменяется undo; устаревший expected revision отклоняется.",
+    "sources": [
+      "P11",
+      "T03"
+    ],
+    "code": [
+      "pkg/mem/mind_map.go",
+      "pkg/mem/web_map_snapshots.go",
+      "internal/webapp/assets/map-library.js"
+    ],
+    "dependencies": [
+      "OPS01",
+      "TRU03"
+    ],
+    "verification": "static_audit"
+  },
+  {
+    "id": "TRU08",
+    "category": "TRU",
+    "label": "Происхождение и редакции",
+    "title": "Происхождение вывода и преобразований",
+    "state": "частично",
+    "layer": "shared",
+    "priority": "P1",
+    "milestone": "M1",
+    "current": "Есть origin, derived_from, генерационные runs и audit; единого читаемого пути от цитаты через преобразование к выводу нет.",
+    "proposal": "Представлять цепочку source→extract→human edit→review→learning/export без обязательной смены хранилища на RDF.",
+    "acceptance": "У выбранного вывода доступны источник, run/model/settings, ручные изменения и review; недостающие исторические поля помечены неизвестными.",
+    "sources": [
+      "T03",
+      "L15"
+    ],
+    "code": [
+      "pkg/mem/graph.go",
+      "pkg/mem/mind_map_ai.go",
+      "pkg/mem/graph_review.go"
+    ],
+    "dependencies": [
+      "KNO02",
+      "TRU03"
+    ],
+    "verification": "static_audit"
+  },
+  {
+    "id": "TRU09",
+    "category": "TRU",
+    "label": "Происхождение и редакции",
+    "title": "Предложение перепривязки stale-аннотации",
+    "state": "нет",
+    "layer": "shared",
+    "priority": "P2",
+    "milestone": "M1",
+    "current": "Stale показывается; автоматическое предложение нового текстового/пространственного target с подтверждением не найдено.",
+    "proposal": "Предлагать кандидатов reanchor по quote/context и геометрии, оставляя старый anchor неизменяемым до решения.",
+    "acceptance": "После вставки абзаца находится единственный точный кандидат; при двух совпадениях обязательный выбор; история содержит оба anchors.",
+    "sources": [
+      "T02",
+      "P15"
+    ],
+    "code": [
+      "pkg/mem/graph_revision_diff.go",
+      "pkg/mem/graph.go"
+    ],
+    "dependencies": [
+      "SRC03",
+      "TRU04"
+    ],
+    "verification": "static_audit"
+  },
+  {
+    "id": "TRU10",
+    "category": "TRU",
+    "label": "Происхождение и редакции",
+    "title": "Сохранение provenance при обмене",
+    "state": "есть",
+    "layer": "shared",
+    "priority": "P1",
+    "milestone": "M5",
+    "current": "Экспорты classic и graph уже несут canonical provenance; hosted-режим скрывает локальные пути.",
+    "proposal": "Определить версионированный переносимый sidecar для форматов, не вмещающих anchors и review.",
+    "acceptance": "Экспорт/импорт контрольной карты сохраняет IDs, источники и stale; неподдерживаемые поля перечислены, приватный путь не появляется в hosted artifact.",
+    "sources": [
+      "T01",
+      "T02",
+      "T03"
+    ],
+    "code": [
+      "pkg/mem/mind_map_export.go",
+      "pkg/mem/graph_portable_export.go",
+      "pkg/mem/web_map_manage.go"
+    ],
+    "dependencies": [
+      "KNO08",
+      "EXP02"
+    ],
+    "verification": "static_audit"
+  },
+  {
+    "id": "EXT01",
+    "category": "EXT",
+    "label": "Извлечение и синтез",
+    "title": "Полное текстовое основание документа",
+    "state": "частично",
+    "layer": "graph",
+    "priority": "P1",
+    "milestone": "M0",
+    "current": "Full-document pipeline публикует все source chunks, но обновление редакции нарушено двумя воспроизведёнными дефектами.",
+    "proposal": "Сделать публикацию полного source graph проверяемым этапом перед семантическим обогащением.",
+    "acceptance": "Без модели число current source sections соответствует плану; после reimport нет sections старой редакции в current-представлении.",
+    "sources": [
+      "T03",
+      "P19"
+    ],
+    "code": [
+      "pkg/mem/graph_document.go",
+      "pkg/mem/graph_coverage.go"
+    ],
+    "dependencies": [
+      "TRU01",
+      "TRU02"
+    ],
+    "verification": "static_audit"
+  },
+  {
+    "id": "EXT02",
+    "category": "EXT",
+    "label": "Извлечение и синтез",
+    "title": "Восстановление авторской структуры",
+    "state": "частично",
+    "layer": "shared",
+    "priority": "P1",
+    "milestone": "M3",
+    "current": "Document tree есть; source sections соответствуют техническим chunks, не гарантированным главам и параграфам автора.",
+    "proposal": "Извлекать оглавление, заголовки, подпункты и приложения с явной уверенностью и ручным исправлением.",
+    "acceptance": "На размеченных книгах отчёт показывает precision/recall границ разделов; неверный OCR-заголовок можно исправить без потери цитат.",
+    "sources": [
+      "P19",
+      "P20"
+    ],
+    "code": [
+      "pkg/mem/graph_document.go",
+      "pkg/ingest/document.go"
+    ],
+    "dependencies": [
+      "OPS02",
+      "SRC03"
+    ],
+    "verification": "static_audit"
+  },
+  {
+    "id": "EXT03",
+    "category": "EXT",
+    "label": "Извлечение и синтез",
+    "title": "Условия и исключения требований",
+    "state": "есть",
+    "layer": "graph",
+    "priority": "P1",
+    "milestone": "M3",
+    "current": "Claim/constraint/procedure получают statement, conditions, exceptions, limits с точными цитатами; поля материализуются в body.",
+    "proposal": "Сохранить qualifiers при синтезе и экспорте и показывать неполное извлечение вместо утверждения об отсутствии условий.",
+    "acceptance": "Набор с отрицанием, диапазоном и исключением не теряет ни одну размеченную часть; изменение числа/единицы не принимается как нормализация.",
+    "sources": [
+      "L15",
+      "T03"
+    ],
+    "code": [
+      "pkg/mem/graph_requirement.go",
+      "pkg/mem/graph_requirement_test.go",
+      "pkg/mem/graph_labeled_requirements_test.go"
+    ],
+    "dependencies": [
+      "OPS02",
+      "KNO09"
+    ],
+    "verification": "static_audit"
+  },
+  {
+    "id": "EXT04",
+    "category": "EXT",
+    "label": "Извлечение и синтез",
+    "title": "Глобальное объединение тем после AI-пакетов",
+    "state": "частично",
+    "layer": "classic",
+    "priority": "P1",
+    "milestone": "M3",
+    "current": "Пакеты генерируются независимо; reducer объединяет предложения без смыслового слияния тем для expand.",
+    "proposal": "Добавить отдельный этап тематического синтеза с сохранением ссылок каждого исходного предложения и ручной проверкой.",
+    "acceptance": "На корпусе из трёх документов повторяющиеся темы объединены в проверяемый план; отчёт показывает потерянные/перенесённые claims и citations.",
+    "sources": [
+      "L15",
+      "P19",
+      "T04"
+    ],
+    "code": [
+      "pkg/mem/mind_map_ai.go",
+      "pkg/mem/web_map_from_sources.go"
+    ],
+    "dependencies": [
+      "OPS02",
+      "KNO02",
+      "TRU08"
+    ],
+    "verification": "static_audit"
+  },
+  {
+    "id": "EXT05",
+    "category": "EXT",
+    "label": "Извлечение и синтез",
+    "title": "Разрешение одинаковых понятий корпуса",
+    "state": "частично",
+    "layer": "graph",
+    "priority": "P1",
+    "milestone": "M3",
+    "current": "Есть candidates/merge и визуальное схлопывание отдельных topic mentions; глобального entity resolution нет.",
+    "proposal": "Предлагать канонические понятия по определению, контексту и документам, не сливая омонимы автоматически.",
+    "acceptance": "Набор с синонимом и омонимом даёт отдельные объяснённые предложения; неподтверждённое слияние не меняет исходные объекты.",
+    "sources": [
+      "P16",
+      "L01",
+      "L15"
+    ],
+    "code": [
+      "pkg/mem/graph_duplicates.go",
+      "pkg/mem/web/knowledgeTopics.js"
+    ],
+    "dependencies": [
+      "KNO07",
+      "OPS02"
+    ],
+    "verification": "static_audit"
+  },
+  {
+    "id": "EXT06",
+    "category": "EXT",
+    "label": "Извлечение и синтез",
+    "title": "Извлечение под исследовательский вопрос",
+    "state": "частично",
+    "layer": "shared",
+    "priority": "P1",
+    "milestone": "M3",
+    "current": "Есть prompt/focus, scoped extraction и corpus selection; вопрос и критерии включения не оформлены как общий сохранённый проект.",
+    "proposal": "Хранить focus question, состав корпуса и критерии релевантности отдельно от конкретного запуска модели.",
+    "acceptance": "Два запуска с одним сохранённым вопросом имеют сопоставимые manifests; исключённый документ не попадает в prompts или выводы.",
+    "sources": [
+      "L01",
+      "P19",
+      "P05"
+    ],
+    "code": [
+      "pkg/mem/graph_extract_plan.go",
+      "pkg/mem/web_map_from_sources.go",
+      "pkg/mem/mind_map_ai.go"
+    ],
+    "dependencies": [
+      "KNO02",
+      "SRC01",
+      "AI01"
+    ],
+    "verification": "static_audit"
+  },
+  {
+    "id": "EXT07",
+    "category": "EXT",
+    "label": "Извлечение и синтез",
+    "title": "Проверяемые многоуровневые сводки",
+    "state": "частично",
+    "layer": "shared",
+    "priority": "P1",
+    "milestone": "M3",
+    "current": "Summary/body и обзорные темы есть; отдельного контракта сводки главы→документа→корпуса с coverage нет.",
+    "proposal": "Строить сводки через выбранные подтверждённые объекты, показывая источники и пропущенные разделы на каждом уровне.",
+    "acceptance": "Любое предложение сводки открывает подтверждения; при удалении supporting claim сводка становится stale и не считается актуальной.",
+    "sources": [
+      "P20",
+      "L15",
+      "T04"
+    ],
+    "code": [
+      "pkg/mem/mind_map_ai.go",
+      "pkg/mem/graph.go"
+    ],
+    "dependencies": [
+      "EXT02",
+      "EXT04",
+      "TRU08"
+    ],
+    "verification": "static_audit"
+  },
+  {
+    "id": "EXT08",
+    "category": "EXT",
+    "label": "Извлечение и синтез",
+    "title": "План извлечения и возобновление",
+    "state": "есть",
+    "layer": "graph",
+    "priority": "P1",
+    "milestone": "M0",
+    "current": "Extract имеет детерминированный план, checkpoints, dry-run и resume с проверкой evidence/settings.",
+    "proposal": "Показать тот же план и причины невозможности resume в документном UI; унифицировать с полным разбором через адаптер.",
+    "acceptance": "Остановка после второго batch и повтор продолжают только незавершённые части; новая редакция или настройки требуют нового плана.",
+    "sources": [
+      "T03",
+      "P19"
+    ],
+    "code": [
+      "pkg/mem/graph_extract_plan.go",
+      "pkg/mem/graph_extract_run.go",
+      "pkg/mem/graph_extract_execution.go"
+    ],
+    "dependencies": [
+      "TRU01",
+      "TRU02"
+    ],
+    "verification": "static_audit"
+  },
+  {
+    "id": "EXT09",
+    "category": "EXT",
+    "label": "Извлечение и синтез",
+    "title": "Уверенность с проверяемой интерпретацией",
+    "state": "нет",
+    "layer": "shared",
+    "priority": "P2",
+    "milestone": "M3",
+    "current": "Confidence хранится, но не является откалиброванной вероятностью правильности утверждения.",
+    "proposal": "Разделить score модели, качество extraction и человеческое решение; калибровку вводить только по размеченному набору.",
+    "acceptance": "UI не показывает score как процент истинности; отчёт калибровки содержит размер выборки, bins и ошибки на отложенном корпусе.",
+    "sources": [
+      "L15",
+      "T04"
+    ],
+    "code": [
+      "pkg/mem/graph.go",
+      "pkg/mem/graph_labeled_eval.go"
+    ],
+    "dependencies": [
+      "OPS02"
+    ],
+    "verification": "static_audit"
+  },
+  {
+    "id": "EXT10",
+    "category": "EXT",
+    "label": "Извлечение и синтез",
+    "title": "Человеческая правка предложенной структуры",
+    "state": "есть",
+    "layer": "graph",
+    "priority": "P1",
+    "milestone": "M2",
+    "current": "Граф поддерживает guarded edit/review и защиту manual content; classic предлагает выбор AI-proposals.",
+    "proposal": "Дать общий шаг приёмки extraction с отклонением, переносом и объяснением ручной правки перед публикацией.",
+    "acceptance": "Правка предложения не переписывает цитату; повторная генерация сохраняет manual node, а конфликт review требует обновить просмотр.",
+    "sources": [
+      "P01",
+      "P23",
+      "L01"
+    ],
+    "code": [
+      "pkg/mem/graph_edit.go",
+      "pkg/mem/graph_review.go",
+      "pkg/mem/mind_map_ai.go"
+    ],
+    "dependencies": [
+      "TRU05",
+      "EDT10"
+    ],
+    "verification": "static_audit"
+  },
+  {
+    "id": "KNO01",
+    "category": "KNO",
+    "label": "Модель знаний",
+    "title": "Типизированные объекты знаний",
+    "state": "есть",
+    "layer": "graph",
+    "priority": "P1",
+    "milestone": "M1",
+    "current": "В графе реализованы 23 вида узлов и различение source/generated/manual; classic имеет 9 типов дерева.",
+    "proposal": "Опубликовать общий словарь типов и адаптеры отображения, сохраняя исходные типы без массового переписывания данных.",
+    "acceptance": "Экспорт словаря покрывает все текущие типы; неизвестный тип в старом клиенте отображается безопасно и не теряется при сохранении.",
+    "sources": [
+      "L02",
+      "P17"
+    ],
+    "code": [
+      "pkg/mem/graph.go",
+      "pkg/mem/mind_map.go"
+    ],
+    "dependencies": [
+      "KNO08"
+    ],
+    "verification": "static_audit"
+  },
+  {
+    "id": "KNO02",
+    "category": "KNO",
+    "label": "Модель знаний",
+    "title": "Общие адресуемые объекты через адаптеры",
+    "state": "частично",
+    "layer": "shared",
+    "priority": "P1",
+    "milestone": "M1",
+    "current": "Есть устойчивые IDs внутри слоёв и ссылки classic→knowledge_node, но не общий контракт пользовательского объекта.",
+    "proposal": "Ввести object reference и resolver поверх существующих таблиц; переводить UI и аннотации поэтапно, без rewrite обеих моделей.",
+    "acceptance": "Один graph claim открыт из дерева, reader и карточки по reference; legacy IDs и данные остаются читаемыми без полного пересоздания.",
+    "sources": [
+      "P16",
+      "P22",
+      "T03"
+    ],
+    "code": [
+      "pkg/mem/mind_map.go",
+      "pkg/mem/graph.go",
+      "pkg/mem/web_map_attachments.go"
+    ],
+    "dependencies": [
+      "TRU03"
+    ],
+    "verification": "static_audit"
+  },
+  {
+    "id": "KNO03",
+    "category": "KNO",
+    "label": "Модель знаний",
+    "title": "Разделение цитаты и авторской мысли",
+    "state": "частично",
+    "layer": "shared",
+    "priority": "P1",
+    "milestone": "M1",
+    "current": "Source/excerpt и body/origin разделены, но общей пользовательской карточки excerpt+comment для обоих слоёв нет.",
+    "proposal": "Связать неизменяемую аннотацию и редактируемую заметку как разные объекты с явным происхождением.",
+    "acceptance": "Изменение собственной заметки не меняет excerpt/hash; генеративное дополнение помечается отдельно от текста источника.",
+    "sources": [
+      "P01",
+      "P03",
+      "T02"
+    ],
+    "code": [
+      "pkg/mem/mind_map.go",
+      "pkg/mem/graph_workspace.go"
+    ],
+    "dependencies": [
+      "KNO02",
+      "SRC03"
+    ],
+    "verification": "static_audit"
+  },
+  {
+    "id": "KNO04",
+    "category": "KNO",
+    "label": "Модель знаний",
+    "title": "Именованные смысловые отношения",
+    "state": "есть",
+    "layer": "graph",
+    "priority": "P1",
+    "milestone": "M1",
+    "current": "В графе 23 relation kinds, включая supports/contradicts/prerequisite/causes; это хранимая семантика.",
+    "proposal": "Сделать словарь отношений доступным из интегрированного редактора и отделить его от визуальных линий.",
+    "acceptance": "Пользователь создаёт supports с evidence; смена цвета линии не меняет relation kind, экспорт сохраняет направление и тип.",
+    "sources": [
+      "L01",
+      "L02",
+      "P17"
+    ],
+    "code": [
+      "pkg/mem/graph.go",
+      "pkg/mem/graph_edit.go"
+    ],
+    "dependencies": [
+      "KNO02"
+    ],
+    "verification": "static_audit"
+  },
+  {
+    "id": "KNO05",
+    "category": "KNO",
+    "label": "Модель знаний",
+    "title": "Поперечные связи классической карты",
+    "state": "нет",
+    "layer": "classic",
+    "priority": "P2",
+    "milestone": "M2",
+    "current": "Classic — single-parent tree, произвольных cross-links в его модели нет; knowledge_node source не заменяет их.",
+    "proposal": "Добавить необязательные ссылки между объектами поверх дерева через адаптер, не ломая outline и существующий parent.",
+    "acceptance": "Cross-link связывает две ветви с подписью, не создаёт цикл parent; OPML сохраняет дерево и перечисляет связь в sidecar.",
+    "sources": [
+      "P08",
+      "L01",
+      "L02"
+    ],
+    "code": [
+      "pkg/mem/mind_map.go",
+      "pkg/mem/mind_map_export.go"
+    ],
+    "dependencies": [
+      "KNO02",
+      "KNO04"
+    ],
+    "verification": "static_audit"
+  },
+  {
+    "id": "KNO06",
+    "category": "KNO",
+    "label": "Модель знаний",
+    "title": "Один объект в нескольких картах",
+    "state": "частично",
+    "layer": "shared",
+    "priority": "P1",
+    "milestone": "M1",
+    "current": "Graph views переиспользуют объекты; classic duplicate создаёт независимую копию, shared-object projection не оформлен.",
+    "proposal": "Поддержать ссылки и проекции одного объекта в разных деревьях/досках с явным режимом «ссылка» или «копия».",
+    "acceptance": "Редактирование canonical note видно в двух проекциях; редактирование независимой копии не меняет исходный объект.",
+    "sources": [
+      "P16",
+      "P18",
+      "P06"
+    ],
+    "code": [
+      "pkg/mem/graph_layout.go",
+      "pkg/mem/web_map_duplicate.go",
+      "pkg/mem/mind_map.go"
+    ],
+    "dependencies": [
+      "KNO02"
+    ],
+    "verification": "static_audit"
+  },
+  {
+    "id": "KNO07",
+    "category": "KNO",
+    "label": "Модель знаний",
+    "title": "Контролируемое объединение дубликатов",
+    "state": "есть",
+    "layer": "graph",
+    "priority": "P1",
+    "milestone": "M3",
+    "current": "Duplicates/merge-node/merges уже реализованы с pins, аудитом и инвалидированием при изменении target.",
+    "proposal": "Добавить интерфейс сравнения кандидатов и показ переноса источников/связей до применения существующего merge.",
+    "acceptance": "Изменение target после preview блокирует merge; подтверждённое объединение сохраняет все источники и запись о происхождении.",
+    "sources": [
+      "P16",
+      "T03"
+    ],
+    "code": [
+      "pkg/mem/graph_duplicates.go",
+      "pkg/mem/graph_duplicates_test.go"
+    ],
+    "dependencies": [
+      "TRU05",
+      "EDT10"
+    ],
+    "verification": "static_audit"
+  },
+  {
+    "id": "KNO08",
+    "category": "KNO",
+    "label": "Модель знаний",
+    "title": "Версионированные контракты и миграции",
+    "state": "частично",
+    "layer": "shared",
+    "priority": "P1",
+    "milestone": "M1",
+    "current": "Есть schema/version миграции и portable documents; общей схемы новых annotations/object refs ещё нет.",
+    "proposal": "Добавлять версии адаптеров и поэтапные миграции с read compatibility, без смены всех IDs и обязательного переизвлечения.",
+    "acceptance": "Старые fixtures обеих моделей открываются после миграции; прерванная миграция откатывается, новые поля не портят legacy exports.",
+    "sources": [
+      "T01",
+      "T02",
+      "T03"
+    ],
+    "code": [
+      "pkg/mem/mind_map.go",
+      "pkg/mem/graph.go",
+      "pkg/mem/store.go"
+    ],
+    "dependencies": [
+      "TRU03"
+    ],
+    "verification": "static_audit"
+  },
+  {
+    "id": "KNO09",
+    "category": "KNO",
+    "label": "Модель знаний",
+    "title": "Структурированные нормативные требования",
+    "state": "частично",
+    "layer": "graph",
+    "priority": "P1",
+    "milestone": "M3",
+    "current": "Statement/conditions/exceptions/limits валидируются, но затем материализуются в body, без отдельной схемы хранения.",
+    "proposal": "Сохранить структурированные части как версионированное расширение объекта с anchors для каждой части.",
+    "acceptance": "Требование с двумя условиями и исключением проходит round-trip без потери структуры; legacy body остаётся доступным.",
+    "sources": [
+      "L15",
+      "T03"
+    ],
+    "code": [
+      "pkg/mem/graph_requirement.go",
+      "pkg/mem/graph.go"
+    ],
+    "dependencies": [
+      "KNO08",
+      "TRU03"
+    ],
+    "verification": "static_audit"
+  },
+  {
+    "id": "KNO10",
+    "category": "KNO",
+    "label": "Модель знаний",
+    "title": "Определения, синонимы и аббревиатуры",
+    "state": "частично",
+    "layer": "graph",
+    "priority": "P2",
+    "milestone": "M3",
+    "current": "Definition есть, Topics раскрывает только однозначное явное название (ABC) в той же редакции.",
+    "proposal": "Вести проверяемые alias/term relations с областью документа и редакции; не объявлять похожие слова синонимами без основания.",
+    "acceptance": "Две разные расшифровки одной аббревиатуры не сливаются; каждая alias-связь открывает определение и область применимости.",
+    "sources": [
+      "L01",
+      "P21"
+    ],
+    "code": [
+      "pkg/mem/graph.go",
+      "pkg/mem/web/knowledgeTopics.js"
+    ],
+    "dependencies": [
+      "KNO04",
+      "EXT05"
+    ],
+    "verification": "static_audit"
+  },
+  {
+    "id": "EDT01",
+    "category": "EDT",
+    "label": "Редактор",
+    "title": "Ручное редактирование дерева",
+    "state": "есть",
+    "layer": "classic",
+    "priority": "P1",
+    "milestone": "M2",
+    "current": "Add/edit/move/delete/promote children, порядок и locked узлы реализованы с историей и revision checks.",
+    "proposal": "Сохранить эти операции в едином редакторе и показать результат переноса до отправки.",
+    "acceptance": "Перенос ветви сохраняет порядок и источники; попытка переноса в собственного потомка отклоняется без изменения ревизии.",
+    "sources": [
+      "P07",
+      "P11"
+    ],
+    "code": [
+      "pkg/mem/mind_map.go",
+      "pkg/mem/web_map_actions.go",
+      "internal/webapp/assets/map-actions.js"
+    ],
+    "dependencies": [
+      "EDT10",
+      "OPS01"
+    ],
+    "verification": "static_audit"
+  },
+  {
+    "id": "EDT02",
+    "category": "EDT",
+    "label": "Редактор",
+    "title": "Читаемые заметки и безопасный Markdown",
+    "state": "частично",
+    "layer": "shared",
+    "priority": "P1",
+    "milestone": "M2",
+    "current": "Body Markdown хранится, integrated classic выводит его текстом; rich-text редактор и единый preview отсутствуют.",
+    "proposal": "Добавить безопасный preview Markdown, ссылки на объекты и удобное разделение summary/подробностей.",
+    "acceptance": "Список, формула как оригинальная область и внутренний линк отображаются; HTML/script из документа не выполняется, исходный текст сохраняется.",
+    "sources": [
+      "P01",
+      "P06"
+    ],
+    "code": [
+      "pkg/mem/mind_map.go",
+      "internal/webapp/assets/app.js",
+      "pkg/mem/graph_edit.go"
+    ],
+    "dependencies": [
+      "KNO02",
+      "AI09"
+    ],
+    "verification": "static_audit"
+  },
+  {
+    "id": "EDT03",
+    "category": "EDT",
+    "label": "Редактор",
+    "title": "Полная клавиатурная работа",
+    "state": "частично",
+    "layer": "shared",
+    "priority": "P1",
+    "milestone": "M2",
+    "current": "Есть Enter/Space/стрелки для classic nodes и отдельные shortcuts; полного browser accessibility audit нет.",
+    "proposal": "Определить фокус, shortcut help и keyboard-пути для создания, перемещения, источников, review и выхода из диалогов.",
+    "acceptance": "Все основные сценарии выполняются без мыши; фокус возвращается на инициатор, ни в одном модальном окне нет клавиатурной ловушки.",
+    "sources": [
+      "T05",
+      "L14"
+    ],
+    "code": [
+      "internal/webapp/assets/app.js",
+      "internal/webapp/assets/map-resize.js",
+      "pkg/mem/web/classicMindMapWorkspaceHTML.html"
+    ],
+    "dependencies": [
+      "EDT10"
+    ],
+    "verification": "static_audit"
+  },
+  {
+    "id": "EDT04",
+    "category": "EDT",
+    "label": "Редактор",
+    "title": "Перемещение без обязательного drag-and-drop",
+    "state": "есть",
+    "layer": "classic",
+    "priority": "P1",
+    "milestone": "M2",
+    "current": "Legacy editor имеет drag/drop, integrated editor — форму выбора parent/position.",
+    "proposal": "Унифицировать понятную альтернативу перетаскиванию и предварительный показ нового положения.",
+    "acceptance": "Одинаковый перенос через drag и форму даёт одинаковую структуру; single-pointer путь не требует удерживать кнопку при движении.",
+    "sources": [
+      "T05",
+      "P07"
+    ],
+    "code": [
+      "internal/webapp/assets/map-actions.js",
+      "pkg/mem/web/classicMindMapWorkspaceHTML.html"
+    ],
+    "dependencies": [
+      "EDT01"
+    ],
+    "verification": "static_audit"
+  },
+  {
+    "id": "EDT05",
+    "category": "EDT",
+    "label": "Редактор",
+    "title": "Оформление и смысловые границы ветвей",
+    "state": "частично",
+    "layer": "classic",
+    "priority": "P3",
+    "milestone": "M6",
+    "current": "Есть kind colors и поле style JSON, но нет пользовательского полного style editor, boundaries и summary groups.",
+    "proposal": "Добавить ограниченные стили и визуальные группировки отдельно от семантических типов/связей.",
+    "acceptance": "Изменение оформления не меняет evidence/review; группа сохраняется и экспортируется с читаемым fallback в outline.",
+    "sources": [
+      "P07",
+      "P10"
+    ],
+    "code": [
+      "pkg/mem/mind_map.go",
+      "internal/webapp/assets/map-layout.js"
+    ],
+    "dependencies": [
+      "KNO08",
+      "NAV08"
+    ],
+    "verification": "static_audit"
+  },
+  {
+    "id": "EDT06",
+    "category": "EDT",
+    "label": "Редактор",
+    "title": "Ручные позиции и сохранённый layout графа",
+    "state": "есть",
+    "layer": "graph",
+    "priority": "P1",
+    "milestone": "M2",
+    "current": "Layout хранит позиции, фильтры и именованные виды; это уже существующая функция графа.",
+    "proposal": "Сделать сохранение явным и различать расположение объектов и изменение их содержания.",
+    "acceptance": "После reload именованный вид восстанавливает позиции; перемещение узла не меняет его content/evidence digest.",
+    "sources": [
+      "P06",
+      "P16"
+    ],
+    "code": [
+      "pkg/mem/graph_layout.go",
+      "pkg/mem/web/knowledgeMapHTMLSuffix.html"
+    ],
+    "dependencies": [
+      "NAV02"
+    ],
+    "verification": "static_audit"
+  },
+  {
+    "id": "EDT07",
+    "category": "EDT",
+    "label": "Редактор",
+    "title": "Групповые действия по выделению",
+    "state": "частично",
+    "layer": "shared",
+    "priority": "P2",
+    "milestone": "M2",
+    "current": "Graph selection manifest и batch review есть; единых групповых операций для обоих редакторов нет.",
+    "proposal": "Добавить ограниченный набор bulk-действий с preview, pins и атомарностью; не переносить семантику graph на дерево неявно.",
+    "acceptance": "Bulk для 10 объектов показывает точный список; изменение одного объекта блокирует весь atomic action и не оставляет частичных записей.",
+    "sources": [
+      "P10",
+      "P11"
+    ],
+    "code": [
+      "pkg/mem/graph_selection.go",
+      "pkg/mem/graph_review.go",
+      "pkg/mem/web_map_actions.go"
+    ],
+    "dependencies": [
+      "TRU05",
+      "EDT10"
+    ],
+    "verification": "static_audit"
+  },
+  {
+    "id": "EDT08",
+    "category": "EDT",
+    "label": "Редактор",
+    "title": "Undo/redo структурных и текстовых изменений",
+    "state": "есть",
+    "layer": "classic",
+    "priority": "P1",
+    "milestone": "M2",
+    "current": "Classic имеет persistent history, undo/redo и retry receipts; graph также имеет audit/undo отдельных операций.",
+    "proposal": "Согласовать UX undo с указанием области операции и конфликтов, не обещая общий бесконечный undo двух моделей.",
+    "acceptance": "Серия edit→move→source-add отменяется и повторяется с сохранением anchors; чужая промежуточная запись даёт conflict.",
+    "sources": [
+      "P11",
+      "T03"
+    ],
+    "code": [
+      "pkg/mem/mind_map.go",
+      "pkg/mem/web_map_history.go",
+      "pkg/mem/web_map_redo_test.go"
+    ],
+    "dependencies": [
+      "OPS01"
+    ],
+    "verification": "static_audit"
+  },
+  {
+    "id": "EDT09",
+    "category": "EDT",
+    "label": "Редактор",
+    "title": "Защита ручных правок и блокировок",
+    "state": "есть",
+    "layer": "shared",
+    "priority": "P1",
+    "milestone": "M0",
+    "current": "Classic проверяет locked; graph защищает manual edits от обычной повторной генерации.",
+    "proposal": "Закрепить единый контракт, где AI добавляет предложения, а замена ручного материала требует отдельного явного действия.",
+    "acceptance": "Повторная генерация после ручной правки не меняет текст; заблокированная ветвь отклоняет fill/move/delete без частичного изменения.",
+    "sources": [
+      "P01",
+      "T03"
+    ],
+    "code": [
+      "pkg/mem/mind_map_ai.go",
+      "pkg/mem/graph_edit.go",
+      "pkg/mem/graph_edit_test.go"
+    ],
+    "dependencies": [
+      "TRU05"
+    ],
+    "verification": "static_audit"
+  },
+  {
+    "id": "EDT10",
+    "category": "EDT",
+    "label": "Редактор",
+    "title": "Единый пользовательский маршрут редактора",
+    "state": "частично",
+    "layer": "shared",
+    "priority": "P1",
+    "milestone": "M2",
+    "current": "Функции распределены между integrated web, classic legacy editor, отдельной graph-вкладкой и CLI.",
+    "proposal": "Объединить навигацию и контекст через adapters и deep links, сохранив действующие команды и данные.",
+    "acceptance": "Из выбранного документа пользователь достигает карты, review, источника и обучения без ручного ввода ID; возврат сохраняет рабочий контекст.",
+    "sources": [
+      "P02",
+      "P16",
+      "P20"
+    ],
+    "code": [
+      "internal/webapp/maps.go",
+      "internal/webapp/graph.go",
+      "pkg/mem/mind_map_live.go",
+      "pkg/mem/graph_live.go"
+    ],
+    "dependencies": [
+      "KNO02",
+      "KNO08",
+      "SRC02"
+    ],
+    "verification": "static_audit"
+  },
+  {
+    "id": "NAV01",
+    "category": "NAV",
+    "label": "Представления и навигация",
+    "title": "Восемь специализированных представлений графа",
+    "state": "есть",
+    "layer": "graph",
+    "priority": "P1",
+    "milestone": "M2",
+    "current": "Graph, topics, document tree, causal, procedure sequence, timeline, comparison matrix и findings board реализованы.",
+    "proposal": "Дать выбор представления по пользовательскому вопросу и явно объяснять, какие отношения нужны для заполнения.",
+    "acceptance": "Каждый из восьми видов открывается на fixture нужного типа; при отсутствии отношений показано объяснение, а не выдуманная структура.",
+    "sources": [
+      "L02",
+      "P10",
+      "P18"
+    ],
+    "code": [
+      "pkg/mem/graph_layout.go",
+      "pkg/mem/web/knowledgeMapHTMLSuffix.html"
+    ],
+    "dependencies": [
+      "EDT10"
+    ],
+    "verification": "static_audit"
+  },
+  {
+    "id": "NAV02",
+    "category": "NAV",
+    "label": "Представления и навигация",
+    "title": "Именованные сохранённые виды",
+    "state": "есть",
+    "layer": "graph",
+    "priority": "P1",
+    "milestone": "M2",
+    "current": "Есть сохранение/список/удаление views; лимит 100 видов и 1 МиБ layout.",
+    "proposal": "Добавить доступ из общей библиотеки и явную привязку вида к объектам/фильтрам, не считать его копией знаний.",
+    "acceptance": "Два вида одного графа имеют разные фильтры и позиции, но показывают общую правку текста; удаление вида не удаляет объекты.",
+    "sources": [
+      "P16",
+      "L14"
+    ],
+    "code": [
+      "pkg/mem/graph_layout.go"
+    ],
+    "dependencies": [
+      "KNO02"
+    ],
+    "verification": "static_audit"
+  },
+  {
+    "id": "NAV03",
+    "category": "NAV",
+    "label": "Представления и навигация",
+    "title": "Обзор, семантический zoom и видимость",
+    "state": "есть",
+    "layer": "graph",
+    "priority": "P1",
+    "milestone": "M2",
+    "current": "Есть overview/topics, smart lens и бюджеты видимых узлов/связей; это разрежение интерфейса.",
+    "proposal": "Показывать число скрытых объектов, причину скрытия и устойчивый путь overview→detail.",
+    "acceptance": "Найденный объект виден сверх обычного бюджета; UI сообщает число отфильтрованных объектов и позволяет вернуться к прежнему масштабу.",
+    "sources": [
+      "L14",
+      "L13"
+    ],
+    "code": [
+      "pkg/mem/web/knowledgeMapHTMLSuffix.html",
+      "pkg/mem/web/knowledgeTopics.js"
+    ],
+    "dependencies": [
+      "NAV01"
+    ],
+    "verification": "static_audit"
+  },
+  {
+    "id": "NAV04",
+    "category": "NAV",
+    "label": "Представления и навигация",
+    "title": "Фокус, соседство и пути между объектами",
+    "state": "есть",
+    "layer": "graph",
+    "priority": "P1",
+    "milestone": "M2",
+    "current": "Selection explore поддерживает направления/types, глубину до 3 и path до 24; путь не доказывает причинность.",
+    "proposal": "Упростить выбор фокуса и объяснять типы отношений на каждом шаге.",
+    "acceptance": "Путь A→B показывает каждое ребро и направление; фильтр relation исключает недопустимые рёбра и не называет shortest path причинным.",
+    "sources": [
+      "P21",
+      "L14"
+    ],
+    "code": [
+      "pkg/mem/graph_selection.go",
+      "pkg/mem/graph_selection_test.go"
+    ],
+    "dependencies": [
+      "KNO04",
+      "NAV01"
+    ],
+    "verification": "static_audit"
+  },
+  {
+    "id": "NAV05",
+    "category": "NAV",
+    "label": "Представления и навигация",
+    "title": "Поиск с явной областью",
+    "state": "частично",
+    "layer": "shared",
+    "priority": "P1",
+    "milestone": "M2",
+    "current": "Есть поиск по загруженной карте и retrieval корпуса; integrated source picker остаётся постраничным списком.",
+    "proposal": "Разделить поиск в текущем виде, карте и библиотеке; добавить фильтры документа/редакции/страницы в source picker.",
+    "acceptance": "Запрос показывает область и число результатов; найденная вне текущего view цитата открывается без утверждения, что её ранее не было в корпусе.",
+    "sources": [
+      "L14",
+      "P10",
+      "P05"
+    ],
+    "code": [
+      "internal/webapp/assets/map-layout.js",
+      "internal/webapp/assets/maps-ai.js",
+      "pkg/mem/query_service.go"
+    ],
+    "dependencies": [
+      "SRC01",
+      "KNO02"
+    ],
+    "verification": "static_audit"
+  },
+  {
+    "id": "NAV06",
+    "category": "NAV",
+    "label": "Представления и навигация",
+    "title": "Обратные ссылки и адресуемые узлы",
+    "state": "частично",
+    "layer": "shared",
+    "priority": "P1",
+    "milestone": "M2",
+    "current": "IDs и отдельные deep links есть; общего backlinks index для passage, classic и graph нет.",
+    "proposal": "Показывать все карты, заметки и карточки, использующие объект/аннотацию, и поддержать устойчивые deep links.",
+    "acceptance": "Для цитаты с тремя использованиями список содержит ровно три ссылки; перенос узла между ветвями не ломает адрес.",
+    "sources": [
+      "P22",
+      "P06",
+      "P14"
+    ],
+    "code": [
+      "pkg/mem/mind_map.go",
+      "pkg/mem/graph.go",
+      "internal/webapp/assets/map-library.js"
+    ],
+    "dependencies": [
+      "KNO02",
+      "KNO06"
+    ],
+    "verification": "static_audit"
+  },
+  {
+    "id": "NAV07",
+    "category": "NAV",
+    "label": "Представления и навигация",
+    "title": "Продолжение чтения и навигационная история",
+    "state": "частично",
+    "layer": "shared",
+    "priority": "P1",
+    "milestone": "M2",
+    "current": "Graph сохраняет views; classic scale/collapse живут в state.map, общая reading history отсутствует.",
+    "proposal": "Сохранять личный контекст чтения, выбранный объект, свёрнутые ветви и безопасный back/forward отдельно от содержимого.",
+    "acceptance": "После закрытия браузера возвращаются документ, страница и выбранный узел; удалённый узел даёт понятный fallback к источнику.",
+    "sources": [
+      "L14",
+      "P02"
+    ],
+    "code": [
+      "internal/webapp/assets/app.js",
+      "pkg/mem/graph_layout.go"
+    ],
+    "dependencies": [
+      "KNO02",
+      "NAV02"
+    ],
+    "verification": "static_audit"
+  },
+  {
+    "id": "NAV08",
+    "category": "NAV",
+    "label": "Представления и навигация",
+    "title": "Альтернативные раскладки классического дерева",
+    "state": "нет",
+    "layer": "classic",
+    "priority": "P3",
+    "milestone": "M6",
+    "current": "Classic использует горизонтальное автоматическое дерево; radial/bilateral/fishbone layouts не найдены.",
+    "proposal": "Добавить переключаемые раскладки как представления тех же parent/order данных, без изменения содержания.",
+    "acceptance": "Смена трёх layouts сохраняет IDs, родителей и sources; экспорт указывает выбранное представление и остаётся читаемым.",
+    "sources": [
+      "P07",
+      "P10"
+    ],
+    "code": [
+      "internal/webapp/assets/map-layout.js",
+      "pkg/mem/mind_map_view.go"
+    ],
+    "dependencies": [
+      "NAV07"
+    ],
+    "verification": "static_audit"
+  },
+  {
+    "id": "NAV09",
+    "category": "NAV",
+    "label": "Представления и навигация",
+    "title": "Фильтры вида и состояния доказательств",
+    "state": "есть",
+    "layer": "graph",
+    "priority": "P1",
+    "milestone": "M2",
+    "current": "Есть kind/relation/status/evidence filters, depth и collapse в графовом view state.",
+    "proposal": "Сделать активные фильтры всегда видимыми и дать equivalent фильтры classic по источникам/типам.",
+    "acceptance": "При фильтре current исчезают stale объекты из выдачи, но общий счётчик их показывает; сброс фильтров возвращает исходный набор.",
+    "sources": [
+      "L14",
+      "P10"
+    ],
+    "code": [
+      "pkg/mem/graph_layout.go",
+      "pkg/mem/web/knowledgeMapHTMLSuffix.html"
+    ],
+    "dependencies": [
+      "TRU03",
+      "NAV01"
+    ],
+    "verification": "static_audit"
+  },
+  {
+    "id": "NAV10",
+    "category": "NAV",
+    "label": "Представления и навигация",
+    "title": "Табличный и outline режимы редактирования",
+    "state": "частично",
+    "layer": "shared",
+    "priority": "P2",
+    "milestone": "M2",
+    "current": "Есть document tree, comparison matrix и outline exports; общего editable table/outline поверх объектов нет.",
+    "proposal": "Добавить линейное представление для длинных материалов с теми же pins и переходом в визуальный вид.",
+    "acceptance": "Правка текста в таблице отражается в карте; сортировка таблицы не меняет parent order, пока пользователь явно не применит порядок.",
+    "sources": [
+      "P10",
+      "P18",
+      "L14"
+    ],
+    "code": [
+      "pkg/mem/graph_layout.go",
+      "pkg/mem/mind_map_export.go",
+      "pkg/mem/graph_portable_export.go"
+    ],
+    "dependencies": [
+      "KNO02",
+      "EDT10"
+    ],
+    "verification": "static_audit"
+  },
+  {
+    "id": "ANA01",
+    "category": "ANA",
+    "label": "Анализ",
+    "title": "Междокументные противоречия",
+    "state": "есть",
+    "layer": "graph",
+    "priority": "P1",
+    "milestone": "M3",
+    "current": "CLI analyze уже создаёт draft contradiction из двух current approved claims разных документов; UI запуска распределён.",
+    "proposal": "Открыть существующий scoped analyze в web и показывать оба утверждения, условия и основания противоречия.",
+    "acceptance": "Противоречие из одного документа отклоняется; после смены редакции одного claim ready-результат не публикуется без нового review.",
+    "sources": [
+      "P19",
+      "L02",
+      "L15"
+    ],
+    "code": [
+      "pkg/mem/graph_analyze.go",
+      "pkg/mem/graph_analyze_plan.go",
+      "pkg/mem/graph_analyze_run.go"
+    ],
+    "dependencies": [
+      "TRU05",
+      "EXT03",
+      "OPS02"
+    ],
+    "verification": "static_audit"
+  },
+  {
+    "id": "ANA02",
+    "category": "ANA",
+    "label": "Анализ",
+    "title": "Пробелы знаний и неполнота",
+    "state": "есть",
+    "layer": "graph",
+    "priority": "P1",
+    "milestone": "M3",
+    "current": "Analyze создаёт draft gap по 2–8 claims минимум двух документов; это ограниченный поиск, не доказательство отсутствия знания.",
+    "proposal": "Отделить отсутствие ответа в выбранном корпусе, недоизвлечение и явное авторское указание на пробел.",
+    "acceptance": "Для каждого gap показаны scope и подтверждения; отсутствие подходящего chunk не превращается в утверждение о научном пробеле.",
+    "sources": [
+      "P19",
+      "L15",
+      "T04"
+    ],
+    "code": [
+      "pkg/mem/graph_analyze.go",
+      "pkg/mem/graph_coverage.go"
+    ],
+    "dependencies": [
+      "EXT06",
+      "OPS04",
+      "OPS02"
+    ],
+    "verification": "static_audit"
+  },
+  {
+    "id": "ANA03",
+    "category": "ANA",
+    "label": "Анализ",
+    "title": "Матрица сравнения документов",
+    "state": "есть",
+    "layer": "graph",
+    "priority": "P1",
+    "milestone": "M3",
+    "current": "Comparison matrix уже визуализирует comparison/compares; пустая ячейка не означает отсутствие свойства.",
+    "proposal": "Добавить ручной выбор критериев и ссылку каждой заполненной ячейки на claims и sources.",
+    "acceptance": "Матрица из трёх документов и четырёх критериев различает неизвестно/не найдено/противоречит; каждая содержательная ячейка имеет evidence.",
+    "sources": [
+      "P18",
+      "P19",
+      "L02"
+    ],
+    "code": [
+      "pkg/mem/graph_layout.go",
+      "pkg/mem/web/knowledgeMapHTMLSuffix.html"
+    ],
+    "dependencies": [
+      "KNO04",
+      "EXT06"
+    ],
+    "verification": "static_audit"
+  },
+  {
+    "id": "ANA04",
+    "category": "ANA",
+    "label": "Анализ",
+    "title": "Причинные и логические цепочки",
+    "state": "есть",
+    "layer": "graph",
+    "priority": "P2",
+    "milestone": "M3",
+    "current": "Causal view рисует записанные causes/depends_on и другие отношения; причинность из корреляции не вычисляется.",
+    "proposal": "Дать review отношений с различением причинного утверждения источника и авторской гипотезы.",
+    "acceptance": "В цепочке из пяти узлов каждое causal edge открывает основание; related не повышается до causes при смене представления.",
+    "sources": [
+      "L02",
+      "P17"
+    ],
+    "code": [
+      "pkg/mem/graph.go",
+      "pkg/mem/graph_layout.go"
+    ],
+    "dependencies": [
+      "KNO04",
+      "TRU05"
+    ],
+    "verification": "static_audit"
+  },
+  {
+    "id": "ANA05",
+    "category": "ANA",
+    "label": "Анализ",
+    "title": "Процедуры и последовательности действий",
+    "state": "есть",
+    "layer": "graph",
+    "priority": "P1",
+    "milestone": "M3",
+    "current": "Procedure sequence использует явные precedes; несвязанные шаги не получают вымышленный порядок.",
+    "proposal": "Добавить проверяемые условия переходов и вывод checklist с сохранением неизвестного порядка и циклов.",
+    "acceptance": "Процедура с развилкой и циклом отображает оба свойства; checklist не линейризует неопределённый порядок как обязательный.",
+    "sources": [
+      "P10",
+      "P18"
+    ],
+    "code": [
+      "pkg/mem/graph.go",
+      "pkg/mem/graph_selection_export.go",
+      "pkg/mem/graph_layout.go"
+    ],
+    "dependencies": [
+      "KNO09",
+      "EXT03"
+    ],
+    "verification": "static_audit"
+  },
+  {
+    "id": "ANA06",
+    "category": "ANA",
+    "label": "Анализ",
+    "title": "Хронология событий с доказательствами",
+    "state": "есть",
+    "layer": "graph",
+    "priority": "P2",
+    "milestone": "M3",
+    "current": "Timeline использует event/happens_before; даты импорта и номера страниц не считаются временем событий.",
+    "proposal": "Поддержать интервалы, приблизительные даты и несовместимые датировки как структурированные поля с provenance.",
+    "acceptance": "Два события с неопределённым порядком остаются непорядоченными; альтернативные даты показаны отдельно и открывают источники.",
+    "sources": [
+      "P18",
+      "P17"
+    ],
+    "code": [
+      "pkg/mem/graph.go",
+      "pkg/mem/graph_layout.go"
+    ],
+    "dependencies": [
+      "KNO08",
+      "TRU03"
+    ],
+    "verification": "static_audit"
+  },
+  {
+    "id": "ANA07",
+    "category": "ANA",
+    "label": "Анализ",
+    "title": "Карта аргументов и оснований",
+    "state": "частично",
+    "layer": "graph",
+    "priority": "P2",
+    "milestone": "M3",
+    "current": "Claim/supports/contradicts существуют; отдельной модели premise→inference→conclusion и argument-view нет.",
+    "proposal": "Добавить аргументное представление с явными основаниями, возражениями и допущениями поверх общих объектов.",
+    "acceptance": "Пользователь восстанавливает аргумент из двух посылок; неподтверждённое допущение отличается от цитируемого факта и не получает auto-approval.",
+    "sources": [
+      "L02",
+      "P23",
+      "L01"
+    ],
+    "code": [
+      "pkg/mem/graph.go",
+      "pkg/mem/graph_layout.go"
+    ],
+    "dependencies": [
+      "KNO04",
+      "TRU08"
+    ],
+    "verification": "static_audit"
+  },
+  {
+    "id": "ANA08",
+    "category": "ANA",
+    "label": "Анализ",
+    "title": "Проверка чисел, единиц и условий",
+    "state": "нет",
+    "layer": "graph",
+    "priority": "P2",
+    "milestone": "M3",
+    "current": "Есть цитируемые нормативные qualifiers; автоматическая проверка единиц, диапазонов и вычислений не реализована.",
+    "proposal": "Ввести ограниченный проверяющий модуль с явным перечнем поддерживаемых операций и обязательным исходным evidence.",
+    "acceptance": "Fixtures для bar/MPa, строгой границы и исключения дают ожидаемые результаты; неподдерживаемая формула получает «не проверено».",
+    "sources": [
+      "L15",
+      "T03"
+    ],
+    "code": [
+      "pkg/mem/graph_requirement.go",
+      "pkg/mem/graph_labeled_requirements_test.go"
+    ],
+    "dependencies": [
+      "KNO09",
+      "SRC07",
+      "OPS02"
+    ],
+    "verification": "static_audit"
+  },
+  {
+    "id": "ANA09",
+    "category": "ANA",
+    "label": "Анализ",
+    "title": "Альтернативы, критерии и решения",
+    "state": "частично",
+    "layer": "graph",
+    "priority": "P2",
+    "milestone": "M3",
+    "current": "Decision/risk/constraint/comparison есть как типы; полноценной модели выбора альтернатив по критериям нет.",
+    "proposal": "Сохранить варианты, критерии, основания и пользовательский выбор без подмены решения генеративным советом.",
+    "acceptance": "Для трёх вариантов видно происхождение каждого критерия; изменение веса не меняет цитаты, итог имеет авторство и сохранённое обоснование.",
+    "sources": [
+      "P10",
+      "P18",
+      "P23"
+    ],
+    "code": [
+      "pkg/mem/graph.go",
+      "pkg/mem/graph_workspace.go"
+    ],
+    "dependencies": [
+      "ANA03",
+      "KNO02"
+    ],
+    "verification": "static_audit"
+  },
+  {
+    "id": "ANA10",
+    "category": "ANA",
+    "label": "Анализ",
+    "title": "Сохраняемый анализ выделения",
+    "state": "есть",
+    "layer": "graph",
+    "priority": "P1",
+    "milestone": "M3",
+    "current": "Selection analysis детерминированно сводит выбранные facts/relations и сохраняет отчёт с digest/audit.",
+    "proposal": "Встроить отчёт в документный рабочий процесс и дать повтор с явно изменившимся manifest.",
+    "acceptance": "Отчёт по 10 узлам не включает одиннадцатый вне scope; после изменения evidence прежний отчёт остаётся историческим и помечается stale.",
+    "sources": [
+      "P19",
+      "L15"
+    ],
+    "code": [
+      "pkg/mem/graph_selection_analysis.go",
+      "pkg/mem/graph_selection_export.go"
+    ],
+    "dependencies": [
+      "TRU08",
+      "NAV04"
+    ],
+    "verification": "static_audit"
+  },
+  {
+    "id": "LRN01",
+    "category": "LRN",
+    "label": "Обучение",
+    "title": "Генерация проверяемых учебных карточек",
+    "state": "есть",
+    "layer": "graph",
+    "priority": "P1",
+    "milestone": "M4",
+    "current": "Graph генерирует card/question по evidence с preview и draft-review; classic study делает карточки детерминированно.",
+    "proposal": "Объединить выбор источника карточки и редактор вопроса, сохранив происхождение и human approval.",
+    "acceptance": "Карточки создаются draft; без явного review не становятся active; отклонённый проверяющим неподдержанный ответ остаётся rejected; stale/missing citations блокируют принятие. Смысловая точность проверяется отдельно на размеченных примерах.",
+    "sources": [
+      "P12",
+      "P01",
+      "L09"
+    ],
+    "code": [
+      "pkg/mem/graph_learning.go",
+      "pkg/mem/mind_map_workbench.go"
+    ],
+    "dependencies": [
+      "TRU03",
+      "TRU05",
+      "KNO02"
+    ],
+    "verification": "static_audit"
+  },
+  {
+    "id": "LRN02",
+    "category": "LRN",
+    "label": "Обучение",
+    "title": "Долговременное обучение из classic",
+    "state": "нет",
+    "layer": "shared",
+    "priority": "P1",
+    "milestone": "M4",
+    "current": "Graph сохраняет сессии и расписание; отметки classic known живут только в открытом диалоге.",
+    "proposal": "Подключить classic-карточки к существующему графовому learning store через stable object refs, без второго независимого SRS.",
+    "acceptance": "Оценка карточки classic переживает закрытие окна и перезапуск; та же карточка из graph показывает одну историю, а не дубликат.",
+    "sources": [
+      "P13",
+      "P01",
+      "L09"
+    ],
+    "code": [
+      "internal/webapp/assets/map-workbench.js",
+      "pkg/mem/graph_learning_session.go"
+    ],
+    "dependencies": [
+      "KNO02",
+      "LRN01"
+    ],
+    "verification": "static_audit"
+  },
+  {
+    "id": "LRN03",
+    "category": "LRN",
+    "label": "Обучение",
+    "title": "Маршруты по prerequisite и depends_on",
+    "state": "есть",
+    "layer": "graph",
+    "priority": "P1",
+    "milestone": "M4",
+    "current": "Маршруты строятся из active/current card/question и явных prerequisite/depends_on, показывают циклы и отсутствие порядка.",
+    "proposal": "Дать старт маршрута из темы classic/reader и позволить пользователю проверить предпосылки.",
+    "acceptance": "Циклический fixture не выдаёт ложный линейный порядок; карточка без current evidence исключена с объяснением.",
+    "sources": [
+      "L01",
+      "L13",
+      "P12"
+    ],
+    "code": [
+      "pkg/mem/graph_learning_route.go",
+      "pkg/mem/graph_learning_route_test.go"
+    ],
+    "dependencies": [
+      "LRN02",
+      "KNO04"
+    ],
+    "verification": "static_audit"
+  },
+  {
+    "id": "LRN04",
+    "category": "LRN",
+    "label": "Обучение",
+    "title": "Интервальное повторение и история",
+    "state": "есть",
+    "layer": "graph",
+    "priority": "P1",
+    "milestone": "M4",
+    "current": "Есть persistent attempts и again/hard/good/easy с детерминированным расписанием; это не FSRS и не доказанный mastery score.",
+    "proposal": "Сохранить текущий алгоритм как версионированный scheduler; сравнивать другие алгоритмы отдельно, без тихой смены старой истории.",
+    "acceptance": "Повторная оценка элемента одной сессии отклонена; изменение content/evidence сбрасывает старое расписание с записью причины.",
+    "sources": [
+      "P13",
+      "L09",
+      "L10"
+    ],
+    "code": [
+      "pkg/mem/graph_learning_session.go",
+      "pkg/mem/graph_learning_session_test.go"
+    ],
+    "dependencies": [
+      "LRN02",
+      "TRU04"
+    ],
+    "verification": "static_audit"
+  },
+  {
+    "id": "LRN05",
+    "category": "LRN",
+    "label": "Обучение",
+    "title": "Восстановление карты по памяти",
+    "state": "нет",
+    "layer": "shared",
+    "priority": "P2",
+    "milestone": "M4",
+    "current": "Текущие карты и карточки показывают готовую структуру; отдельного режима closed-book reconstruction нет.",
+    "proposal": "Добавить скрытие материала, самостоятельное восстановление узлов/отношений и последующее сопоставление с источником.",
+    "acceptance": "Во время попытки ответы скрыты; после завершения показаны пропущенные/лишние элементы без автоматического объявления педагогического эффекта.",
+    "sources": [
+      "L06",
+      "L07",
+      "L08"
+    ],
+    "code": [
+      "pkg/mem/mind_map_workbench.go",
+      "pkg/mem/graph_learning_session.go"
+    ],
+    "dependencies": [
+      "LRN02",
+      "EDT01"
+    ],
+    "verification": "static_audit"
+  },
+  {
+    "id": "LRN06",
+    "category": "LRN",
+    "label": "Обучение",
+    "title": "Самообъяснение своими словами",
+    "state": "нет",
+    "layer": "shared",
+    "priority": "P2",
+    "milestone": "M4",
+    "current": "Note/question можно создать, но отдельного протокола learner explanation с последующей проверкой источником нет.",
+    "proposal": "Сохранять объяснение учащегося до показа образца и предоставлять подсказки с citations как экспериментальную функцию.",
+    "acceptance": "Попытка фиксируется до открытия источника; модельный отзыв отделён от исходного текста и может быть оспорен пользователем.",
+    "sources": [
+      "L11",
+      "L12",
+      "P12"
+    ],
+    "code": [
+      "pkg/mem/graph_workspace.go",
+      "pkg/mem/graph_learning_session.go"
+    ],
+    "dependencies": [
+      "LRN02",
+      "TRU08"
+    ],
+    "verification": "static_audit"
+  },
+  {
+    "id": "LRN07",
+    "category": "LRN",
+    "label": "Обучение",
+    "title": "Ответ до подсказки и калибровка самопроверки",
+    "state": "частично",
+    "layer": "graph",
+    "priority": "P1",
+    "milestone": "M4",
+    "current": "Сессия скрывает answer до Space и сохраняет rating; free-text attempt и оценка уверенности до раскрытия не оформлены.",
+    "proposal": "Добавить необязательный ответ/уверенность перед раскрытием, не выдавая rating за автоматически измеренное знание.",
+    "acceptance": "Ответ и confidence записаны до reveal; изменение их после просмотра помечается; сравнение уверенности и результата сохраняется отдельно.",
+    "sources": [
+      "L06",
+      "L12",
+      "P13"
+    ],
+    "code": [
+      "pkg/mem/graph_learning_session.go",
+      "pkg/mem/web/knowledgeMapHTMLPrefix.html"
+    ],
+    "dependencies": [
+      "LRN04"
+    ],
+    "verification": "static_audit"
+  },
+  {
+    "id": "LRN08",
+    "category": "LRN",
+    "label": "Обучение",
+    "title": "Возврат к источнику после ошибки",
+    "state": "частично",
+    "layer": "shared",
+    "priority": "P1",
+    "milestone": "M4",
+    "current": "Учебные карточки имеют evidence, но единого remediation-пути из оценки к passage и соседним понятиям нет.",
+    "proposal": "После трудной карточки предложить источник, prerequisites и собственную заметку, не заменяя повторное извлечение перечитыванием.",
+    "acceptance": "Оценка again открывает точную цитату по желанию; возвращение в сессию сохраняет попытку и не выставляет success автоматически.",
+    "sources": [
+      "L09",
+      "P12",
+      "P14"
+    ],
+    "code": [
+      "pkg/mem/graph_learning_route.go",
+      "pkg/mem/graph_learning_session.go",
+      "pkg/mem/graph_source.go"
+    ],
+    "dependencies": [
+      "SRC02",
+      "LRN03",
+      "LRN07"
+    ],
+    "verification": "static_audit"
+  },
+  {
+    "id": "LRN09",
+    "category": "LRN",
+    "label": "Обучение",
+    "title": "Панель учебного прогресса",
+    "state": "частично",
+    "layer": "graph",
+    "priority": "P2",
+    "milestone": "M4",
+    "current": "История попыток и расписание есть; проверенной диагностики владения темами и общей classic-панели нет.",
+    "proposal": "Показывать due, выполненные попытки, обновившийся материал и ошибки, отдельно от предположительной освоенности темы.",
+    "acceptance": "Числа панели сверяются с sessions/attempts fixtures; новая редакция увеличивает отдельный счётчик пересмотра, не скрывая старые результаты.",
+    "sources": [
+      "P13",
+      "L10",
+      "L12"
+    ],
+    "code": [
+      "pkg/mem/graph_learning_session.go",
+      "pkg/mem/graph_learning_route.go"
+    ],
+    "dependencies": [
+      "LRN02",
+      "LRN04",
+      "TRU04"
+    ],
+    "verification": "static_audit"
+  },
+  {
+    "id": "LRN10",
+    "category": "LRN",
+    "label": "Обучение",
+    "title": "Проверка пользы учебных режимов",
+    "state": "нет",
+    "layer": "shared",
+    "priority": "P1",
+    "milestone": "M4",
+    "current": "Имеются функциональные тесты обучения; эксперимента эффективности mem-tool на отсроченном воспроизведении нет.",
+    "proposal": "До заявлений об улучшении памяти сравнить режимы при равном времени, со случайным порядком и отложенным тестом.",
+    "acceptance": "Протокол заранее задаёт материал, группы, время и отложенный срок; публикуются размер выборки, исходные результаты и ограничения без обещанного эффекта.",
+    "sources": [
+      "L03",
+      "L04",
+      "L05",
+      "L06",
+      "L07",
+      "L08",
+      "L09"
+    ],
+    "code": [],
+    "dependencies": [
+      "LRN05",
+      "LRN06",
+      "OPS02"
+    ],
+    "verification": "static_audit"
+  },
+  {
+    "id": "AI01",
+    "category": "AI",
+    "label": "Ассистент и фоновые задачи",
+    "title": "Явный контекст каждого AI-запроса",
+    "state": "есть",
+    "layer": "shared",
+    "priority": "P1",
+    "milestone": "M2",
+    "current": "Classic scope и graph selection manifest уже ограничивают evidence; web и CLI различаются по resolver связанных sources.",
+    "proposal": "Показывать документы, фрагменты и исключённые типы источников до запроса; унифицировать resolver через адаптер.",
+    "acceptance": "Preview контекста перечисляет все фактически отправленные evidence; knowledge_node source не исчезает молча и не расширяет запрос вне scope.",
+    "sources": [
+      "P05",
+      "T04"
+    ],
+    "code": [
+      "pkg/mem/mind_map_ai.go",
+      "pkg/mem/web_map_ai.go",
+      "pkg/mem/graph_selection.go"
+    ],
+    "dependencies": [
+      "KNO02",
+      "TRU03"
+    ],
+    "verification": "static_audit"
+  },
+  {
+    "id": "AI02",
+    "category": "AI",
+    "label": "Ассистент и фоновые задачи",
+    "title": "Предложения с выборочным применением",
+    "state": "есть",
+    "layer": "shared",
+    "priority": "P1",
+    "milestone": "M2",
+    "current": "Classic preview/select/apply и graph learning preview/review существуют с pins и atomic apply.",
+    "proposal": "Сделать общий UX diff, выбора и объяснения зависимостей; не публиковать предложения в существующие карты без решения.",
+    "acceptance": "Выбор дочернего предложения включает требуемого родителя; stale preview не применяется и не меняет дерево/граф частично.",
+    "sources": [
+      "P05",
+      "P01",
+      "T03"
+    ],
+    "code": [
+      "pkg/mem/mind_map_ai.go",
+      "internal/webapp/assets/maps-ai.js",
+      "pkg/mem/graph_learning.go"
+    ],
+    "dependencies": [
+      "TRU05",
+      "EDT10"
+    ],
+    "verification": "static_audit"
+  },
+  {
+    "id": "AI03",
+    "category": "AI",
+    "label": "Ассистент и фоновые задачи",
+    "title": "Вопрос по ветви или выделению",
+    "state": "есть",
+    "layer": "shared",
+    "priority": "P1",
+    "milestone": "M2",
+    "current": "Classic branch answer и graph AnswerSelection работают по current evidence и проверяют manifest.",
+    "proposal": "Объединить вход из reader/map и показать границу ответа, citations и отсутствие достаточных оснований.",
+    "acceptance": "Вопрос по двум цитатам не использует третью вне scope; изменение evidence до ответа даёт stale/error вместо уверенного результата.",
+    "sources": [
+      "P20",
+      "P05",
+      "T04"
+    ],
+    "code": [
+      "pkg/mem/web_map_workbench.go",
+      "pkg/mem/graph_selection.go"
+    ],
+    "dependencies": [
+      "AI01",
+      "SRC02"
+    ],
+    "verification": "static_audit"
+  },
+  {
+    "id": "AI04",
+    "category": "AI",
+    "label": "Ассистент и фоновые задачи",
+    "title": "Сохранение результата диалога в работу",
+    "state": "частично",
+    "layer": "shared",
+    "priority": "P1",
+    "milestone": "M2",
+    "current": "Можно создавать manual note/question/card и применять AI-proposals; общего действия «сохранить часть ответа» с lineage нет.",
+    "proposal": "Сохранять выбранный ответ как draft note/claim/question со ссылками на запрос, manifest и evidence, через существующие create API.",
+    "acceptance": "Сохранённый абзац содержит происхождение ответа и цитаты; повторная отправка не создаёт дубль, текст не становится approved автоматически.",
+    "sources": [
+      "P05",
+      "P03",
+      "T03"
+    ],
+    "code": [
+      "pkg/mem/graph_workspace.go",
+      "pkg/mem/graph_selection.go",
+      "pkg/mem/mind_map.go"
+    ],
+    "dependencies": [
+      "AI03",
+      "TRU08",
+      "KNO03"
+    ],
+    "verification": "static_audit"
+  },
+  {
+    "id": "AI05",
+    "category": "AI",
+    "label": "Ассистент и фоновые задачи",
+    "title": "Шаблоны задач ассистента",
+    "state": "частично",
+    "layer": "shared",
+    "priority": "P2",
+    "milestone": "M3",
+    "current": "Есть фиксированные map templates и AI actions; версионированных пользовательских задач анализа/обучения нет.",
+    "proposal": "Добавить шаблоны с целью, scope, output schema и правилами проверки; отделить их от декоративных шаблонов дерева.",
+    "acceptance": "Две версии шаблона имеют разные IDs/digests в runs; повтор прежнего run использует сохранённую версию и параметры.",
+    "sources": [
+      "P05",
+      "P19"
+    ],
+    "code": [
+      "pkg/mem/mind_map_workbench.go",
+      "pkg/mem/mind_map_ai.go",
+      "pkg/mem/graph_analyze.go"
+    ],
+    "dependencies": [
+      "EXT06",
+      "TRU08"
+    ],
+    "verification": "static_audit"
+  },
+  {
+    "id": "AI06",
+    "category": "AI",
+    "label": "Ассистент и фоновые задачи",
+    "title": "Бюджеты, прогресс и пределы модели",
+    "state": "есть",
+    "layer": "shared",
+    "priority": "P1",
+    "milestone": "M0",
+    "current": "Есть token/context ceilings, пакетный прогресс, bounded retries и timeouts; большой source job имеет отдельный бюджет.",
+    "proposal": "Показывать план частей, ограничения и причину остановки до и во время работы, без обещания точного времени.",
+    "acceptance": "Fixture с token exhaustion даёт конкретный совет; превышение context не обрезает цитату, прогресс различает обработку и публикацию.",
+    "sources": [
+      "T04",
+      "P05"
+    ],
+    "code": [
+      "pkg/mem/web_map_ai_worker.go",
+      "pkg/mem/mind_map_ai.go",
+      "pkg/mem/graph_extract_plan.go"
+    ],
+    "dependencies": [],
+    "verification": "static_audit"
+  },
+  {
+    "id": "AI07",
+    "category": "AI",
+    "label": "Ассистент и фоновые задачи",
+    "title": "Долговечные задания и результаты",
+    "state": "частично",
+    "layer": "shared",
+    "priority": "P1",
+    "milestone": "M0",
+    "current": "Web map AI durable; graph learning/export jobs имеют память и retention, learning history отдельно долговечна.",
+    "proposal": "Задать явные контракты восстановления и хранения; перенести нужные graph jobs на durable adapter без подмены истории обучения.",
+    "acceptance": "После остановки процесса каждое задание имеет объяснимый статус; committed result доступен, незавершённое не выдаётся за completed и повтор не дублирует публикацию.",
+    "sources": [
+      "T03",
+      "P05"
+    ],
+    "code": [
+      "pkg/mem/web_map_ai_worker.go",
+      "pkg/mem/graph_learning_jobs.go",
+      "pkg/mem/graph_export_jobs.go"
+    ],
+    "dependencies": [
+      "AI08"
+    ],
+    "verification": "static_audit"
+  },
+  {
+    "id": "AI08",
+    "category": "AI",
+    "label": "Ассистент и фоновые задачи",
+    "title": "Отмена и идемпотентное применение",
+    "state": "есть",
+    "layer": "shared",
+    "priority": "P1",
+    "milestone": "M0",
+    "current": "Есть cancellation/status checks и request receipts; недавно исправленные контракты требуют регрессий при новых adapters.",
+    "proposal": "Сохранить атомарную границу claim/cancel/publish и описать завершение при logout/restart.",
+    "acceptance": "Гонки cancel с claim и publish завершаются одним согласованным результатом; retry одного request ID не создаёт вторую ревизию.",
+    "sources": [
+      "T03"
+    ],
+    "code": [
+      "pkg/mem/web_operations.go",
+      "pkg/mem/web_map_ai.go",
+      "pkg/mem/web_map_ai_worker.go",
+      "pkg/mem/web_graph.go"
+    ],
+    "dependencies": [
+      "OPS01"
+    ],
+    "verification": "static_audit"
+  },
+  {
+    "id": "AI09",
+    "category": "AI",
+    "label": "Ассистент и фоновые задачи",
+    "title": "Недоверенные инструкции внутри документов",
+    "state": "частично",
+    "layer": "shared",
+    "priority": "P1",
+    "milestone": "M0",
+    "current": "Есть ограниченные schemas и host-controlled citations; отдельная сквозная проверка prompt injection исследованием не проводилась.",
+    "proposal": "Добавить adversarial fixtures и границы данных/инструкций, ограничить доступ ассистента только разрешёнными операциями.",
+    "acceptance": "Документ с просьбой игнорировать scope или раскрыть путь не расширяет evidence и не вызывает побочных действий; попытка фиксируется как текст источника.",
+    "sources": [
+      "P05",
+      "T03"
+    ],
+    "code": [
+      "pkg/mem/mind_map_ai.go",
+      "pkg/mem/graph_extract.go",
+      "pkg/mem/graph_selection.go"
+    ],
+    "dependencies": [
+      "TRU03"
+    ],
+    "verification": "static_audit"
+  },
+  {
+    "id": "AI10",
+    "category": "AI",
+    "label": "Ассистент и фоновые задачи",
+    "title": "Сравнение моделей и конфигураций",
+    "state": "частично",
+    "layer": "shared",
+    "priority": "P2",
+    "milestone": "M5",
+    "current": "Настройки и run metadata есть, quality/labeled eval существуют; автоматического сравнения провайдеров на общем наборе нет.",
+    "proposal": "Добавить opt-in benchmark runner с frozen corpus, prompts, budgets и стоимостью/временем, без автоматической смены модели.",
+    "acceptance": "Отчёт двух конфигураций содержит одинаковый manifest, quality metrics, ошибки, время и параметры; live-модель запускается только явно.",
+    "sources": [
+      "T04",
+      "P05"
+    ],
+    "code": [
+      "pkg/mem/graph_labeled_eval.go",
+      "pkg/mem/config.go",
+      "pkg/mem/mind_map_ai.go"
+    ],
+    "dependencies": [
+      "OPS02",
+      "AI05"
+    ],
+    "verification": "static_audit"
+  },
+  {
+    "id": "EXP01",
+    "category": "EXP",
+    "label": "Интеграции и экспорт",
+    "title": "Существующие форматы экспорта",
+    "state": "есть",
+    "layer": "shared",
+    "priority": "P1",
+    "milestone": "M5",
+    "current": "Classic имеет 8 форматов; graph дополнительно GraphML/GEXF и selection reports. Реальный round-trip приложений не проверялся.",
+    "proposal": "Унифицировать диалог scope/формата/ограничений и добавить совместимые fixtures без удаления действующих экспортов.",
+    "acceptance": "Для каждого формата fixture проходит parser/smoke check; полный экспорт не теряет скрытые узлы, выборочный явно содержит manifest scope.",
+    "sources": [
+      "P09",
+      "T01"
+    ],
+    "code": [
+      "pkg/mem/mind_map_export.go",
+      "pkg/mem/graph_portable_export.go",
+      "pkg/mem/graph_selection_export.go"
+    ],
+    "dependencies": [
+      "TRU03"
+    ],
+    "verification": "static_audit"
+  },
+  {
+    "id": "EXP02",
+    "category": "EXP",
+    "label": "Интеграции и экспорт",
+    "title": "Обратный импорт карт и совместимость форматов",
+    "state": "нет",
+    "layer": "shared",
+    "priority": "P1",
+    "milestone": "M5",
+    "current": "Экспорт есть; пользовательского round-trip importer карт в проверенных UI/CLI нет, internal draft import не заменяет его.",
+    "proposal": "Начать с JSON/OPML dry-run importer: version, collision policy, лимиты, отчёт потерь. Затем добавить Xmind/FreeMind для явно поддержанных версий с fixtures; применять transactional mutations.",
+    "acceptance": "Нативный JSON round-trip сохраняет IDs/evidence/history; OPML и выбранные версии Xmind/FreeMind проходят заявленные fixtures, неподдержанные свойства перечислены до импорта, источник не перезаписан.",
+    "sources": [
+      "P09",
+      "T01",
+      "T03"
+    ],
+    "code": [
+      "pkg/mem/mind_map_export.go",
+      "pkg/mem/mind_map.go"
+    ],
+    "dependencies": [
+      "KNO08",
+      "TRU03"
+    ],
+    "verification": "static_audit"
+  },
+  {
+    "id": "EXP03",
+    "category": "EXP",
+    "label": "Интеграции и экспорт",
+    "title": "Обмен с JSON Canvas",
+    "state": "нет",
+    "layer": "shared",
+    "priority": "P2",
+    "milestone": "M5",
+    "current": "Поддержка JSON Canvas в проверенных форматах не найдена; graph layout и object refs дают основу для adapter.",
+    "proposal": "Добавить импорт/экспорт открытого canvas с sidecar provenance и явной картой соответствия объектов.",
+    "acceptance": "Text/file/link/group/edge fixture переносит координаты и подписи; fields без эквивалента перечислены, evidence не выдумывается.",
+    "sources": [
+      "T01",
+      "P06"
+    ],
+    "code": [
+      "pkg/mem/graph_layout.go",
+      "pkg/mem/graph_portable_export.go"
+    ],
+    "dependencies": [
+      "KNO08",
+      "EXP02"
+    ],
+    "verification": "static_audit"
+  },
+  {
+    "id": "EXP04",
+    "category": "EXP",
+    "label": "Интеграции и экспорт",
+    "title": "Связанный Obsidian-пакет",
+    "state": "частично",
+    "layer": "shared",
+    "priority": "P2",
+    "milestone": "M5",
+    "current": "Obsidian export уже есть; classic отдаёт один Markdown с Mermaid/block IDs, не полноценный linked vault.",
+    "proposal": "Предложить опциональный набор заметок и источников с устойчивыми backlinks и безопасными именами файлов.",
+    "acceptance": "Экспорт двух связанных объектов создаёт разрешимые links без дублей имён; повтор обновляет managed files и не стирает чужие заметки.",
+    "sources": [
+      "P06",
+      "P22"
+    ],
+    "code": [
+      "pkg/mem/mind_map_export.go",
+      "pkg/mem/graph_portable_export.go"
+    ],
+    "dependencies": [
+      "KNO02",
+      "NAV06",
+      "TRU10"
+    ],
+    "verification": "static_audit"
+  },
+  {
+    "id": "EXP05",
+    "category": "EXP",
+    "label": "Интеграции и экспорт",
+    "title": "Anki и учебный обмен",
+    "state": "есть",
+    "layer": "graph",
+    "priority": "P1",
+    "milestone": "M4",
+    "current": "Graph learning export уже отдаёт Anki TSV, Markdown и CSV для active/current route items.",
+    "proposal": "Подключить classic learning bridge и стабильные IDs обновления; не обещать автоматическую синхронизацию расписания.",
+    "acceptance": "Повторный экспорт той же карточки сохраняет stable ID и citations; stale/unapproved items исключены с отчётом причины.",
+    "sources": [
+      "P13",
+      "P12"
+    ],
+    "code": [
+      "pkg/mem/graph_learning_export.go",
+      "pkg/mem/graph_learning_export_test.go"
+    ],
+    "dependencies": [
+      "LRN02",
+      "LRN04"
+    ],
+    "verification": "static_audit"
+  },
+  {
+    "id": "EXP06",
+    "category": "EXP",
+    "label": "Интеграции и экспорт",
+    "title": "PDF с аннотациями и отчётом",
+    "state": "частично",
+    "layer": "shared",
+    "priority": "P2",
+    "milestone": "M5",
+    "current": "Есть чтение проверенного PDF и HTML/SVG/PNG exports; отдельного экспорта annotated PDF из shared annotations нет.",
+    "proposal": "Создавать копию PDF с переносимыми annotations и отдельный отчёт, сохраняя оригинал неизменным.",
+    "acceptance": "Экспортированный PDF открывается двумя согласованными viewers с нужными страницами/областями; hash исходного файла не изменён.",
+    "sources": [
+      "P14",
+      "P15",
+      "T02"
+    ],
+    "code": [
+      "pkg/mem/graph_source_preview.go",
+      "pkg/mem/mind_map_export.go"
+    ],
+    "dependencies": [
+      "SRC04",
+      "TRU10"
+    ],
+    "verification": "static_audit"
+  },
+  {
+    "id": "EXP07",
+    "category": "EXP",
+    "label": "Интеграции и экспорт",
+    "title": "Библиография: Zotero, BibTeX и RIS",
+    "state": "нет",
+    "layer": "shared",
+    "priority": "P2",
+    "milestone": "M5",
+    "current": "Связь с Zotero item IDs, metadata и annotations в проверенном контуре не найдена.",
+    "proposal": "Добавить opt-in adapter metadata/annotations Zotero и импорт/экспорт BibTeX/RIS для библиографических полей с устойчивым внешним ID; не обещать перенос аннотаций через библиографические форматы.",
+    "acceptance": "Импорт одного item повторяется без дубля; автор, год, DOI и annotation target сохраняются, удаление локальной карты не удаляет Zotero item.",
+    "sources": [
+      "P14",
+      "P15",
+      "P04"
+    ],
+    "code": [],
+    "dependencies": [
+      "SRC03",
+      "KNO08",
+      "EXP02"
+    ],
+    "verification": "static_audit"
+  },
+  {
+    "id": "EXP08",
+    "category": "EXP",
+    "label": "Интеграции и экспорт",
+    "title": "Ссылки на объекты из внешних приложений",
+    "state": "частично",
+    "layer": "shared",
+    "priority": "P1",
+    "milestone": "M5",
+    "current": "Есть IDs, графовые anchors и часть deep links; общего публичного URI-контракта для всех объектов нет.",
+    "proposal": "Определить безопасные адреса workspace/object/revision и предсказуемый fallback при отсутствии доступа.",
+    "acceptance": "Ссылка на classic node и graph claim открывает нужный объект после переименования; чужой workspace не раскрывает title или excerpt.",
+    "sources": [
+      "P22",
+      "P21"
+    ],
+    "code": [
+      "internal/webapp/graph.go",
+      "internal/webapp/maps.go",
+      "pkg/mem/graph.go"
+    ],
+    "dependencies": [
+      "KNO02",
+      "NAV06",
+      "OPS10"
+    ],
+    "verification": "static_audit"
+  },
+  {
+    "id": "EXP09",
+    "category": "EXP",
+    "label": "Интеграции и экспорт",
+    "title": "Переносимая база и восстановление",
+    "state": "есть",
+    "layer": "shared",
+    "priority": "P1",
+    "milestone": "M5",
+    "current": "Есть portable database и backup/restore; экспорт карты отдельно не содержит все файлы и историю.",
+    "proposal": "Проверить документный пакет maps/graph/annotations/learning как единый переносимый набор с manifest и integrity check.",
+    "acceptance": "Временная база export→restore сохраняет число объектов, anchors, вложения и learning attempts; повреждённый пакет отвергается до замены данных.",
+    "sources": [
+      "T03",
+      "P15"
+    ],
+    "code": [
+      "pkg/mem/portable_database.go",
+      "deploy/web_backup.py"
+    ],
+    "dependencies": [
+      "KNO08",
+      "TRU03",
+      "LRN02"
+    ],
+    "verification": "static_audit"
+  },
+  {
+    "id": "EXP10",
+    "category": "EXP",
+    "label": "Интеграции и экспорт",
+    "title": "Документированный API и автоматизация",
+    "state": "частично",
+    "layer": "shared",
+    "priority": "P2",
+    "milestone": "M5",
+    "current": "HTTP APIs и CLI имеются, но распределены между двумя handler families и не образуют единый версионированный external contract.",
+    "proposal": "Описать стабильный adapter API с auth, idempotency, limits и примерами; не раскрывать внутренний Store наружу.",
+    "acceptance": "Контрактный клиент выполняет create/read/update/export на fixtures; неизвестная версия и stale pin дают документированные ошибки без side effects.",
+    "sources": [
+      "T01",
+      "T03",
+      "P22"
+    ],
+    "code": [
+      "internal/webapp/maps.go",
+      "pkg/mem/graph_live.go",
+      "cmd/mem/mindmap.go",
+      "cmd/mem/commands_map.go"
+    ],
+    "dependencies": [
+      "KNO08",
+      "AI08",
+      "OPS10"
+    ],
+    "verification": "static_audit"
+  },
+  {
+    "id": "COL01",
+    "category": "COL",
+    "label": "Совместная работа",
+    "title": "Права доступа к общему рабочему пространству",
+    "state": "частично",
+    "layer": "shared",
+    "priority": "P2",
+    "milestone": "M6",
+    "current": "Есть веб-авторизация и workspace isolation; объектные роли reader/editor/reviewer для совместной работы не описаны общим контрактом.",
+    "proposal": "Добавить явную матрицу ролей поверх существующей авторизации до публикации collaborative features.",
+    "acceptance": "Reader не может mutate/review/export закрытый scope; Editor не выдаёт себе Reviewer; deny проверен прямым HTTP запросом, не только скрытой кнопкой.",
+    "sources": [
+      "P11",
+      "P23",
+      "T03"
+    ],
+    "code": [
+      "internal/webapp/server.go",
+      "internal/webapp/maps.go",
+      "internal/webapp/graph.go"
+    ],
+    "dependencies": [
+      "OPS10",
+      "KNO02"
+    ],
+    "verification": "static_audit"
+  },
+  {
+    "id": "COL02",
+    "category": "COL",
+    "label": "Совместная работа",
+    "title": "Конфликты конкурирующих правок",
+    "state": "есть",
+    "layer": "shared",
+    "priority": "P1",
+    "milestone": "M0",
+    "current": "Revision/digest pins и idempotency уже защищают операции classic и graph; это не realtime coediting.",
+    "proposal": "Сохранить обязательные pins в adapters и показывать понятный конфликт с безопасным обновлением формы.",
+    "acceptance": "Два клиента редактируют одну ревизию: второй получает conflict; ни текст, ни источники первого не перезаписаны молча.",
+    "sources": [
+      "P11",
+      "T03"
+    ],
+    "code": [
+      "pkg/mem/web_map_edit.go",
+      "pkg/mem/graph_edit.go",
+      "pkg/mem/graph_review_pin.go"
+    ],
+    "dependencies": [
+      "OPS01",
+      "TRU05"
+    ],
+    "verification": "static_audit"
+  },
+  {
+    "id": "COL03",
+    "category": "COL",
+    "label": "Совместная работа",
+    "title": "Комментарии к объектам и источникам",
+    "state": "нет",
+    "layer": "shared",
+    "priority": "P2",
+    "milestone": "M6",
+    "current": "Есть авторские notes, но отдельные comment threads с ответами, resolution и permissions не найдены.",
+    "proposal": "Добавить комментарии как отдельные объекты к canonical reference, не смешивая их с source claims.",
+    "acceptance": "Два участника обсуждают один passage; resolve не удаляет обсуждение, новая редакция показывает, к какому тексту относился комментарий.",
+    "sources": [
+      "P11",
+      "P23"
+    ],
+    "code": [],
+    "dependencies": [
+      "KNO02",
+      "COL01",
+      "TRU03"
+    ],
+    "verification": "static_audit"
+  },
+  {
+    "id": "COL04",
+    "category": "COL",
+    "label": "Совместная работа",
+    "title": "Назначение и очередь проверки",
+    "state": "нет",
+    "layer": "graph",
+    "priority": "P2",
+    "milestone": "M6",
+    "current": "Review решения и audit есть; назначения reviewer и очереди командной приёмки в аудите не найдены.",
+    "proposal": "Добавить владельца review-task, due state и фильтры очереди без изменения доказательного контракта.",
+    "acceptance": "Назначенный reviewer видит очередь; параллельное решение по устаревшему pin отклонено, assignment не означает approval.",
+    "sources": [
+      "P23",
+      "P11",
+      "T03"
+    ],
+    "code": [
+      "pkg/mem/graph_review.go",
+      "pkg/mem/graph_review_pin.go"
+    ],
+    "dependencies": [
+      "COL01",
+      "TRU05"
+    ],
+    "verification": "static_audit"
+  },
+  {
+    "id": "COL05",
+    "category": "COL",
+    "label": "Совместная работа",
+    "title": "Личные виды и учебная история в общей базе",
+    "state": "частично",
+    "layer": "shared",
+    "priority": "P2",
+    "milestone": "M6",
+    "current": "Views и learning attempts хранятся; единая политика private/shared для каждого нового объекта ещё не задана.",
+    "proposal": "Разделить общие знания, личное расположение и личные оценки обучения, сохраняя существующие записи через миграцию.",
+    "acceptance": "Оценка пользователя A не меняет due пользователя B; общий claim обновляется обоим, private view не появляется у другого без разрешения.",
+    "sources": [
+      "P16",
+      "P13"
+    ],
+    "code": [
+      "pkg/mem/graph_layout.go",
+      "pkg/mem/graph_learning_session.go"
+    ],
+    "dependencies": [
+      "COL01",
+      "LRN02",
+      "KNO08"
+    ],
+    "verification": "static_audit"
+  },
+  {
+    "id": "COL06",
+    "category": "COL",
+    "label": "Совместная работа",
+    "title": "Присутствие участников и совместное выделение",
+    "state": "нет",
+    "layer": "shared",
+    "priority": "P3",
+    "milestone": "M6",
+    "current": "Многопользовательский вход не означает live presence; курсоры и совместное выделение не найдены.",
+    "proposal": "При подтверждённой потребности добавить ephemeral presence, отдельно от persistent model edits.",
+    "acceptance": "Разрыв соединения убирает presence по timeout; курсоры не создают ревизии и не раскрывают недоступные объекты.",
+    "sources": [
+      "P11",
+      "P06"
+    ],
+    "code": [],
+    "dependencies": [
+      "COL01",
+      "COL05"
+    ],
+    "verification": "static_audit"
+  },
+  {
+    "id": "COL07",
+    "category": "COL",
+    "label": "Совместная работа",
+    "title": "Осмысленное слияние параллельных изменений",
+    "state": "нет",
+    "layer": "shared",
+    "priority": "P3",
+    "milestone": "M6",
+    "current": "Есть optimistic conflict, но автоматического field-level merge или CRDT/OT нет.",
+    "proposal": "Сначала предложить ручное сравнение конфликтующих версий, автоматизировать только доказуемо независимые поля.",
+    "acceptance": "Независимые изменения title/body можно применить с preview; конфликт одного поля требует выбора и сохраняет обе версии в audit.",
+    "sources": [
+      "P11",
+      "T03"
+    ],
+    "code": [
+      "pkg/mem/graph_edit.go",
+      "pkg/mem/mind_map.go"
+    ],
+    "dependencies": [
+      "COL02",
+      "TRU07",
+      "COL01"
+    ],
+    "verification": "static_audit"
+  },
+  {
+    "id": "COL08",
+    "category": "COL",
+    "label": "Совместная работа",
+    "title": "Аудит действий участников",
+    "state": "есть",
+    "layer": "shared",
+    "priority": "P1",
+    "milestone": "M6",
+    "current": "История сохраняет actor/action/revisions; это основа аудита, не полный журнал будущих collaborative permissions.",
+    "proposal": "Расширить audit для комментариев, sharing и assignments с correlation IDs, не переписывая старые записи.",
+    "acceptance": "Изменение роли и review связываются с actor и запросом; экспорт audit не содержит секретов, legacy unknown actor отмечен явно.",
+    "sources": [
+      "T03",
+      "P23"
+    ],
+    "code": [
+      "pkg/mem/graph_review.go",
+      "pkg/mem/mind_map.go",
+      "internal/applog/log.go"
+    ],
+    "dependencies": [
+      "COL01",
+      "TRU08"
+    ],
+    "verification": "static_audit"
+  },
+  {
+    "id": "COL09",
+    "category": "COL",
+    "label": "Совместная работа",
+    "title": "Публикация неизменяемого read-only результата",
+    "state": "частично",
+    "layer": "shared",
+    "priority": "P2",
+    "milestone": "M6",
+    "current": "Есть автономный HTML/export; hosted read-only share links с отдельной политикой доступа не найдены.",
+    "proposal": "Добавить snapshot publication с явным составом, редакцией и redaction, отдельную от live workspace.",
+    "acceptance": "Опубликованный snapshot не меняется после edit; закрытые локальные пути отсутствуют, отозванная ссылка перестаёт отдавать содержимое.",
+    "sources": [
+      "P11",
+      "P09",
+      "T03"
+    ],
+    "code": [
+      "pkg/mem/mind_map_export.go",
+      "pkg/mem/graph_portable_export.go",
+      "pkg/mem/web_map_manage.go"
+    ],
+    "dependencies": [
+      "COL01",
+      "TRU10"
+    ],
+    "verification": "static_audit"
+  },
+  {
+    "id": "COL10",
+    "category": "COL",
+    "label": "Совместная работа",
+    "title": "Повествовательный показ карты",
+    "state": "нет",
+    "layer": "shared",
+    "priority": "P3",
+    "milestone": "M6",
+    "current": "Есть views и fullscreen learning; отдельной последовательности presentation steps для аудитории нет.",
+    "proposal": "Добавить сохранённые шаги показа объектов/видов с заметками рассказчика как необязательный слой.",
+    "acceptance": "Презентация из пяти шагов открывает заданные объекты и evidence; её редактирование не меняет знания и экспортируемый snapshot воспроизводим.",
+    "sources": [
+      "P11",
+      "P10",
+      "L14"
+    ],
+    "code": [
+      "pkg/mem/graph_layout.go",
+      "internal/webapp/assets/app.js"
+    ],
+    "dependencies": [
+      "NAV02",
+      "NAV07",
+      "COL09"
+    ],
+    "verification": "static_audit"
+  },
+  {
+    "id": "OPS01",
+    "category": "OPS",
+    "label": "Эксплуатация и качество",
+    "title": "Долговременная квота web receipts",
+    "state": "риск",
+    "layer": "classic",
+    "priority": "P1",
+    "milestone": "M0",
+    "current": "Статически: 1000 receipts правок/undo/redo/actions/snapshots суммируются на workspace; лимит не сбрасывается с сеансом.",
+    "proposal": "Определить безопасный retention/compaction контракт без потери идемпотентности и истории либо снять искусственную lifetime-квоту с измеренными bounds.",
+    "acceptance": "После более 1000 последовательных допустимых правок новая правка работает по утверждённой политике; retry старого ID не повторяет уже выполненную операцию.",
+    "sources": [
+      "T03",
+      "P11"
+    ],
+    "code": [
+      "pkg/mem/web_map_edit.go",
+      "pkg/mem/web_map_snapshots.go"
+    ],
+    "dependencies": [],
+    "verification": "static_audit"
+  },
+  {
+    "id": "OPS02",
+    "category": "OPS",
+    "label": "Эксплуатация и качество",
+    "title": "Оценка качества и размеченный baseline",
+    "state": "частично",
+    "layer": "graph",
+    "priority": "P1",
+    "milestone": "M0",
+    "current": "Quality eval и eval-labeled с precision/recall/F1 существуют; текущая полнота/качество реальных корпусов этим исследованием не измерены.",
+    "proposal": "Собрать versioned acceptance corpus: нормативы, учебник, таблицы, противоречия и длинные документы; закрепить baseline без завышенных выводов.",
+    "acceptance": "Для каждого запуска сохранены corpus hash, model/config, gold manifest, metrics и ошибки; обработанное coverage отделено от semantic precision/recall.",
+    "sources": [
+      "T04",
+      "L15",
+      "L03"
+    ],
+    "code": [
+      "pkg/mem/graph_quality_eval.go",
+      "pkg/mem/graph_labeled_eval.go",
+      "pkg/mem/graph_labeled_requirements_test.go"
+    ],
+    "dependencies": [],
+    "verification": "static_audit"
+  },
+  {
+    "id": "OPS03",
+    "category": "OPS",
+    "label": "Эксплуатация и качество",
+    "title": "Сквозная регрессия жизненного цикла документа",
+    "state": "риск",
+    "layer": "graph",
+    "priority": "P1",
+    "milestone": "M0",
+    "current": "Отдельные lifecycle tests есть, но новый reimport probe воспроизвёл stale sections и ложный completed.",
+    "proposal": "Добавить постоянный набор import→extract→review→update/rechunk/restore→learning/export на временных данных.",
+    "acceptance": "Каждый переход проверяет current/stale, pending/completed, review и learning invalidation; найденный сценарий 5→9 bar проходит без потери истории.",
+    "sources": [
+      "T03"
+    ],
+    "code": [
+      "pkg/mem/graph_document_test.go",
+      "pkg/mem/document_restore_test.go",
+      "pkg/mem/graph_learning_session_test.go"
+    ],
+    "dependencies": [
+      "TRU01",
+      "TRU02"
+    ],
+    "verification": "static_audit"
+  },
+  {
+    "id": "OPS04",
+    "category": "OPS",
+    "label": "Эксплуатация и качество",
+    "title": "Честные показатели покрытия",
+    "state": "риск",
+    "layer": "graph",
+    "priority": "P1",
+    "milestone": "M0",
+    "current": "Есть текстовое/семантическое coverage и предупреждение UI; probe показал completed при отсутствии current generated nodes.",
+    "proposal": "Определить независимые числители и знаменатели для импортированного текста, current source graph, attempted/completed extraction и размеченных знаний.",
+    "acceptance": "Fixture с 10 chunks, 2 pending и 1 stale показывает все состояния раздельно; 100% текстового покрытия не подписано «все знания извлечены».",
+    "sources": [
+      "T04",
+      "L15"
+    ],
+    "code": [
+      "pkg/mem/graph_coverage.go",
+      "pkg/mem/graph_quality_eval.go",
+      "internal/webapp/assets/graph-documents.js"
+    ],
+    "dependencies": [
+      "TRU01",
+      "TRU02"
+    ],
+    "verification": "static_audit"
+  },
+  {
+    "id": "OPS05",
+    "category": "OPS",
+    "label": "Эксплуатация и качество",
+    "title": "Управляемые квоты и рост библиотеки",
+    "state": "частично",
+    "layer": "shared",
+    "priority": "P1",
+    "milestone": "M5",
+    "current": "Есть fail-fast limits: classic web 1000 nodes/4 МиБ, graph input 20 000 entries/64 МиБ, ограничение sessions и exports.",
+    "proposal": "Показывать расход по ресурсам и выбирать pagination/streaming до увеличения hard limits; учитывать корзину и retention отдельно.",
+    "acceptance": "Набор на каждом пороге даёт предсказуемый ответ и показатели расхода; read-only источники доступны при исчерпанной write quota.",
+    "sources": [
+      "L14",
+      "T04"
+    ],
+    "code": [
+      "pkg/mem/web_maps.go",
+      "pkg/mem/web_graph.go",
+      "internal/webapp/storage.go",
+      "internal/webapp/graph.go"
+    ],
+    "dependencies": [
+      "OPS01",
+      "OPS06"
+    ],
+    "verification": "static_audit"
+  },
+  {
+    "id": "OPS06",
+    "category": "OPS",
+    "label": "Эксплуатация и качество",
+    "title": "Измерение скорости и памяти",
+    "state": "частично",
+    "layer": "shared",
+    "priority": "P1",
+    "milestone": "M5",
+    "current": "Есть отдельные graph benchmarks и layout limits; текущего сопоставимого browser/performance baseline двух редакторов нет.",
+    "proposal": "Измерять загрузку, поиск, pan/zoom, source preview и export на фиксированных размерах и оборудовании.",
+    "acceptance": "Отчёт содержит p50/p95, peak memory и размеры 100/1000/предельный набор; пороги регрессии согласованы до увеличения лимитов.",
+    "sources": [
+      "L14",
+      "L13",
+      "T04"
+    ],
+    "code": [
+      "pkg/mem/graph_live_benchmark_test.go",
+      "internal/webapp/map_layout_test.cjs",
+      "pkg/mem/web_graph.go"
+    ],
+    "dependencies": [
+      "OPS02"
+    ],
+    "verification": "static_audit"
+  },
+  {
+    "id": "OPS07",
+    "category": "OPS",
+    "label": "Эксплуатация и качество",
+    "title": "Очистка результатов без потери работы",
+    "state": "частично",
+    "layer": "shared",
+    "priority": "P1",
+    "milestone": "M5",
+    "current": "Есть retention in-memory graph jobs и session eviction; durable AI/history имеют другие накопительные лимиты.",
+    "proposal": "Разделить cache, downloadable results, audit и history; сделать состояние удаления явным и не эвиктить активные операции.",
+    "acceptance": "Истечение retention удаляет только разрешённый cache; active job завершает доступ к Store безопасно, утраченный download получает явный expired.",
+    "sources": [
+      "T03",
+      "P11"
+    ],
+    "code": [
+      "pkg/mem/graph_learning_jobs.go",
+      "pkg/mem/graph_export_jobs.go",
+      "pkg/mem/web_graph.go",
+      "internal/webapp/graph.go"
+    ],
+    "dependencies": [
+      "AI07",
+      "OPS05"
+    ],
+    "verification": "static_audit"
+  },
+  {
+    "id": "OPS08",
+    "category": "OPS",
+    "label": "Эксплуатация и качество",
+    "title": "Сквозная UI и accessibility приёмка",
+    "state": "частично",
+    "layer": "shared",
+    "priority": "P1",
+    "milestone": "M2",
+    "current": "Есть JS unit/contract tests и HTTP tests; browser E2E и screen-reader приёмка этой задачей не проводились.",
+    "proposal": "Добавить проверяемые сценарии reader→map→review→learning и accessibility checks на целевых браузерах.",
+    "acceptance": "Сценарии выполняются мышью и клавиатурой; focus/labels/error announcements проверены, результаты включают версии браузеров и замечания.",
+    "sources": [
+      "T05",
+      "L14"
+    ],
+    "code": [
+      "internal/webapp/map_layout_test.cjs",
+      "internal/webapp/map_document_test.cjs",
+      "pkg/mem/web/knowledgeForms.test.cjs"
+    ],
+    "dependencies": [
+      "EDT03",
+      "EDT10"
+    ],
+    "verification": "static_audit"
+  },
+  {
+    "id": "OPS09",
+    "category": "OPS",
+    "label": "Эксплуатация и качество",
+    "title": "Офлайн-работа и доступность зависимостей",
+    "state": "частично",
+    "layer": "shared",
+    "priority": "P1",
+    "milestone": "M0",
+    "current": "Локальные данные и часть функций не требуют модели; PDF preview зависит от renderer, AI — от provider; failure paths есть.",
+    "proposal": "Показывать capability status и причины деградации без попыток незаметной установки инструментов/моделей.",
+    "acceptance": "При недоступной модели доступны read/edit/evidence; отсутствие PDF renderer даёт действие и текстовую цитату, не фиктивный успешный preview.",
+    "sources": [
+      "P14",
+      "P05"
+    ],
+    "code": [
+      "pkg/ingest/pdf_preview.go",
+      "pkg/mem/web_map_ai_worker.go",
+      "internal/webapp/server.go"
+    ],
+    "dependencies": [
+      "AI06"
+    ],
+    "verification": "static_audit"
+  },
+  {
+    "id": "OPS10",
+    "category": "OPS",
+    "label": "Эксплуатация и качество",
+    "title": "Изоляция доступа и диагностируемые ошибки",
+    "state": "частично",
+    "layer": "shared",
+    "priority": "P1",
+    "milestone": "M0",
+    "current": "Session/origin/capability, owned paths и logging реализованы; полный threat model и end-to-end security audit не выполнены.",
+    "proposal": "Зафиксировать regression matrix доступа к документам, jobs и artifacts; связывать ошибки с correlation IDs без секретов.",
+    "acceptance": "Чужая workspace/session не читает excerpt/result; path escape отклонён; журнал связывает отказ с запросом и не содержит токенов/полного приватного текста.",
+    "sources": [
+      "T03"
+    ],
+    "code": [
+      "internal/webapp/server.go",
+      "internal/webapp/graph.go",
+      "pkg/mem/web_map_document.go",
+      "pkg/mem/graph_source.go"
+    ],
+    "dependencies": [
+      "TRU03",
+      "AI08"
+    ],
+    "verification": "static_audit"
+  }
+]

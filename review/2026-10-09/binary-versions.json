@@ -1,0 +1,32 @@
+[
+  {
+    "path": "C:\\Users\\ZMII\\bin\\mem.exe",
+    "version": "mem-tool v1.71.0-alpha.35\r\n(c) 2026 Кнап Руслан Юрьевич\r\nВекторная база знаний для работы с Claude",
+    "sha256": "0A5948EEAA3BACBED246CAA03FB89FCFB0FEF4EB042BA80D801F8857A5D94705"
+  },
+  {
+    "path": "C:\\Users\\ZMII\\bin\\mem-index.exe",
+    "version": "mem-index v1.71.0-alpha.35\r\n(c) 2026 Кнап Руслан Юрьевич\r\nВекторная база знаний для работы с Claude",
+    "sha256": "031863AB5788CC5B5E8A7D69A7555C0B3DD631AFE603AF53B8375AAD8E399BC1"
+  },
+  {
+    "path": "C:\\Users\\ZMII\\bin\\mem-bot.exe",
+    "version": "mem-bot v1.71.0-alpha.35\r\n(c) 2026 Кнап Руслан Юрьевич\r\nВекторная база знаний для работы с Claude",
+    "sha256": "8138343E1F8936111E87BCC7285F8B0268A070EE65CC53FCED276925834DDF05"
+  },
+  {
+    "path": "C:\\Users\\ZMII\\Documents\\ChatGPT\\mem-tool\\build\\web-alpha\\alpha36\\bin\\mem.exe",
+    "version": "mem-tool v1.71.0-alpha.36\r\n(c) 2026 Кнап Руслан Юрьевич\r\nВекторная база знаний для работы с Claude",
+    "sha256": "AA1A69FF1C19BA38955B9C4B2060B04E5F3B00D4E4F6057671C0BE9048F5825A"
+  },
+  {
+    "path": "C:\\Users\\ZMII\\Documents\\ChatGPT\\mem-tool\\build\\web-alpha\\alpha36\\bin\\mem-index.exe",
+    "version": "mem-index v1.71.0-alpha.36\r\n(c) 2026 Кнап Руслан Юрьевич\r\nВекторная база знаний для работы с Claude",
+    "sha256": "D13326D65049A6DF7B02689768723B3E3FB0153EAB61FB0A97A9F09C1246B87B"
+  },
+  {
+    "path": "C:\\Users\\ZMII\\Documents\\ChatGPT\\mem-tool\\build\\web-alpha\\alpha36\\bin\\mem-bot.exe",
+    "version": "mem-bot v1.71.0-alpha.36\r\n(c) 2026 Кнап Руслан Юрьевич\r\nВекторная база знаний для работы с Claude",
+    "sha256": "7603970AC3F426881C1279149C95F6C9E7CCD804C64FC1A3E835B5B97439A518"
+  }
+]

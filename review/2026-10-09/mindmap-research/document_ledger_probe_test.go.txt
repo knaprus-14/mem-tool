@@ -1,0 +1,59 @@
+package mem
+
+import (
+	"context"
+	"os"
+	"path/filepath"
+	"testing"
+)
+
+// Research-only regression probe. Uses temporary source/database and a deterministic
+// in-process provider; no real data or language-model service is used.
+func TestResearchDocumentLedgerReimportRequiresNewSemanticPass(t *testing.T) {
+	root := t.TempDir()
+	source := filepath.Join(root, "document.txt")
+	if err := os.WriteFile(source, []byte("Pressure must remain below 5 bar.\n"), 0600); err != nil { t.Fatal(err) }
+	store, err := NewStore(filepath.Join(root, "db"))
+	if err != nil { t.Fatal(err) }
+	defer store.Close()
+	first := importPhysicalTestDocument(t, store, source, ImportOptions{})
+	oldEntry := store.GetBySourceFile(source)[0]
+	oldCitation, _ := CitationForEntry(oldEntry)
+	calls := 0
+	provider := documentTestProvider(func(_ context.Context, r AnswerRequest) (string, error) {
+		calls++
+		return documentTestReply(documentRequestEvidence(t, r)), nil
+	})
+	run := func() {
+		t.Helper()
+		if err := store.RunKnowledgeDocumentGraph(t.Context(), DefaultLocalConfig(), provider, physicalTestManagedID, "all", "", nil); err != nil { t.Fatal(err) }
+	}
+	run()
+	if calls != 1 { t.Fatalf("initial semantic calls=%d, want 1", calls) }
+	if err := os.WriteFile(source, []byte("Pressure must remain below 9 bar.\n"), 0600); err != nil { t.Fatal(err) }
+	second := importPhysicalTestDocument(t, store, source, ImportOptions{})
+	newEntry := store.GetBySourceFile(source)[0]
+	newCitation, _ := CitationForEntry(newEntry)
+	if first.DocumentRevision == second.DocumentRevision || oldEntry.ChunkHash == newEntry.ChunkHash { t.Fatal("fixture did not create a new revision/text") }
+	if oldCitation != newCitation { t.Fatal("fixture changed the stable chunk coordinates") }
+	run()
+	report, err := store.BuildKnowledgeCoverageReport(KnowledgeCoverageOptions{Document: physicalTestManagedID})
+	if err != nil { t.Fatal(err) }
+	graph, err := store.LoadKnowledgeGraph()
+	if err != nil { t.Fatal(err) }
+	currentGenerated, currentSourceSections, staleSourceSections := 0, 0, 0
+	for _, node := range graph.Nodes {
+		if node.Origin == KnowledgeOriginSource && node.Kind == KnowledgeNodeSection {
+			for _, a := range node.Evidence {
+				if store.ResolveEvidenceAnchor(a).State == EvidenceCurrent { currentSourceSections++ } else { staleSourceSections++ }
+			}
+		}
+		if node.Origin != KnowledgeOriginGenerated { continue }
+		for _, a := range node.Evidence {
+			if a.DocumentRevision == second.DocumentRevision && store.ResolveEvidenceAnchor(a).State == EvidenceCurrent { currentGenerated++; break }
+		}
+	}
+	t.Logf("citation stable=%t; revision changed=%t; total model calls=%d; reported semantic completed=%d pending=%d; current generated nodes=%d", oldCitation == newCitation, first.DocumentRevision != second.DocumentRevision, calls, report.Summary.SemanticCompletedChunks, report.Summary.SemanticPendingChunks, currentGenerated)
+	t.Logf("source sections after reimport: current=%d stale=%d", currentSourceSections, staleSourceSections)
+	if calls != 2 || currentGenerated == 0 { t.Fatalf("updated document skipped semantic extraction: calls=%d current_generated=%d; completion must be revision-pinned", calls, currentGenerated) }
+}

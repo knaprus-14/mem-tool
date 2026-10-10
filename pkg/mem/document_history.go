@@ -1,6 +1,7 @@
 package mem
 
 import (
+	"context"
 	"crypto/sha256"
 	"database/sql"
 	"encoding/hex"
@@ -505,6 +506,16 @@ func (s *Store) ReplaceDocumentWithEmpty(sourcePath string) (int64, error) {
 
 	archivable := normalizeLegacyDocumentEntries(oldEntries, sourcePath)
 	documentID := documentIDForSourcePath(sourcePath)
+	managedID, err := managedDocumentIDForSourcePath(context.Background(), tx, sourcePath)
+	if err != nil {
+		return rollback(err)
+	}
+	if managedID != "" {
+		documentID = managedID
+	}
+	if err := validateDocumentReplacementTx(tx, documentID, sourcePath, sourcePath, oldEntries, nil); err != nil {
+		return rollback(err)
+	}
 	mediaType := mediaTypeForSourcePath(sourcePath)
 	if len(archivable) > 0 {
 		documentID, mediaType = archivable[0].DocumentID, archivable[0].MediaType

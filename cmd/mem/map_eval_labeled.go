@@ -1,5 +1,7 @@
 package main
 
+import "github.com/knaprus-14/mem-tool/internal/applog"
+
 import (
 	"encoding/json"
 	"errors"
@@ -13,7 +15,9 @@ import (
 
 const mapEvalLabeledUsage = "использование: mem map eval-labeled <manifest.json> [--json]"
 
-func handleMapEvalLabeled(store *Store, args []string) error {
+func handleMapEvalLabeled(store *Store, args []string) (applogResult0 error) {
+	defer applog.Track("cmd.mem.handleMapEvalLabeled")(&applogResult0)
+
 	manifestPath := ""
 	jsonOutput := false
 	for _, arg := range args {

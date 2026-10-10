@@ -1,5 +1,7 @@
 package mem
 
+import "github.com/knaprus-14/mem-tool/internal/applog"
+
 import (
 	"context"
 	"crypto/sha256"
@@ -52,7 +54,9 @@ func ListClassicMindMapTemplates() []ClassicMindMapTemplate {
 	return result
 }
 
-func (s *Store) CreateClassicMindMapFromTemplate(request ClassicMindMapTemplateRequest, actor string) (ClassicMindMapDocument, error) {
+func (s *Store) CreateClassicMindMapFromTemplate(request ClassicMindMapTemplateRequest, actor string) (applogResult0 ClassicMindMapDocument, applogResult1 error) {
+	defer applog.Track("pkg.mem.Store.CreateClassicMindMapFromTemplate")(&applogResult1)
+
 	templateID := strings.ToLower(strings.TrimSpace(request.TemplateID))
 	var selected *ClassicMindMapTemplate
 	for i := range classicMindMapTemplates {
@@ -127,15 +131,17 @@ type ClassicMindMapBranchAnswer struct {
 
 // BuildClassicMindMapBranchManifest pins the exact subtree and all current
 // local evidence used by branch Q&A and study artifacts.
-func (s *Store) BuildClassicMindMapBranchManifest(request ClassicMindMapBranchRequest) (ClassicMindMapBranchManifest, error) {
-	doc, root, nodes, err := s.loadClassicMindMapBranch(request)
+func (s *Store) BuildClassicMindMapBranchManifest(request ClassicMindMapBranchRequest) (applogResult0 ClassicMindMapBranchManifest, applogResult1 error) {
+	defer applog.Track("pkg.mem.Store.BuildClassicMindMapBranchManifest")(&applogResult1)
+
+	branch, err := s.loadResolvedClassicMindMapBranch(request)
 	if err != nil {
 		return ClassicMindMapBranchManifest{}, err
 	}
-	evidence, err := s.currentClassicMindMapBranchEvidence(nodes)
-	if err != nil {
-		return ClassicMindMapBranchManifest{}, err
-	}
+	return buildClassicMindMapBranchManifest(branch.Document, branch.Root, branch.Nodes, branch.Resolved.Evidence)
+}
+
+func buildClassicMindMapBranchManifest(doc ClassicMindMapDocument, root ClassicMindMapNode, nodes []ClassicMindMapNode, evidence []GroundedEvidence) (ClassicMindMapBranchManifest, error) {
 	nodeIDs := make([]string, len(nodes))
 	for i := range nodes {
 		nodeIDs[i] = nodes[i].ID
@@ -163,7 +169,9 @@ func (s *Store) BuildClassicMindMapBranchManifest(request ClassicMindMapBranchRe
 	}, nil
 }
 
-func (s *Store) AnswerClassicMindMapBranch(ctx context.Context, service *ClassicMindMapAIService, request ClassicMindMapBranchQuestionRequest) (ClassicMindMapBranchAnswer, error) {
+func (s *Store) AnswerClassicMindMapBranch(ctx context.Context, service *ClassicMindMapAIService, request ClassicMindMapBranchQuestionRequest) (applogResult0 ClassicMindMapBranchAnswer, applogResult1 error) {
+	defer applog.Track("pkg.mem.Store.AnswerClassicMindMapBranch")(&applogResult1)
+
 	if service == nil || service.Provider == nil {
 		return ClassicMindMapBranchAnswer{}, errors.New("answer-модель для вопроса по ветви недоступна")
 	}
@@ -178,8 +186,27 @@ func (s *Store) AnswerClassicMindMapBranch(ctx context.Context, service *Classic
 	if err != nil {
 		return ClassicMindMapBranchAnswer{}, err
 	}
-	if strings.TrimSpace(request.ExpectedManifestDigest) != "" && request.ExpectedManifestDigest != manifest.Digest {
-		return ClassicMindMapBranchAnswer{}, fmt.Errorf("ветвь изменилась после предпросмотра: expected manifest %s, current %s", request.ExpectedManifestDigest, manifest.Digest)
+	result, err := answerClassicMindMapBranchManifest(ctx, service, question, request.ExpectedManifestDigest, manifest)
+	if err != nil {
+		return ClassicMindMapBranchAnswer{}, err
+	}
+	// Resolve the original IDs again, rather than a label or ordinal that could
+	// identify another object after an edit while the model was running.
+	current, err := s.BuildClassicMindMapBranchManifest(ClassicMindMapBranchRequest{
+		MapRef: manifest.MapID, NodeRef: manifest.RootNodeID, ExpectedRevision: manifest.Revision,
+	})
+	if err != nil {
+		return ClassicMindMapBranchAnswer{}, err
+	}
+	if current.Digest != manifest.Digest {
+		return ClassicMindMapBranchAnswer{}, errors.New("ветвь или её источники изменились во время генерации; повторите запрос")
+	}
+	return result, nil
+}
+
+func answerClassicMindMapBranchManifest(ctx context.Context, service *ClassicMindMapAIService, question, expectedDigest string, manifest ClassicMindMapBranchManifest) (ClassicMindMapBranchAnswer, error) {
+	if strings.TrimSpace(expectedDigest) != "" && expectedDigest != manifest.Digest {
+		return ClassicMindMapBranchAnswer{}, fmt.Errorf("ветвь изменилась после предпросмотра: expected manifest %s, current %s", expectedDigest, manifest.Digest)
 	}
 	if len(manifest.Evidence) == 0 {
 		return ClassicMindMapBranchAnswer{}, errors.New("в выбранной ветви нет current versioned evidence; сначала привяжите источники")
@@ -227,12 +254,14 @@ func (s *Store) AnswerClassicMindMapBranch(ctx context.Context, service *Classic
 }
 
 type ClassicMindMapStudyCard struct {
-	ID      string                 `json:"id"`
-	NodeID  string                 `json:"node_id"`
-	Kind    ClassicMindMapNodeKind `json:"kind"`
-	Front   string                 `json:"front"`
-	Back    string                 `json:"back"`
-	Sources []ClassicMindMapSource `json:"sources"`
+	ID              string                 `json:"id"`
+	NodeID          string                 `json:"node_id"`
+	Kind            ClassicMindMapNodeKind `json:"kind"`
+	Front           string                 `json:"front"`
+	Back            string                 `json:"back"`
+	Sources         []ClassicMindMapSource `json:"sources"`
+	EvidenceDigest  string                 `json:"evidence_digest,omitempty"`
+	EvidenceCurrent *bool                  `json:"evidence_current,omitempty"`
 }
 
 type ClassicMindMapStudyPack struct {
@@ -247,15 +276,28 @@ type ClassicMindMapStudyPack struct {
 	Markdown       string                    `json:"markdown"`
 }
 
-func (s *Store) BuildClassicMindMapStudyPack(request ClassicMindMapBranchRequest) (ClassicMindMapStudyPack, error) {
-	doc, root, nodes, err := s.loadClassicMindMapBranch(request)
+func (s *Store) BuildClassicMindMapStudyPack(request ClassicMindMapBranchRequest) (applogResult0 ClassicMindMapStudyPack, applogResult1 error) {
+	defer applog.Track("pkg.mem.Store.BuildClassicMindMapStudyPack")(&applogResult1)
+
+	branch, err := s.loadResolvedClassicMindMapBranch(request)
 	if err != nil {
 		return ClassicMindMapStudyPack{}, err
 	}
-	manifest, err := s.BuildClassicMindMapBranchManifest(request)
+	manifest, err := buildClassicMindMapBranchManifest(branch.Document, branch.Root, branch.Nodes, branch.Resolved.Evidence)
 	if err != nil {
 		return ClassicMindMapStudyPack{}, err
 	}
+	pack := buildClassicMindMapStudyPack(branch.Document, branch.Root, branch.Nodes, manifest)
+	for i := range pack.Cards {
+		pin := branch.Resolved.Nodes[pack.Cards[i].NodeID]
+		pack.Cards[i].EvidenceDigest = pin.Digest
+		current := pin.Current
+		pack.Cards[i].EvidenceCurrent = &current
+	}
+	return pack, nil
+}
+
+func buildClassicMindMapStudyPack(doc ClassicMindMapDocument, root ClassicMindMapNode, nodes []ClassicMindMapNode, manifest ClassicMindMapBranchManifest) ClassicMindMapStudyPack {
 	children := make(map[string][]ClassicMindMapNode)
 	for _, node := range nodes {
 		children[node.ParentID] = append(children[node.ParentID], node)
@@ -291,7 +333,7 @@ func (s *Store) BuildClassicMindMapStudyPack(request ClassicMindMapBranchRequest
 	}
 	return ClassicMindMapStudyPack{Version: ClassicMindMapWorkbenchVersion, MapID: doc.Map.ID, MapTitle: doc.Map.Title,
 		RootNodeID: root.ID, RootLabel: root.Label, Revision: doc.Map.Revision, ManifestDigest: manifest.Digest,
-		Cards: cards, Markdown: out.String()}, nil
+		Cards: cards, Markdown: out.String()}
 }
 
 type ClassicMindMapCompareRequest struct {
@@ -324,7 +366,9 @@ type ClassicMindMapComparison struct {
 	Digest    string                      `json:"digest"`
 }
 
-func (s *Store) CompareClassicMindMaps(request ClassicMindMapCompareRequest) (ClassicMindMapComparison, error) {
+func (s *Store) CompareClassicMindMaps(request ClassicMindMapCompareRequest) (applogResult0 ClassicMindMapComparison, applogResult1 error) {
+	defer applog.Track("pkg.mem.Store.CompareClassicMindMaps")(&applogResult1)
+
 	left, err := s.LoadClassicMindMap(request.LeftMapRef)
 	if err != nil {
 		return ClassicMindMapComparison{}, err
@@ -333,6 +377,10 @@ func (s *Store) CompareClassicMindMaps(request ClassicMindMapCompareRequest) (Cl
 	if err != nil {
 		return ClassicMindMapComparison{}, err
 	}
+	return compareClassicMindMapDocuments(request, left, right)
+}
+
+func compareClassicMindMapDocuments(request ClassicMindMapCompareRequest, left, right ClassicMindMapDocument) (ClassicMindMapComparison, error) {
 	if request.LeftExpectedDigest != "" && request.LeftExpectedDigest != left.Digest {
 		return ClassicMindMapComparison{}, fmt.Errorf("левая карта изменилась после выбора")
 	}
@@ -545,11 +593,7 @@ func classicMindMapDocumentSummary(doc ClassicMindMapDocument) ClassicMindMapSum
 	return ClassicMindMapSummary{ClassicMindMap: doc.Map, NodeCount: len(doc.Nodes), SourceCount: sources}
 }
 
-func (s *Store) loadClassicMindMapBranch(request ClassicMindMapBranchRequest) (ClassicMindMapDocument, ClassicMindMapNode, []ClassicMindMapNode, error) {
-	doc, err := s.LoadClassicMindMap(request.MapRef)
-	if err != nil {
-		return ClassicMindMapDocument{}, ClassicMindMapNode{}, nil, err
-	}
+func classicMindMapBranchFromDocument(doc ClassicMindMapDocument, request ClassicMindMapBranchRequest) (ClassicMindMapDocument, ClassicMindMapNode, []ClassicMindMapNode, error) {
 	if request.ExpectedRevision > 0 && doc.Map.Revision != request.ExpectedRevision {
 		return ClassicMindMapDocument{}, ClassicMindMapNode{}, nil, ErrClassicMindMapRevisionConflict
 	}
@@ -602,50 +646,6 @@ func classicMindMapDocumentNodeRef(doc ClassicMindMapDocument, ref string) (Clas
 		return ClassicMindMapNode{}, ErrClassicMindMapAmbiguousRef
 	}
 	return ClassicMindMapNode{}, ErrClassicMindMapNodeNotFound
-}
-
-func (s *Store) currentClassicMindMapBranchEvidence(nodes []ClassicMindMapNode) ([]GroundedEvidence, error) {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	seen := make(map[string]bool)
-	result := make([]GroundedEvidence, 0)
-	for _, node := range nodes {
-		for _, source := range node.Sources {
-			if source.Kind != ClassicMindMapSourceEvidence || source.Evidence == nil || source.EvidenceState != EvidenceCurrent {
-				continue
-			}
-			anchor := source.Evidence
-			if seen[anchor.CitationID] {
-				continue
-			}
-			var entry Entry
-			err := s.db.QueryRow(`SELECT id,text,document_id,document_revision,chunk_hash,source_file,source_path,page,block_index,block_chunk_index,block_total_chunks,chunk_index FROM entries WHERE document_id=? AND document_revision=? AND chunk_hash=? AND page=? AND block_index=? AND block_chunk_index=? LIMIT 1`, anchor.DocumentID, anchor.DocumentRevision, anchor.ChunkHash, anchor.Page, anchor.BlockIndex, anchor.BlockChunkIndex).Scan(&entry.ID, &entry.Text, &entry.DocumentID, &entry.DocumentRevision, &entry.ChunkHash, &entry.SourceFile, &entry.SourcePath, &entry.Page, &entry.BlockIndex, &entry.BlockChunkIndex, &entry.BlockTotalChunks, &entry.ChunkIndex)
-			if err != nil {
-				return nil, fmt.Errorf("загрузить current evidence %s: %w", anchor.CitationID, err)
-			}
-			e := groundedEvidenceForEntry(entry, anchor.Excerpt, DefaultAnswerLowConfidence)
-			e.CitationID = anchor.CitationID
-			e.EvidenceHash = anchor.EvidenceHash
-			result = append(result, e)
-			seen[anchor.CitationID] = true
-		}
-	}
-	sort.Slice(result, func(i, j int) bool {
-		if result[i].SourcePath != result[j].SourcePath {
-			return result[i].SourcePath < result[j].SourcePath
-		}
-		if result[i].Page != result[j].Page {
-			return result[i].Page < result[j].Page
-		}
-		if result[i].BlockIndex != result[j].BlockIndex {
-			return result[i].BlockIndex < result[j].BlockIndex
-		}
-		return result[i].BlockChunkIndex < result[j].BlockChunkIndex
-	})
-	for i := range result {
-		result[i].EvidenceRef = fmt.Sprintf("E%d", i+1)
-	}
-	return result, nil
 }
 
 func nonEmptyStrings(values ...string) []string {

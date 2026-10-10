@@ -1,0 +1,7 @@
+error acquiring upload token: creating token file: open C:\Users\ZMII\AppData\Roaming\go\telemetry\local\upload.token: Access is denied.
+# github.com/knaprus-14/mem-tool/review/2026-10-09/maps-probes
+# [github.com/knaprus-14/mem-tool/review/2026-10-09/maps-probes]
+vet.exe: review\2026-10-09\maps-probes\maps_review_probe_test.go:8:19: undefined: graphStoreAndAnchor
+# github.com/knaprus-14/mem-tool/review/2026-10-09/storage-probes
+# [github.com/knaprus-14/mem-tool/review/2026-10-09/storage-probes]
+vet.exe: review\2026-10-09\storage-probes\storage_regression_test.go:15:30: undefined: knowledgeMapPDFSourceFixture

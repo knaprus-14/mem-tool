@@ -269,6 +269,7 @@ func TestKnowledgeMapWorkspaceApprovesPinnedDraftWithoutUserFacingID(t *testing.
 	request := KnowledgeApprovalRequest{
 		ObjectType: KnowledgeObjectNode, ID: objectID, Reviewer: "Руслан",
 		Comment: "Источник проверен", ExpectedEvidenceDigest: digest,
+		ExpectedReviewDigest: knowledgeReviewItemByID(t, store, KnowledgeObjectNode, objectID).ReviewDigest,
 	}
 	raw, err := json.Marshal(request)
 	if err != nil {
@@ -358,6 +359,7 @@ func TestKnowledgeMapWorkspaceRejectsReopensAndUndoesWithoutUserFacingIDs(t *tes
 	}
 	request := KnowledgeReviewMutationRequest{
 		ObjectType: KnowledgeObjectNode, ID: objectID, Reviewer: "Руслан", ExpectedEvidenceDigest: digest,
+		ExpectedReviewDigest: knowledgeReviewItemByID(t, store, KnowledgeObjectNode, objectID).ReviewDigest,
 	}
 	raw, err := json.Marshal(request)
 	if err != nil {
@@ -388,6 +390,7 @@ func TestKnowledgeMapWorkspaceRejectsReopensAndUndoesWithoutUserFacingIDs(t *tes
 	}
 	approvalRaw, _ := json.Marshal(KnowledgeApprovalRequest{
 		ObjectType: KnowledgeObjectNode, ID: objectID, Reviewer: "Руслан", ExpectedEvidenceDigest: digest,
+		ExpectedReviewDigest: knowledgeReviewItemByID(t, store, KnowledgeObjectNode, objectID).ReviewDigest,
 	})
 	approved := requestKnowledgeMapApproval(t, handler, http.MethodPost, host, "http://"+host, token, "same-origin", "application/json", approvalRaw)
 	if approved.Code != http.StatusOK {

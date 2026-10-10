@@ -1,0 +1,9 @@
+error acquiring upload token: creating token file: open C:\Users\ZMII\AppData\Roaming\go\telemetry\local\upload.token: Access is denied.
+=== RUN   TestResearchDocumentLedgerReimportRequiresNewSemanticPass
+    research_document_ledger_probe_test.go:56: citation stable=true; revision changed=true; total model calls=1; reported semantic completed=1 pending=0; current generated nodes=0
+    research_document_ledger_probe_test.go:57: source sections after reimport: current=0 stale=1
+    research_document_ledger_probe_test.go:58: updated document skipped semantic extraction: calls=1 current_generated=0; completion must be revision-pinned
+--- FAIL: TestResearchDocumentLedgerReimportRequiresNewSemanticPass (0.11s)
+FAIL
+FAIL	github.com/knaprus-14/mem-tool/pkg/mem	2.658s
+FAIL

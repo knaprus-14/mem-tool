@@ -1,0 +1,20 @@
+/* Text is never duplicated: overlapping annotation colors share one mark. */
+.annotation-highlight{color:#17241d;cursor:pointer;border-radius:2px;box-decoration-break:clone;-webkit-box-decoration-break:clone}
+.annotation-highlight:focus-visible{outline:3px solid var(--accent);outline-offset:3px}
+.annotation-highlight:hover{text-decoration:underline;text-decoration-thickness:2px}
+.annotation-highlight-controls{margin:12px 0}.annotation-highlight-controls button{margin:0 6px 6px 0}.annotation-highlight-controls p{margin:4px 0 12px}
+.annotation-colors-yellow{background:#fff0a3}
+.annotation-colors-green{background:#bbebbb}
+.annotation-colors-yellow-green{background:linear-gradient(180deg,#fff0a3 0.00% 50.00%,#bbebbb 50.00% 100.00%)}
+.annotation-colors-blue{background:#c4e0ff}
+.annotation-colors-yellow-blue{background:linear-gradient(180deg,#fff0a3 0.00% 50.00%,#c4e0ff 50.00% 100.00%)}
+.annotation-colors-green-blue{background:linear-gradient(180deg,#bbebbb 0.00% 50.00%,#c4e0ff 50.00% 100.00%)}
+.annotation-colors-yellow-green-blue{background:linear-gradient(180deg,#fff0a3 0.00% 33.33%,#bbebbb 33.33% 66.67%,#c4e0ff 66.67% 100.00%)}
+.annotation-colors-pink{background:#ffd0e1}
+.annotation-colors-yellow-pink{background:linear-gradient(180deg,#fff0a3 0.00% 50.00%,#ffd0e1 50.00% 100.00%)}
+.annotation-colors-green-pink{background:linear-gradient(180deg,#bbebbb 0.00% 50.00%,#ffd0e1 50.00% 100.00%)}
+.annotation-colors-yellow-green-pink{background:linear-gradient(180deg,#fff0a3 0.00% 33.33%,#bbebbb 33.33% 66.67%,#ffd0e1 66.67% 100.00%)}
+.annotation-colors-blue-pink{background:linear-gradient(180deg,#c4e0ff 0.00% 50.00%,#ffd0e1 50.00% 100.00%)}
+.annotation-colors-yellow-blue-pink{background:linear-gradient(180deg,#fff0a3 0.00% 33.33%,#c4e0ff 33.33% 66.67%,#ffd0e1 66.67% 100.00%)}
+.annotation-colors-green-blue-pink{background:linear-gradient(180deg,#bbebbb 0.00% 33.33%,#c4e0ff 33.33% 66.67%,#ffd0e1 66.67% 100.00%)}
+.annotation-colors-yellow-green-blue-pink{background:linear-gradient(180deg,#fff0a3 0.00% 25.00%,#bbebbb 25.00% 50.00%,#c4e0ff 50.00% 75.00%,#ffd0e1 75.00% 100.00%)}

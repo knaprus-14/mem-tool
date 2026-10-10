@@ -1,0 +1,17 @@
+error acquiring upload token: creating token file: open C:\Users\ZMII\AppData\Roaming\go\telemetry\local\upload.token: Access is denied.
+ok  	github.com/knaprus-14/mem-tool/cmd/mem	7.895s
+ok  	github.com/knaprus-14/mem-tool/cmd/mem-bot	1.564s
+ok  	github.com/knaprus-14/mem-tool/cmd/mem-index	0.348s
+ok  	github.com/knaprus-14/mem-tool/internal/buildinfo	0.077s
+ok  	github.com/knaprus-14/mem-tool/internal/sourcefile	0.075s
+ok  	github.com/knaprus-14/mem-tool/internal/sqliteutil	0.137s
+ok  	github.com/knaprus-14/mem-tool/pkg/fileindex	1.912s
+ok  	github.com/knaprus-14/mem-tool/pkg/ingest	0.461s
+ok  	github.com/knaprus-14/mem-tool/pkg/mem	34.564s
+?   	github.com/knaprus-14/mem-tool/pkg/ui	[no test files]
+error acquiring upload token: creating token file: open C:\Users\ZMII\AppData\Roaming\go\telemetry\local\upload.token: Access is denied.
+go: writing stat cache: open C:\Users\ZMII\go\pkg\mod\cache\download\github.com\knaprus-14\mem-tool\@v\v0.0.0-20260827125647-63fd134b3df5.info837072672.tmp: Access is denied.
+error acquiring upload token: creating token file: open C:\Users\ZMII\AppData\Roaming\go\telemetry\local\upload.token: Access is denied.
+go: writing stat cache: open C:\Users\ZMII\go\pkg\mod\cache\download\github.com\knaprus-14\mem-tool\@v\v0.0.0-20260827125647-63fd134b3df5.info910342570.tmp: Access is denied.
+error acquiring upload token: creating token file: open C:\Users\ZMII\AppData\Roaming\go\telemetry\local\upload.token: Access is denied.
+go: writing stat cache: open C:\Users\ZMII\go\pkg\mod\cache\download\github.com\knaprus-14\mem-tool\@v\v0.0.0-20260827125647-63fd134b3df5.info832244557.tmp: Access is denied.

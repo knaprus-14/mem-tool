@@ -1,0 +1,92 @@
+{
+  "checked_at": "2026-10-09",
+  "source_version": "1.71.0-alpha.37",
+  "code_snapshot_files": 185,
+  "changed_snapshot_files": [],
+  "feature_count": 120,
+  "categories": [
+    {
+      "id": "SRC",
+      "count": 10
+    },
+    {
+      "id": "TRU",
+      "count": 10
+    },
+    {
+      "id": "EXT",
+      "count": 10
+    },
+    {
+      "id": "KNO",
+      "count": 10
+    },
+    {
+      "id": "EDT",
+      "count": 10
+    },
+    {
+      "id": "NAV",
+      "count": 10
+    },
+    {
+      "id": "ANA",
+      "count": 10
+    },
+    {
+      "id": "LRN",
+      "count": 10
+    },
+    {
+      "id": "AI",
+      "count": 10
+    },
+    {
+      "id": "EXP",
+      "count": 10
+    },
+    {
+      "id": "COL",
+      "count": 10
+    },
+    {
+      "id": "OPS",
+      "count": 10
+    }
+  ],
+  "source_count": 43,
+  "state_counts": {
+    "есть": 43,
+    "частично": 52,
+    "нет": 20,
+    "риск": 5
+  },
+  "milestone_counts": {
+    "M0": 19,
+    "M1": 11,
+    "M2": 31,
+    "M3": 23,
+    "M4": 11,
+    "M5": 14,
+    "M6": 11
+  },
+  "report_word_count": 17921,
+  "checks": {
+    "unique_ids": true,
+    "dependency_ids_exist": true,
+    "source_ids_exist": true,
+    "code_paths_exist": true,
+    "production_snapshot_unchanged": true
+  },
+  "runtime_probes": {
+    "document_revision_lifecycle": "expected invariant failed: semantic pass skipped, old source section retained; see document-ledger-output.txt",
+    "go_telemetry": "warning: protected upload.token unavailable; test itself executed to assertion failure"
+  },
+  "limitations": [
+    "No production code edits or Windows build",
+    "No external AI model calls",
+    "No full application browser E2E",
+    "No empirical learning study",
+    "Official product documentation reviewed, not all products run"
+  ]
+}

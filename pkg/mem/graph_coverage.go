@@ -1,5 +1,7 @@
 package mem
 
+import "github.com/knaprus-14/mem-tool/internal/applog"
+
 import (
 	"crypto/sha256"
 	"database/sql"
@@ -26,6 +28,8 @@ type KnowledgeCoverageOptions struct {
 }
 
 type KnowledgeCoverageSummary struct {
+	SemanticCompletedChunks  int     `json:"semantic_completed_chunks"`
+	SemanticPendingChunks    int     `json:"semantic_pending_chunks"`
 	Documents                int     `json:"documents"`
 	ManifestDocuments        int     `json:"manifest_documents"`
 	DocumentsWithoutManifest int     `json:"documents_without_manifest"`
@@ -115,11 +119,12 @@ type KnowledgeImportPageIssue struct {
 }
 
 type KnowledgeCoverageReport struct {
-	Scope          KnowledgeCoverageOptions    `json:"scope"`
-	SnapshotDigest string                      `json:"snapshot_digest"`
-	Summary        KnowledgeCoverageSummary    `json:"summary"`
-	Documents      []KnowledgeDocumentCoverage `json:"documents"`
-	Limitations    []string                    `json:"limitations"`
+	ExtractionIssues []KnowledgeDocumentIssue    `json:"extraction_issues,omitempty"`
+	Scope            KnowledgeCoverageOptions    `json:"scope"`
+	SnapshotDigest   string                      `json:"snapshot_digest"`
+	Summary          KnowledgeCoverageSummary    `json:"summary"`
+	Documents        []KnowledgeDocumentCoverage `json:"documents"`
+	Limitations      []string                    `json:"limitations"`
 }
 
 type knowledgeCoverageDocumentBuilder struct {
@@ -146,7 +151,9 @@ type knowledgeCoverageChunk struct {
 // BuildKnowledgeCoverageReport measures how much of the selected current
 // source material is referenced by current knowledge-map objects. It never
 // calls a model and never treats retrieval rank as coverage.
-func (s *Store) BuildKnowledgeCoverageReport(options KnowledgeCoverageOptions) (KnowledgeCoverageReport, error) {
+func (s *Store) BuildKnowledgeCoverageReport(options KnowledgeCoverageOptions) (applogResult0 KnowledgeCoverageReport, applogResult1 error) {
+	defer applog.Track("pkg.mem.Store.BuildKnowledgeCoverageReport")(&applogResult1)
+
 	options.Document = strings.TrimSpace(options.Document)
 	options.Tag = strings.TrimSpace(options.Tag)
 	if options.LowConfidence <= 0 {
@@ -413,6 +420,11 @@ func (s *Store) BuildKnowledgeCoverageReport(options KnowledgeCoverageOptions) (
 	report.Summary.CoveragePercent = coveragePercent(report.Summary.CoveredChunks, report.Summary.ChunksWithText)
 	report.Summary.ProcessingPercent = coveragePercent(report.Summary.ProcessedChunks, report.Summary.ChunksWithText)
 	report.Summary.ImportCoveragePercent = coveragePercent(report.Summary.StoredPhysicalPages, report.Summary.PhysicalPagesInScope)
+	report.ExtractionIssues, report.Summary.SemanticCompletedChunks, err = s.documentExtractionIssues(selected)
+	if err != nil {
+		return KnowledgeCoverageReport{}, err
+	}
+	report.Summary.SemanticPendingChunks = len(report.ExtractionIssues)
 	return report, nil
 }
 

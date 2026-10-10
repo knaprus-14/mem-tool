@@ -1,5 +1,7 @@
 package fileindex
 
+import "github.com/knaprus-14/mem-tool/internal/applog"
+
 import (
 	"archive/zip"
 	"bytes"
@@ -44,7 +46,9 @@ const MaxEmbedChars = 2000
 //	.epub       — ZIP + XML, <dc:description> из content.opf
 //	.djvu       — `djvused -e print-meta` (если установлен), метаданные
 //	прочее      — пустая строка
-func ExtractAnnotation(absPath, ext string) (string, error) {
+func ExtractAnnotation(absPath, ext string) (applogResult0 string, applogResult1 error) {
+	defer applog.Track("pkg.fileindex.ExtractAnnotation")(&applogResult1)
+
 	ext = strings.ToLower(ext)
 	switch ext {
 	case ".txt", ".md":
@@ -312,7 +316,8 @@ type cappedBuffer struct {
 	max int
 }
 
-func (w *cappedBuffer) Write(p []byte) (int, error) {
+func (w *cappedBuffer) Write(p []byte) (applogResult0 int, applogResult1 error) {
+
 	written := len(p)
 	remaining := w.max - w.Len()
 	if remaining > 0 {

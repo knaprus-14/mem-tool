@@ -1,10 +1,13 @@
 package mem
 
 import (
+	"context"
 	"errors"
 	"os"
 	"path/filepath"
 	"testing"
+
+	"github.com/knaprus-14/mem-tool/internal/sourcefile"
 )
 
 func TestResolveKnowledgeMapPDFSourceRequiresCurrentGraphEvidence(t *testing.T) {
@@ -71,7 +74,13 @@ func knowledgeMapSourceFixture(t *testing.T, extension string) (*Store, Evidence
 		t.Fatal(err)
 	}
 	chunks := validStructuredChunks()
+	fileHash, err := sourcefile.Hash(context.Background(), source)
+	if err != nil {
+		store.Close()
+		t.Fatal(err)
+	}
 	for i := range chunks {
+		chunks[i].Provenance.SourceFileHash = fileHash
 		chunks[i].Provenance.SourcePath = source
 		chunks[i].Provenance.Page = 12
 	}

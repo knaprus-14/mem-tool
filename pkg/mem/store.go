@@ -1,5 +1,7 @@
 package mem
 
+import "github.com/knaprus-14/mem-tool/internal/applog"
+
 import (
 	"bytes"
 	"crypto/sha256"
@@ -17,7 +19,7 @@ import (
 	"sync"
 	"time"
 
-	_ "modernc.org/sqlite" // pure-Go SQLite driver, без CGO
+	"github.com/knaprus-14/mem-tool/internal/sqliteutil"
 )
 
 // Entry — одна запись в базе памяти
@@ -64,6 +66,7 @@ type Entry struct {
 type Provenance struct {
 	DocumentID       string
 	DocumentRevision string
+	SourceFileHash   string
 	ChunkHash        string
 	SourcePath       string
 	MediaType        string
@@ -97,6 +100,7 @@ type DocumentChunk struct {
 
 // Store — потокобезопасное хранилище векторов на базе SQLite
 type Store struct {
+	importOnly      bool // isolated web writer: no full-corpus cache or run recovery
 	mu              sync.RWMutex
 	db              *sql.DB
 	path            string
@@ -184,6 +188,18 @@ CREATE TABLE IF NOT EXISTS entry_fts_state (
 );
 
 INSERT OR IGNORE INTO entry_fts_state(singleton, generation) VALUES (1, -1);
+
+-- A durable delta journal also tracks changes made by other Store processes.
+CREATE TABLE IF NOT EXISTS entry_fts_dirty (entry_id INTEGER PRIMARY KEY);
+CREATE TRIGGER IF NOT EXISTS entries_fts_dirty_insert AFTER INSERT ON entries
+BEGIN INSERT INTO entry_fts_dirty VALUES (NEW.id) ON CONFLICT(entry_id) DO NOTHING; END;
+CREATE TRIGGER IF NOT EXISTS entries_fts_dirty_update AFTER UPDATE ON entries
+BEGIN
+    INSERT INTO entry_fts_dirty VALUES (OLD.id) ON CONFLICT(entry_id) DO NOTHING;
+    INSERT INTO entry_fts_dirty VALUES (NEW.id) ON CONFLICT(entry_id) DO NOTHING;
+END;
+CREATE TRIGGER IF NOT EXISTS entries_fts_dirty_delete AFTER DELETE ON entries
+BEGIN INSERT INTO entry_fts_dirty VALUES (OLD.id) ON CONFLICT(entry_id) DO NOTHING; END;
 `
 
 const upsertChunkSQL = `INSERT INTO entries
@@ -223,7 +239,9 @@ const upsertChunkSQL = `INSERT INTO entries
 			backend = excluded.backend`
 
 // newStore открывает (или создаёт) SQLite-базу в указанной директории
-func NewStore(dir string) (*Store, error) {
+func NewStore(dir string) (applogResult0 *Store, applogResult1 error) {
+	defer applog.Track("pkg.mem.NewStore")(&applogResult1)
+
 	if err := os.MkdirAll(dir, 0700); err != nil {
 		return nil, err
 	}
@@ -232,7 +250,7 @@ func NewStore(dir string) (*Store, error) {
 	if err != nil {
 		return nil, fmt.Errorf("абсолютный путь БД: %w", err)
 	}
-	db, err := sql.Open("sqlite", dbPath)
+	db, err := sqliteutil.Open(dbPath)
 	if err != nil {
 		return nil, fmt.Errorf("открытие БД: %w", err)
 	}
@@ -296,6 +314,10 @@ func initSchema(db *sql.DB) error {
 		_ = tx.Rollback()
 		return err
 	}
+	if _, err := tx.Exec(documentSourceFilesSchema); err != nil {
+		_ = tx.Rollback()
+		return err
+	}
 	if _, err := tx.Exec(documentImportRunSchema); err != nil {
 		_ = tx.Rollback()
 		return err
@@ -324,63 +346,7 @@ func initSchema(db *sql.DB) error {
 		_ = tx.Rollback()
 		return err
 	}
-	if err := tx.Commit(); err != nil {
-		// Commit может упасть, если другая горутина уже создала схему —
-		// это нормально для CREATE TABLE IF NOT EXISTS, просто проглатываем.
-		if err2 := tx.Rollback(); err2 != nil {
-			return err
-		}
-		// Fallback: если commit не прошёл по любой причине, проверим через Exec напрямую —
-		// CREATE TABLE IF NOT EXISTS идемпотентен, безопасно.
-		if _, err := db.Exec(storeSchema); err != nil {
-			return err
-		}
-		if _, err := db.Exec(knowledgeGraphSchema); err != nil {
-			return err
-		}
-		if _, err := db.Exec(knowledgeLearningSessionSchema); err != nil {
-			return err
-		}
-		if _, err := db.Exec(corpusAnalysisRunSchema); err != nil {
-			return err
-		}
-		if _, err := db.Exec(knowledgeExtractionRunSchema); err != nil {
-			return err
-		}
-		if _, err := db.Exec(documentImportManifestSchema); err != nil {
-			return err
-		}
-		if _, err := db.Exec(documentImportRunSchema); err != nil {
-			return err
-		}
-		if _, err := db.Exec(documentHistorySchema); err != nil {
-			return err
-		}
-		if _, err := db.Exec(classicMindMapSchema); err != nil {
-			return err
-		}
-		if _, err := db.Exec(classicMindMapAISchema); err != nil {
-			return err
-		}
-		if err := migrateEntrySchemaDB(db); err != nil {
-			return err
-		}
-		if err := migrateKnowledgeReviewSchemaDB(db); err != nil {
-			return err
-		}
-		migrationTx, err := db.Begin()
-		if err != nil {
-			return err
-		}
-		if err := migrateLegacyDocumentHistoryTx(migrationTx); err != nil {
-			_ = migrationTx.Rollback()
-			return err
-		}
-		if err := migrationTx.Commit(); err != nil {
-			return err
-		}
-	}
-	return nil
+	return tx.Commit()
 }
 
 type schemaQuerier interface {
@@ -486,7 +452,9 @@ func ensureEntryColumns(q schemaQuerier) error {
 //	defer store, err := mem.NewStore(...)
 //	if err != nil { ... }
 //	defer store.Close()
-func (s *Store) Close() error {
+func (s *Store) Close() (applogResult0 error) {
+	defer applog.Track("pkg.mem.Store.Close")(&applogResult0)
+
 	return s.db.Close()
 }
 
@@ -569,7 +537,7 @@ func loadEntriesBySource(q entryQuerier, sourcePath string) ([]Entry, error) {
 }
 
 func (s *Store) loadAll() error {
-	tx, err := s.db.Begin()
+	tx, err := sqliteutil.BeginRead(s.db)
 	if err != nil {
 		return fmt.Errorf("begin entry cache snapshot: %w", err)
 	}
@@ -624,10 +592,14 @@ func bytesToFloats(b []byte) ([]float32, error) {
 
 // FloatsToBytes — публичная обёртка для переиспользования в других пакетах
 // (например, pkg/fileindex). Семантика идентична floatsToBytes.
-func FloatsToBytes(v []float32) ([]byte, error) { return floatsToBytes(v) }
+func FloatsToBytes(v []float32) (applogResult0 []byte, applogResult1 error) {
+	return floatsToBytes(v)
+}
 
 // BytesToFloats — публичная обёртка для переиспользования в других пакетах.
-func BytesToFloats(b []byte) ([]float32, error) { return bytesToFloats(b) }
+func BytesToFloats(b []byte) (applogResult0 []float32, applogResult1 error) {
+	return bytesToFloats(b)
+}
 
 func tagsToJSON(tags []string) (string, error) {
 	if tags == nil {
@@ -668,14 +640,18 @@ func cloneEntry(entry Entry) Entry {
 // === CRUD ===
 
 // Add добавляет ручную запись (без source_file, без дедупликации)
-func (s *Store) Add(text string, title string, tags []string, backend string, embedding []float32, important bool) (*Entry, error) {
+func (s *Store) Add(text string, title string, tags []string, backend string, embedding []float32, important bool) (applogResult0 *Entry, applogResult1 error) {
+	defer applog.Track("pkg.mem.Store.Add")(&applogResult1)
+
 	return s.add(text, title, tags, backend, "", "", embedding, important)
 }
 
 // AddWithEmbeddingIdentity stores a manual entry together with the exact
 // configured vector-space provenance. Add remains available for legacy callers
 // and intentionally creates an unknown-space entry.
-func (s *Store) AddWithEmbeddingIdentity(text string, title string, tags []string, identity EmbeddingIdentity, embedding []float32, important bool) (*Entry, error) {
+func (s *Store) AddWithEmbeddingIdentity(text string, title string, tags []string, identity EmbeddingIdentity, embedding []float32, important bool) (applogResult0 *Entry, applogResult1 error) {
+	defer applog.Track("pkg.mem.Store.AddWithEmbeddingIdentity")(&applogResult1)
+
 	if err := validateEmbeddingIdentity(identity, identity.Backend); err != nil {
 		return nil, err
 	}
@@ -701,7 +677,12 @@ func (s *Store) add(text string, title string, tags []string, backend, embedding
 		return nil, fmt.Errorf("сериализация embedding: %w", err)
 	}
 
-	res, err := s.db.Exec(`INSERT INTO entries
+	tx, err := s.beginEntryWriteTx("add entry")
+	if err != nil {
+		return nil, err
+	}
+	defer tx.Rollback()
+	res, err := tx.Exec(`INSERT INTO entries
 		(title, text, tags, created, backend, embedding_model, embedding_space, dims, embedding, important)
 		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		title, text, tagsStr, now, backend, embeddingModel, embeddingSpace, len(embCopy),
@@ -713,6 +694,13 @@ func (s *Store) add(text string, title string, tags []string, backend, embedding
 	if lastErr != nil {
 		return nil, fmt.Errorf("получение LastInsertId: %w", lastErr)
 	}
+	generation, err := loadEntryCacheGeneration(tx)
+	if err != nil {
+		return nil, err
+	}
+	if err := tx.Commit(); err != nil {
+		return nil, err
+	}
 
 	entry := Entry{
 		ID: id, Title: title, Text: text, Tags: tagsCopy,
@@ -722,6 +710,7 @@ func (s *Store) add(text string, title string, tags []string, backend, embedding
 	}
 	s.entries = append(s.entries, entry)
 	s.vectors = append(s.vectors, embCopy)
+	s.entryGeneration = generation
 	s.lexicalDirty = true
 	result := cloneEntry(entry)
 	return &result, nil
@@ -732,7 +721,9 @@ func (s *Store) add(text string, title string, tags []string, backend, embedding
 //   - если текст изменился → обновляет (новый эмбеддинг)
 //   - если такого чанка нет → вставляет
 func (s *Store) AddChunk(text string, title string, tags []string, backend string, embedding []float32,
-	sourceFile, chunkLabel string, chunkIndex, totalChunks int, important bool) (*Entry, error) {
+	sourceFile, chunkLabel string, chunkIndex, totalChunks int, important bool) (applogResult0 *Entry, applogResult1 error) {
+	defer applog.Track("pkg.mem.Store.AddChunk")(&applogResult1)
+
 	return s.addChunk(text, title, tags, backend, "", "", embedding, sourceFile, chunkLabel,
 		chunkIndex, totalChunks, important, Provenance{SourcePath: sourceFile, OCRConfidence: -1})
 }
@@ -741,7 +732,9 @@ func (s *Store) AddChunk(text string, title string, tags []string, backend strin
 // provenance. SourcePath is also the canonical source identity used for safe
 // repeat-import UPSERT behavior.
 func (s *Store) AddDocumentChunk(text string, title string, tags []string, backend string, embedding []float32,
-	chunkLabel string, chunkIndex, totalChunks int, important bool, provenance Provenance) (*Entry, error) {
+	chunkLabel string, chunkIndex, totalChunks int, important bool, provenance Provenance) (applogResult0 *Entry, applogResult1 error) {
+	defer applog.Track("pkg.mem.Store.AddDocumentChunk")(&applogResult1)
+
 	if provenance.SourcePath == "" {
 		return nil, fmt.Errorf("document chunk provenance has an empty source path")
 	}
@@ -760,7 +753,9 @@ func (s *Store) AddDocumentChunk(text string, title string, tags []string, backe
 // AddDocumentChunk. The legacy method remains available for migrations and
 // tests that intentionally model an unknown historical vector space.
 func (s *Store) AddDocumentChunkWithEmbeddingIdentity(text string, title string, tags []string, identity EmbeddingIdentity, embedding []float32,
-	chunkLabel string, chunkIndex, totalChunks int, important bool, provenance Provenance) (*Entry, error) {
+	chunkLabel string, chunkIndex, totalChunks int, important bool, provenance Provenance) (applogResult0 *Entry, applogResult1 error) {
+	defer applog.Track("pkg.mem.Store.AddDocumentChunkWithEmbeddingIdentity")(&applogResult1)
+
 	if provenance.SourcePath == "" {
 		return nil, fmt.Errorf("document chunk provenance has an empty source path")
 	}
@@ -920,6 +915,9 @@ func validateDocumentChunk(chunk DocumentChunk, sourcePath string, position, tot
 		}
 	}
 	p := chunk.Provenance
+	if p.SourceFileHash != "" && (p.DocumentID == "" || !isSHA256ContentHash(p.SourceFileHash)) {
+		return fmt.Errorf("document chunk %d has an invalid physical source fingerprint", position)
+	}
 	if p.Page < 0 || p.BlockIndex < 0 || p.BlockChunkIndex < 0 || p.BlockTotalChunks < 0 {
 		return fmt.Errorf("document chunk %d has negative provenance coordinates", position)
 	}
@@ -966,13 +964,17 @@ func validateDocumentChunk(chunk DocumentChunk, sourcePath string, position, tot
 // ReplaceDocumentChunks atomically upserts a complete imported document and
 // removes any stale tail left by an earlier, longer version. The in-memory
 // cache changes only after the SQLite transaction commits.
-func (s *Store) ReplaceDocumentChunks(sourcePath string, chunks []DocumentChunk) error {
+func (s *Store) ReplaceDocumentChunks(sourcePath string, chunks []DocumentChunk) (applogResult0 error) {
+	defer applog.Track("pkg.mem.Store.ReplaceDocumentChunks")(&applogResult0)
+
 	return s.replaceDocumentChunks(sourcePath, chunks, nil, nil)
 }
 
 // ReplaceDocumentChunksWithManifest atomically replaces document chunks and
 // the exact physical-page extraction manifest used to produce them.
-func (s *Store) ReplaceDocumentChunksWithManifest(sourcePath string, chunks []DocumentChunk, manifest DocumentImportManifest) error {
+func (s *Store) ReplaceDocumentChunksWithManifest(sourcePath string, chunks []DocumentChunk, manifest DocumentImportManifest) (applogResult0 error) {
+	defer applog.Track("pkg.mem.Store.ReplaceDocumentChunksWithManifest")(&applogResult0)
+
 	return s.replaceDocumentChunks(sourcePath, chunks, &manifest, nil)
 }
 
@@ -982,7 +984,15 @@ func (s *Store) replaceDocumentChunksForRun(sourcePath string, chunks []Document
 }
 
 func (s *Store) replaceDocumentChunks(sourcePath string, chunks []DocumentChunk,
-	manifest *DocumentImportManifest, completion *documentImportRunCompletion) error {
+	manifest *DocumentImportManifest, completion *documentImportRunCompletion, replacements ...*DocumentReplacement) error {
+	var replacement *DocumentReplacement
+	if len(replacements) > 0 {
+		replacement = replacements[0]
+	}
+	oldPath := sourcePath
+	if replacement != nil {
+		oldPath = replacement.SourcePath
+	}
 	if sourcePath == "" {
 		return fmt.Errorf("document replacement has an empty source path")
 	}
@@ -994,6 +1004,7 @@ func (s *Store) replaceDocumentChunks(sourcePath string, chunks []DocumentChunk,
 	prepared := make([]preparedDocumentChunk, len(chunks))
 	expectedDocumentID := chunks[0].Provenance.DocumentID
 	expectedDocumentRevision := chunks[0].Provenance.DocumentRevision
+	expectedSourceFileHash := chunks[0].Provenance.SourceFileHash
 	expectedMediaType := chunks[0].Provenance.MediaType
 	expectedDimensions := len(chunks[0].Embedding)
 	previousBlock := -1
@@ -1008,6 +1019,9 @@ func (s *Store) replaceDocumentChunks(sourcePath string, chunks []DocumentChunk,
 		}
 		if chunk.Provenance.DocumentRevision != expectedDocumentRevision {
 			return fmt.Errorf("document chunk %d content revision does not match earlier chunks", i)
+		}
+		if chunk.Provenance.SourceFileHash != expectedSourceFileHash {
+			return fmt.Errorf("document chunk %d physical fingerprint does not match earlier chunks", i)
 		}
 		if chunk.Provenance.MediaType != expectedMediaType {
 			return fmt.Errorf("document chunk %d media type does not match earlier chunks", i)
@@ -1087,7 +1101,14 @@ func (s *Store) replaceDocumentChunks(sourcePath string, chunks []DocumentChunk,
 
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	tx, cacheEntries, err := s.beginEntryMutationTx("document replacement")
+	var tx *sql.Tx
+	var cacheEntries []Entry
+	var err error
+	if s.importOnly {
+		tx, err = s.db.Begin()
+	} else {
+		tx, cacheEntries, err = s.beginEntryMutationTx("document replacement")
+	}
 	if err != nil {
 		return err
 	}
@@ -1097,11 +1118,14 @@ func (s *Store) replaceDocumentChunks(sourcePath string, chunks []DocumentChunk,
 		}
 		return cause
 	}
-	oldEntries, err := loadEntriesBySource(tx, sourcePath)
+	oldEntries, err := loadEntriesBySource(tx, oldPath)
 	if err != nil {
 		return rollback(fmt.Errorf("read current document before replacement: %w", err))
 	}
-	currentTombstone, tombstoneErr := loadDocumentTombstone(tx, sourcePath)
+	if err := validateDocumentReplacementTx(tx, expectedDocumentID, sourcePath, oldPath, oldEntries, replacement); err != nil {
+		return rollback(err)
+	}
+	currentTombstone, tombstoneErr := loadDocumentTombstone(tx, oldPath)
 	if tombstoneErr != nil && !errors.Is(tombstoneErr, sql.ErrNoRows) {
 		return rollback(fmt.Errorf("read current empty document before replacement: %w", tombstoneErr))
 	}
@@ -1114,9 +1138,9 @@ func (s *Store) replaceDocumentChunks(sourcePath string, chunks []DocumentChunk,
 			return rollback(snapshotErr)
 		}
 	}
-	historyEntries := normalizeLegacyDocumentEntries(oldEntries, sourcePath)
+	historyEntries := normalizeLegacyDocumentEntries(oldEntries, oldPath)
 	if len(historyEntries) > 0 &&
-		(historyEntries[0].DocumentRevision != expectedDocumentRevision || !sameDocumentChunkLayout(historyEntries, prepared)) {
+		(replacement != nil || historyEntries[0].DocumentRevision != expectedDocumentRevision || !sameDocumentChunkLayout(historyEntries, prepared)) {
 		graph, graphErr := loadKnowledgeGraphFromQuerier(tx)
 		if graphErr != nil {
 			return rollback(fmt.Errorf("snapshot current knowledge graph: %w", graphErr))
@@ -1128,6 +1152,13 @@ func (s *Store) replaceDocumentChunks(sourcePath string, chunks []DocumentChunk,
 	if _, err := tx.Exec(`DELETE FROM document_current_tombstones
 WHERE document_id = ? OR `+sourcePathSQLPredicate("source_path"), expectedDocumentID, sourcePath); err != nil {
 		return rollback(fmt.Errorf("clear empty document marker: %w", err))
+	}
+	// Retain entry IDs while moving the current revision to its new immutable
+	// original. The archived snapshot above still points to the previous file.
+	if replacement != nil && oldPath != sourcePath {
+		if _, err := tx.Exec(`UPDATE entries SET source_file=?,source_path=? WHERE `+sourcePathSQLPredicate("source_file"), sourcePath, sourcePath, oldPath); err != nil {
+			return rollback(err)
+		}
 	}
 	// Canonical paths are case-insensitive on Windows. Remove an older spelling
 	// before the exact-key UPSERT so one physical source cannot acquire duplicate
@@ -1163,6 +1194,9 @@ WHERE document_id = ? OR `+sourcePathSQLPredicate("source_path"), expectedDocume
 			return rollback(err)
 		}
 	}
+	if err := writeDocumentSourceFileTx(tx, expectedDocumentID, expectedDocumentRevision, sourcePath, expectedSourceFileHash); err != nil {
+		return rollback(fmt.Errorf("write physical source fingerprint: %w", err))
+	}
 	if completion != nil {
 		if err := finishDocumentImportRunTx(tx, *completion, now); err != nil {
 			return rollback(err)
@@ -1176,7 +1210,11 @@ WHERE document_id = ? OR `+sourcePathSQLPredicate("source_path"), expectedDocume
 	for i := range prepared {
 		replacementEntries[i] = prepared[i].entry
 	}
-	freshEntries, freshVectors := replaceSourceInEntryCache(cacheEntries, sourcePath, replacementEntries)
+	var freshEntries []Entry
+	var freshVectors [][]float32
+	if !s.importOnly {
+		freshEntries, freshVectors = replaceSourceInEntryCache(cacheEntries, oldPath, replacementEntries)
+	}
 	if err := tx.Commit(); err != nil {
 		return fmt.Errorf("commit document replacement: %w", err)
 	}
@@ -1227,7 +1265,9 @@ func stringSlicesEqual(left, right []string) bool {
 // partial pruning is rejected because it cannot produce coherent provenance
 // totals or an explicit replacement revision. Call ReplaceDocumentChunks for a
 // shorter non-empty document.
-func (s *Store) PruneSourceChunks(sourceFile string, firstStaleIndex int) (int64, error) {
+func (s *Store) PruneSourceChunks(sourceFile string, firstStaleIndex int) (applogResult0 int64, applogResult1 error) {
+	defer applog.Track("pkg.mem.Store.PruneSourceChunks")(&applogResult1)
+
 	if sourceFile == "" {
 		return 0, fmt.Errorf("удаление хвостовых чанков: пустой source_file")
 	}
@@ -1241,11 +1281,18 @@ func (s *Store) PruneSourceChunks(sourceFile string, firstStaleIndex int) (int64
 }
 
 // DeleteById удаляет запись по ID (hard delete)
-func (s *Store) DeleteById(id int64) error {
+func (s *Store) DeleteById(id int64) (applogResult0 error) {
+	defer applog.Track("pkg.mem.Store.DeleteById")(&applogResult0)
+
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	res, err := s.db.Exec(`DELETE FROM entries WHERE id = ?`, id)
+	tx, err := s.beginEntryWriteTx("delete entry")
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	res, err := tx.Exec(`DELETE FROM entries WHERE id = ?`, id)
 	if err != nil {
 		return err
 	}
@@ -1256,6 +1303,14 @@ func (s *Store) DeleteById(id int64) error {
 	if n == 0 {
 		return fmt.Errorf("запись #%d не найдена", id)
 	}
+	generation, err := loadEntryCacheGeneration(tx)
+	if err != nil {
+		return err
+	}
+	if err := tx.Commit(); err != nil {
+		return err
+	}
+	s.entryGeneration = generation
 	s.lexicalDirty = true
 
 	// Удаляем из кэша
@@ -1272,7 +1327,9 @@ func (s *Store) DeleteById(id int64) error {
 // UpdateById обновляет текст/заголовок/теги/эмбеддинг записи.
 // Если записи с таким id нет — возвращает ошибку (ранее молча возвращался nil,
 // и пользователь не понимал, почему "правка" не сработала).
-func (s *Store) UpdateById(id int64, text string, title string, tags []string, embedding []float32) error {
+func (s *Store) UpdateById(id int64, text string, title string, tags []string, embedding []float32) (applogResult0 error) {
+	defer applog.Track("pkg.mem.Store.UpdateById")(&applogResult0)
+
 	return s.updateByID(id, text, title, tags, embedding, nil)
 }
 
@@ -1280,7 +1337,9 @@ func (s *Store) UpdateById(id int64, text string, title string, tags []string, e
 // provenance atomically. It must be used whenever a new vector is generated
 // from the active config. The legacy UpdateById clears stale model provenance
 // when it receives a replacement vector.
-func (s *Store) UpdateByIdWithEmbeddingIdentity(id int64, text string, title string, tags []string, embedding []float32, identity EmbeddingIdentity) error {
+func (s *Store) UpdateByIdWithEmbeddingIdentity(id int64, text string, title string, tags []string, embedding []float32, identity EmbeddingIdentity) (applogResult0 error) {
+	defer applog.Track("pkg.mem.Store.UpdateByIdWithEmbeddingIdentity")(&applogResult0)
+
 	if embedding == nil {
 		return errors.New("embedding identity update requires a replacement embedding")
 	}
@@ -1405,7 +1464,9 @@ WHERE id=? AND text=? AND created=? AND document_id=? AND document_revision=? AN
 // ToggleImportant переключает флаг важности.
 // Возвращает Entry-копию (не указатель на внутренний кэш) — иначе вызывающий код
 // может читать/менять состояние Store конкурентно после снятия локального Lock.
-func (s *Store) ToggleImportant(id int64) (*Entry, error) {
+func (s *Store) ToggleImportant(id int64) (applogResult0 *Entry, applogResult1 error) {
+	defer applog.Track("pkg.mem.Store.ToggleImportant")(&applogResult1)
+
 	return s.toggleImportantWithBeforeWrite(id, nil)
 }
 
@@ -1468,13 +1529,17 @@ WHERE id = ? RETURNING important`, id).Scan(&newVal)
 }
 
 // Search ищет ближайшие по смыслу записи (cosine similarity в Go)
-func (s *Store) Search(queryVector []float32, backend string, limit int) ([]Entry, error) {
+func (s *Store) Search(queryVector []float32, backend string, limit int) (applogResult0 []Entry, applogResult1 error) {
+	defer applog.Track("pkg.mem.Store.Search")(&applogResult1)
+
 	return s.search(queryVector, backend, "", limit)
 }
 
 // SearchInEmbeddingSpace compares vectors only inside one exact configured
 // embedding space. Legacy rows with unknown model provenance are excluded.
-func (s *Store) SearchInEmbeddingSpace(queryVector []float32, backend, embeddingSpace string, limit int) ([]Entry, error) {
+func (s *Store) SearchInEmbeddingSpace(queryVector []float32, backend, embeddingSpace string, limit int) (applogResult0 []Entry, applogResult1 error) {
+	defer applog.Track("pkg.mem.Store.SearchInEmbeddingSpace")(&applogResult1)
+
 	if strings.TrimSpace(embeddingSpace) == "" {
 		return nil, errors.New("search embedding space is empty")
 	}
@@ -1540,7 +1605,9 @@ func (s *Store) search(queryVector []float32, backend, embeddingSpace string, li
 // Tie-breaker — id DESC (на случай одинаковых таймстампов).
 // Раньше возвращался хвост s.entries (отсортирован при loadAll по id ASC)
 // и разворачивался — порядок определялся id, а не фактическим временем создания.
-func (s *Store) Recent(limit int) ([]Entry, error) {
+func (s *Store) Recent(limit int) (applogResult0 []Entry, applogResult1 error) {
+	defer applog.Track("pkg.mem.Store.Recent")(&applogResult1)
+
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if err := s.refreshEntryCacheIfStaleUnlocked("recent entries"); err != nil {
@@ -1579,7 +1646,9 @@ func (s *Store) Recent(limit int) ([]Entry, error) {
 // GetByID возвращает запись по ID.
 // Возвращает указатель на локальную копию Entry с глубокими копиями Tags/Embedding —
 // вызывающий код не может мутировать внутренний кэш Store после снятия RLock.
-func (s *Store) GetByID(id int64) (*Entry, error) {
+func (s *Store) GetByID(id int64) (applogResult0 *Entry, applogResult1 error) {
+	defer applog.Track("pkg.mem.Store.GetByID")(&applogResult1)
+
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if err := s.refreshEntryCacheIfStaleUnlocked("entry lookup"); err != nil {

@@ -1,5 +1,7 @@
 package mem
 
+import "github.com/knaprus-14/mem-tool/internal/applog"
+
 import (
 	"crypto/sha256"
 	"encoding/hex"
@@ -49,7 +51,9 @@ type KnowledgeExtractionJobPlan struct {
 // BuildKnowledgeExtractionJobPlan creates deterministic sequential batches for
 // the selected document/page/tag scope. Retrieval scores are intentionally not
 // involved: this is controlled coverage work, not a focus-search shortcut.
-func (s *Store) BuildKnowledgeExtractionJobPlan(focus string, scope KnowledgeCoverageOptions, contextBudget, maxBatches int) (KnowledgeExtractionJobPlan, error) {
+func (s *Store) BuildKnowledgeExtractionJobPlan(focus string, scope KnowledgeCoverageOptions, contextBudget, maxBatches int) (applogResult0 KnowledgeExtractionJobPlan, applogResult1 error) {
+	defer applog.Track("pkg.mem.Store.BuildKnowledgeExtractionJobPlan")(&applogResult1)
+
 	focus = strings.TrimSpace(focus)
 	if focus == "" {
 		return KnowledgeExtractionJobPlan{}, errors.New("knowledge extraction job focus is empty")

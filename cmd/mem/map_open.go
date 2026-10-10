@@ -1,5 +1,7 @@
 package main
 
+import "github.com/knaprus-14/mem-tool/internal/applog"
+
 import (
 	"context"
 	"crypto/rand"
@@ -27,7 +29,9 @@ type mapOpenOptions struct {
 
 var launchKnowledgeMapBrowser = openBrowserURL
 
-func handleMapOpen(cfg *Config, store *Store, args []string) error {
+func handleMapOpen(cfg *Config, store *Store, args []string) (applogResult0 error) {
+	defer applog.Track("cmd.mem.handleMapOpen")(&applogResult0)
+
 	options, err := parseMapOpenOptions(args)
 	if err != nil {
 		return err

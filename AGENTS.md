@@ -1,5 +1,53 @@
 # Project instructions
 
+## Scope and efficient execution
+
+- This repository is `mem-tool` (`github.com/knaprus-14/mem-tool`). Determine
+  dependencies, architecture, and commands from this repository and `go.mod`.
+- RAD Studio/Kai buffer and sequential-call rules apply only when working with
+  files open in RAD Studio. Independent repository searches and read-only shell
+  checks may run in parallel; dependent edits and deployment remain sequential.
+- Inspect the working tree before edits and preserve existing user changes.
+  Use focused `rg` searches and read the relevant files instead of dumping the
+  entire repository into context.
+- If a sandbox denies access to Go caches or deployment targets, report the
+  exact blocked step. Use a permitted temporary `GOCACHE` when needed; do not
+  describe a staged build as an installed release or bypass sandbox policy.
+
+## GPT-6 Astra working guidelines
+
+These rules adapt the [official model guidance](https://developers.openai.com/api/docs/guides/latest-model)
+to Codex work on this repository. The active model and reasoning effort are
+selected in Codex settings; this file does not switch the model. Inherit the
+user's selection and scale planning and verification to the task's complexity.
+
+- Infer routine implementation details from the request and existing code.
+  Carry authorized work through implementation and relevant verification.
+  Ask only when an answer materially changes the result, access is unavailable,
+  or an action exceeds scope. Continue independent useful work while waiting.
+- For multi-step work, keep a short plan with a concrete completion criterion.
+  Incorporate corrections and answer side questions while preserving the
+  original objective unless the user cancels or replaces it. After a context
+  handoff, resume from completed work and recorded verification results.
+- Apply explicit user instructions over general skill guidance, within system
+  and platform constraints. If a skill causes a pause or scope change, identify
+  the exact `SKILL.md` and quote the relevant rule. Do not infer extra approval
+  requirements from general advice or ask again for authorization already given.
+- Parallelize independent searches and read-only checks when useful. Use
+  subagents only when explicitly requested or required by applicable instructions;
+  give each a bounded independent task and avoid overlapping edits.
+- Start with checks for the affected Go packages or changed workflow. Broaden
+  verification when shared behavior, integration risks, or failures warrant it.
+  Reproduce bugs using isolated temporary data; preserve real indexes, databases,
+  and configuration. Do not add tests that merely mirror trivial edits or repeat
+  passing checks without new evidence. Mandatory release checks below still apply.
+- For instruction-only changes, review the diff and check formatting; a Go build
+  and release are unnecessary unless application behavior also changes.
+- Respond in Russian, leading with the result. Explain what changed, why, how it
+  was verified, and any remaining limitation. Clearly distinguish implementation,
+  successful tests, staged artifacts, and actual deployment. Keep progress updates
+  focused on findings and next steps; use detail and lists only when helpful.
+
 ## Windows build and deployment
 
 - After every successful Windows build of this repository, deploy the current

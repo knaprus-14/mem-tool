@@ -1,0 +1,10 @@
+error acquiring upload token: creating token file: open C:\Users\ZMII\AppData\Roaming\go\telemetry\local\upload.token: Access is denied.
+=== RUN   TestReviewProbeApprovalRejectsChangedContent
+    maps_review_probe_test.go:29: stale review approved changed content: status=active content_changed=true evidence_unchanged=true approvals=1
+--- FAIL: TestReviewProbeApprovalRejectsChangedContent (0.15s)
+=== RUN   TestReviewProbeCancellationDuringClaim
+    maps_review_probe_test.go:51: successful cancellation was overwritten by worker: [{ID:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb Kind:graph-analyze Status:completed Current:0 Total:0 Stage:Недостаточно подтверждённых утверждений из разных документов Error: RunID: Updated:2026-10-09T18:11:55.9812513Z Document: AllChunks:false Input:{RequestID:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb Kind:graph-analyze ConfigRevision:7c51ebec1e51f5ae593c53e2b2198729baa2716f2ddc3550490275eb0aa4af81 Focus:topics Document: Batches:1 ContextChars:12000 AllChunks:false} Owner:alice Documents:[] ImportRun:0 Local:true}]
+--- FAIL: TestReviewProbeCancellationDuringClaim (0.31s)
+FAIL
+FAIL	github.com/knaprus-14/mem-tool/pkg/mem	5.640s
+FAIL

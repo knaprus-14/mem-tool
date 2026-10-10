@@ -1,0 +1,84 @@
+{
+  "checked_at": "2026-10-09",
+  "static": {
+    "passed": true,
+    "html_files": [
+      {
+        "file": "REPORT_RU.html",
+        "html_ids": 173,
+        "local_file_links": 355,
+        "external_links": 368,
+        "internal_anchors": 243
+      },
+      {
+        "file": "classic-audit.html",
+        "html_ids": 12,
+        "local_file_links": 8,
+        "external_links": 0,
+        "internal_anchors": 10
+      },
+      {
+        "file": "graph-audit.html",
+        "html_ids": 17,
+        "local_file_links": 177,
+        "external_links": 0,
+        "internal_anchors": 15
+      },
+      {
+        "file": "learning-research.html",
+        "html_ids": 9,
+        "local_file_links": 8,
+        "external_links": 18,
+        "internal_anchors": 7
+      }
+    ],
+    "feature_cards": 120,
+    "dependency_cycles": [],
+    "inline_scripts_parse": true,
+    "errors": []
+  },
+  "filter_logic_node_simulation": {
+    "scope": "Actual inline script, in-memory DOM stub; not browser E2E",
+    "tests": [
+      {
+        "name": "ID search returns one target",
+        "passed": true
+      },
+      {
+        "name": "Empty results and visible empty message",
+        "passed": true
+      },
+      {
+        "name": "Reset restores all 120 cards",
+        "passed": true
+      },
+      {
+        "name": "Milestone filter matches registry",
+        "passed": true
+      },
+      {
+        "name": "Combined filters match registry",
+        "passed": true
+      },
+      {
+        "name": "Dependency deep link clears filters and opens target",
+        "passed": true
+      },
+      {
+        "name": "Print preparation expands all cards",
+        "passed": true
+      },
+      {
+        "name": "Print cleanup restores expansion state",
+        "passed": true
+      }
+    ]
+  },
+  "browser": {
+    "status": "blocked",
+    "reason": "Browser Use URL policy rejected opening file:///C:/Users/ZMII/Documents/ChatGPT/mem-tool/review/2026-10-09/mindmap-research/REPORT_RU.html",
+    "visual_check_performed": false,
+    "workaround_attempted": false,
+    "scope": "Research report only; not application E2E"
+  }
+}

@@ -1,0 +1,32 @@
+[deploy] Running tests...
+error acquiring upload token: creating token file: open C:\Users\ZMII\AppData\Roaming\go\telemetry\local\upload.token: Access is denied.
+ok  	github.com/knaprus-14/mem-tool/cmd/mem	5.993s
+ok  	github.com/knaprus-14/mem-tool/cmd/mem-bot	0.741s
+ok  	github.com/knaprus-14/mem-tool/cmd/mem-index	0.224s
+ok  	github.com/knaprus-14/mem-tool/internal/buildinfo	0.056s
+ok  	github.com/knaprus-14/mem-tool/internal/sourcefile	0.077s
+ok  	github.com/knaprus-14/mem-tool/internal/sqliteutil	0.077s
+ok  	github.com/knaprus-14/mem-tool/pkg/fileindex	0.927s
+ok  	github.com/knaprus-14/mem-tool/pkg/ingest	0.199s
+ok  	github.com/knaprus-14/mem-tool/pkg/mem	30.852s
+?   	github.com/knaprus-14/mem-tool/pkg/ui	[no test files]
+[deploy] Building mem.exe...
+error acquiring upload token: creating token file: open C:\Users\ZMII\AppData\Roaming\go\telemetry\local\upload.token: Access is denied.
+go: writing stat cache: open C:\Users\ZMII\go\pkg\mod\cache\download\github.com\knaprus-14\mem-tool\@v\v0.0.0-20260827125647-63fd134b3df5.info457749769.tmp: Access is denied.
+[deploy] Building mem-index.exe...
+error acquiring upload token: creating token file: open C:\Users\ZMII\AppData\Roaming\go\telemetry\local\upload.token: Access is denied.
+go: writing stat cache: open C:\Users\ZMII\go\pkg\mod\cache\download\github.com\knaprus-14\mem-tool\@v\v0.0.0-20260827125647-63fd134b3df5.info145058091.tmp: Access is denied.
+[deploy] Building mem-bot.exe...
+error acquiring upload token: creating token file: open C:\Users\ZMII\AppData\Roaming\go\telemetry\local\upload.token: Access is denied.
+go: writing stat cache: open C:\Users\ZMII\go\pkg\mod\cache\download\github.com\knaprus-14\mem-tool\@v\v0.0.0-20260827125647-63fd134b3df5.info884941943.tmp: Access is denied.
+[deploy] Staged smoke tests...
+mem-tool v1.70.4
+(c) 2026 Кнап Руслан Юрьевич
+Векторная база знаний для работы с Claude
+mem-index v1.70.4
+(c) 2026 Кнап Руслан Юрьевич
+Векторная база знаний для работы с Claude
+mem-bot v1.70.4
+(c) 2026 Кнап Руслан Юрьевич
+Векторная база знаний для работы с Claude
+Recovery artifacts preserved for manual restoration: C:\Users\ZMII\AppData\Local\Temp\mem-tool-windows-build-ec87580eece14355b7c99cccf597e116

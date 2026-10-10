@@ -1,5 +1,7 @@
 package mem
 
+import "github.com/knaprus-14/mem-tool/internal/applog"
+
 import (
 	"context"
 	"crypto/sha256"
@@ -88,7 +90,9 @@ type KnowledgeMapProfileReport struct {
 // ProfileKnowledgeMap measures the host-side path used by the live map. Every
 // sample is read-only. Content and evidence-state pins are checked before,
 // during and after the run so timings from mixed snapshots are rejected.
-func (s *Store) ProfileKnowledgeMap(options KnowledgeMapProfileOptions) (KnowledgeMapProfileReport, error) {
+func (s *Store) ProfileKnowledgeMap(options KnowledgeMapProfileOptions) (applogResult0 KnowledgeMapProfileReport, applogResult1 error) {
+	defer applog.Track("pkg.mem.Store.ProfileKnowledgeMap")(&applogResult1)
+
 	if s == nil || s.db == nil {
 		return KnowledgeMapProfileReport{}, errors.New("knowledge map profile store is unavailable")
 	}
@@ -342,7 +346,8 @@ func newKnowledgeMapProfileHashWriter() *knowledgeMapProfileHashWriter {
 	return &knowledgeMapProfileHashWriter{hash: sha256.New()}
 }
 
-func (w *knowledgeMapProfileHashWriter) Write(data []byte) (int, error) {
+func (w *knowledgeMapProfileHashWriter) Write(data []byte) (applogResult0 int, applogResult1 error) {
+
 	n, err := w.hash.Write(data)
 	w.bytes += int64(n)
 	return n, err

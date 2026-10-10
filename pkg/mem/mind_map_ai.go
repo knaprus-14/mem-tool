@@ -1,5 +1,7 @@
 package mem
 
+import "github.com/knaprus-14/mem-tool/internal/applog"
+
 import (
 	"context"
 	"crypto/sha256"
@@ -162,6 +164,7 @@ type ClassicMindMapAIProposal struct {
 	Kind             ClassicMindMapNodeKind `json:"kind,omitempty"`
 	Evidence         []EvidenceAnchor       `json:"evidence,omitempty"`
 	Reason           string                 `json:"reason,omitempty"`
+	SynthesisRole    string                 `json:"synthesis_role,omitempty"`
 }
 
 type ClassicMindMapAIPreview struct {
@@ -185,6 +188,7 @@ type ClassicMindMapAIPreview struct {
 	Title             string                     `json:"title,omitempty"`
 	Description       string                     `json:"description,omitempty"`
 	CorrectionRetries int                        `json:"correction_retries,omitempty"`
+	Synthesis         *ClassicMindMapAISynthesis `json:"synthesis,omitempty"`
 	Created           string                     `json:"created"`
 }
 
@@ -267,7 +271,9 @@ type classicMindMapAIBatch struct {
 
 // PrepareClassicMindMapAIPreview performs generation without changing a map.
 // A validated preview is durably stored before it is returned.
-func PrepareClassicMindMapAIPreview(ctx context.Context, service *ClassicMindMapAIService, request ClassicMindMapAIPreviewRequest, progress ClassicMindMapAIProgressFunc) (ClassicMindMapAIPreview, error) {
+func PrepareClassicMindMapAIPreview(ctx context.Context, service *ClassicMindMapAIService, request ClassicMindMapAIPreviewRequest, progress ClassicMindMapAIProgressFunc) (applogResult0 ClassicMindMapAIPreview, applogResult1 error) {
+	defer applog.Track("pkg.mem.PrepareClassicMindMapAIPreview")(&applogResult1)
+
 	if service == nil || service.Store == nil {
 		return ClassicMindMapAIPreview{}, errors.New("classic mind map AI store is unavailable")
 	}
@@ -287,6 +293,18 @@ func (s *Store) prepareClassicMindMapAIPreview(ctx context.Context, service *Cla
 		}
 		return ClassicMindMapAIPreview{}, fmt.Errorf("%w: %v", ErrClassicMindMapAIInvalidRequest, err)
 	}
+	return s.prepareClassicMindMapAIFromEvidence(ctx, service, request, base, target, evidence, progress)
+}
+
+func (s *Store) prepareClassicMindMapAIFromEvidence(ctx context.Context, service *ClassicMindMapAIService, request ClassicMindMapAIPreviewRequest, base ClassicMindMapDocument, target ClassicMindMapNode, evidence []GroundedEvidence, progress ClassicMindMapAIProgressFunc) (result ClassicMindMapAIPreview, resultErr error) {
+	return s.prepareClassicMindMapAIWithCheckpoints(ctx, service, request, base, target, evidence, progress, "")
+}
+
+func (s *Store) prepareClassicMindMapAIWithCheckpoints(ctx context.Context, service *ClassicMindMapAIService, request ClassicMindMapAIPreviewRequest, base ClassicMindMapDocument, target ClassicMindMapNode, evidence []GroundedEvidence, progress ClassicMindMapAIProgressFunc, reuseRunID string) (result ClassicMindMapAIPreview, resultErr error) {
+	return s.prepareClassicMindMapAIFromCheckpoints(ctx, service, request, base, target, evidence, progress, reuseRunID, false)
+}
+
+func (s *Store) prepareClassicMindMapAIFromCheckpoints(ctx context.Context, service *ClassicMindMapAIService, request ClassicMindMapAIPreviewRequest, base ClassicMindMapDocument, target ClassicMindMapNode, evidence []GroundedEvidence, progress ClassicMindMapAIProgressFunc, reuseRunID string, resume bool) (result ClassicMindMapAIPreview, resultErr error) {
 	grounded := len(evidence) > 0
 	if request.Action == ClassicMindMapAIFindSources && !grounded {
 		return ClassicMindMapAIPreview{}, fmt.Errorf("%w: для поиска источников нужны актуальные фрагменты базы; выберите документ, диапазон страниц или точные фрагменты", ErrClassicMindMapAIInvalidRequest)
@@ -304,6 +322,11 @@ func (s *Store) prepareClassicMindMapAIPreview(ctx context.Context, service *Cla
 	}
 	for i := range evidence {
 		evidence[i].EvidenceRef = fmt.Sprintf("E%d", i+1)
+	}
+	var fitErr error
+	evidence, fitErr = fitClassicMindMapAIEvidence(request, base, target, evidence, answerCfg.ContextChars)
+	if fitErr != nil {
+		return ClassicMindMapAIPreview{}, fitErr
 	}
 	manifestDigest, err := classicMindMapAIDigest(evidence)
 	if err != nil {
@@ -326,12 +349,25 @@ func (s *Store) prepareClassicMindMapAIPreview(ctx context.Context, service *Cla
 	if err != nil {
 		return ClassicMindMapAIPreview{}, err
 	}
+	var checkpoints []classicMindMapAICheckpoint
+	if reuseRunID != "" {
+		checkpoints, err = s.loadClassicMindMapAICheckpoints(ctx, reuseRunID, requestDigest, batches, resume)
+		if err != nil {
+			return ClassicMindMapAIPreview{}, err
+		}
+	}
 	runID, err := newClassicMindMapID("mmg-")
 	if err != nil {
 		return ClassicMindMapAIPreview{}, err
 	}
 	now := time.Now().UTC().Format(time.RFC3339Nano)
-	if err := s.insertClassicMindMapAIRun(runID, request, base, target, evidence, requestDigest, answerCfg.Model, batches, now); err != nil {
+	if resume && reuseRunID != "" {
+		runID = reuseRunID
+		err = s.resumeClassicMindMapAIRun(ctx, runID)
+	} else {
+		err = s.insertClassicMindMapAIRun(runID, request, base, target, evidence, requestDigest, answerCfg.Model, batches, now)
+	}
+	if err != nil {
 		return ClassicMindMapAIPreview{}, err
 	}
 	finished := false
@@ -357,8 +393,21 @@ func (s *Store) prepareClassicMindMapAIPreview(ctx context.Context, service *Cla
 		if err := ctx.Err(); err != nil {
 			return ClassicMindMapAIPreview{}, err
 		}
-		reportClassicMindMapAIProgress(progress, ClassicMindMapAIProgress{RunID: runID, Phase: "generate", Current: i + 1, Total: len(batches), Message: batch.ID})
-		proposals, batchInsufficient, corrections, generateErr := generateClassicMindMapAIBatch(ctx, service.Provider, answerCfg, request, batch, grounded)
+		phase := "generate"
+		reused := checkpoints != nil && checkpoints[i].Ready
+		if reused {
+			phase = "reusing"
+		}
+		reportClassicMindMapAIProgress(progress, ClassicMindMapAIProgress{RunID: runID, Phase: phase, Current: i + 1, Total: len(batches), Message: batch.ID})
+		var proposals []ClassicMindMapAIProposal
+		var batchInsufficient bool
+		var corrections int
+		var generateErr error
+		if reused {
+			proposals, batchInsufficient, corrections = checkpoints[i].Proposals, checkpoints[i].Insufficient, checkpoints[i].Corrections
+		} else {
+			proposals, batchInsufficient, corrections, generateErr = s.generateAdaptiveClassicMindMapAIBatch(ctx, service.Provider, answerCfg, request, base, target, runID, batch)
+		}
 		totalCorrections += corrections
 		if generateErr != nil {
 			_ = s.failClassicMindMapAIBatch(runID, batch.Ordinal, generateErr, corrections)
@@ -370,22 +419,30 @@ func (s *Store) prepareClassicMindMapAIPreview(ctx context.Context, service *Cla
 		}
 		if batchInsufficient {
 			insufficient++
+			if resume && reused {
+				all = append(all, nil)
+				continue
+			}
 			if err := s.saveClassicMindMapAIBatch(runID, batch.Ordinal, "insufficient", nil, corrections); err != nil {
 				return ClassicMindMapAIPreview{}, err
 			}
 			all = append(all, nil)
 			continue
 		}
-		if err := s.saveClassicMindMapAIBatch(runID, batch.Ordinal, "completed", proposals, corrections); err != nil {
-			return ClassicMindMapAIPreview{}, err
+		if !resume || !reused {
+			if err := s.saveClassicMindMapAIBatch(runID, batch.Ordinal, "completed", proposals, corrections); err != nil {
+				return ClassicMindMapAIPreview{}, err
+			}
 		}
 		all = append(all, proposals)
 	}
 
 	reportClassicMindMapAIProgress(progress, ClassicMindMapAIProgress{RunID: runID, Phase: "merging", Current: len(batches), Total: len(batches), Message: "combining validated batch proposals"})
-	proposals, err := reduceClassicMindMapAIProposals(request.Action, all)
+	groupProvider := &classicMindMapAICachedProvider{AnswerProvider: service.Provider, store: s, runID: runID}
+	proposals, err := combineClassicMindMapAIProposals(ctx, groupProvider, answerCfg, request, all, func() {
+		reportClassicMindMapAIProgress(progress, ClassicMindMapAIProgress{RunID: runID, Phase: "synthesizing", Current: len(batches), Total: len(batches), Message: "Группировка тем всех пакетов без изменения исходных утверждений"})
+	})
 	if err != nil {
-		_ = s.failClassicMindMapAIRun(runID, err)
 		return ClassicMindMapAIPreview{}, err
 	}
 	status := ClassicMindMapAIPreviewReady
@@ -407,6 +464,7 @@ func (s *Store) prepareClassicMindMapAIPreview(ctx context.Context, service *Cla
 		Evidence: evidence, EvidenceCount: len(evidence), BatchCount: len(batches),
 		ManifestDigest: manifestDigest, Proposals: proposals, ProposalDigest: proposalDigest,
 		Title: title, Description: request.Description, CorrectionRetries: totalCorrections, Created: now,
+		Synthesis: classicMindMapAISynthesisInfo(proposals),
 	}
 	if err := ctx.Err(); err != nil {
 		return ClassicMindMapAIPreview{}, err
@@ -421,6 +479,7 @@ func (s *Store) prepareClassicMindMapAIPreview(ctx context.Context, service *Cla
 }
 
 func reportClassicMindMapAIProgress(progress ClassicMindMapAIProgressFunc, event ClassicMindMapAIProgress) {
+	applog.Event("INFO", "ai.progress", applog.Fields{"run_id": event.RunID, "phase": event.Phase, "current": event.Current, "total": event.Total})
 	if progress != nil {
 		progress(event)
 	}
@@ -898,6 +957,7 @@ func generateClassicMindMapAIBatch(ctx context.Context, provider AnswerProvider,
 		if validationErr == nil {
 			return proposals, insufficient, corrections, nil
 		}
+		applog.Event("WARN", "ai.validation_rejected", applog.Fields{"batch": batch.Ordinal + 1, "category": classicMindMapAIValidationCategory(validationErr), "correction_retries": corrections})
 		if corrections >= maxClassicMindMapAICorrections {
 			return nil, false, corrections, fmt.Errorf("classic mind map AI batch %d rejected after correction retries: %w", batch.Ordinal+1, validationErr)
 		}
@@ -907,23 +967,34 @@ func generateClassicMindMapAIBatch(ctx context.Context, provider AnswerProvider,
 }
 
 func generateClassicMindMapAIStrictJSON(ctx context.Context, provider AnswerProvider, cfg AnswerConfig, request AnswerRequest) (string, error) {
+	// Hosted adapters may impose a smaller, user-configured ceiling. Clamp
+	// retries here so the adapter never replaces the original typed error.
+	ceiling := maxClassicMindMapAITokens
+	if bounded, ok := provider.(interface{ MaxOutputTokens() int }); ok {
+		if limit := bounded.MaxOutputTokens(); limit > 0 {
+			ceiling = min(ceiling, limit)
+		}
+	}
+	request.MaxTokens = min(request.MaxTokens, ceiling)
 	for {
 		generationCtx, cancel := AnswerContext(ctx, cfg)
+		applog.Event("INFO", "ai.model.attempt", applog.Fields{"max_tokens": request.MaxTokens, "token_ceiling": ceiling, "timeout_seconds": cfg.TimeoutSeconds})
 		raw, err := provider.Generate(generationCtx, request)
+		applog.Error("ai.model.attempt_failed", err)
 		cancel()
 		if err == nil {
 			return raw, nil
 		}
 		_, limited := AnswerTokenLimit(err)
-		if !limited || request.MaxTokens >= maxClassicMindMapAITokens {
+		if !limited || request.MaxTokens >= ceiling {
 			return "", err
 		}
 		next := request.MaxTokens * 2
 		if next < DefaultMapGenerationTokens {
 			next = DefaultMapGenerationTokens
 		}
-		if next > maxClassicMindMapAITokens {
-			next = maxClassicMindMapAITokens
+		if next > ceiling {
+			next = ceiling
 		}
 		request.MaxTokens = next
 		request.System += "\nOUTPUT LIMIT RETRY. Return compact complete JSON immediately; avoid repeated wording while preserving every supported proposal and citation."
@@ -1472,7 +1543,9 @@ WHERE id=? AND status=?`, preview.Status, preview.ProposalDigest, preview.Create
 	return tx.Commit()
 }
 
-func (s *Store) LoadClassicMindMapAIPreview(runID string) (ClassicMindMapAIPreview, error) {
+func (s *Store) LoadClassicMindMapAIPreview(runID string) (applogResult0 ClassicMindMapAIPreview, applogResult1 error) {
+	defer applog.Track("pkg.mem.Store.LoadClassicMindMapAIPreview")(&applogResult1)
+
 	runID = strings.TrimSpace(runID)
 	if runID == "" {
 		return ClassicMindMapAIPreview{}, ErrClassicMindMapAIPreviewNotFound
@@ -1510,6 +1583,7 @@ FROM mind_map_generation_previews p JOIN mind_map_generation_runs r ON r.id=p.ru
 	if err := json.Unmarshal([]byte(proposalsJSON), &preview.Proposals); err != nil {
 		return ClassicMindMapAIPreview{}, err
 	}
+	preview.Synthesis = classicMindMapAISynthesisInfo(preview.Proposals)
 	manifestDigest, err := classicMindMapAIDigest(preview.Evidence)
 	if err != nil || manifestDigest != preview.ManifestDigest {
 		return ClassicMindMapAIPreview{}, fmt.Errorf("%w: evidence manifest digest mismatch", ErrClassicMindMapAIChanged)
@@ -1543,6 +1617,9 @@ func validateStoredClassicMindMapAIPreview(preview ClassicMindMapAIPreview) erro
 	}
 	ids := make(map[string]bool, len(preview.Proposals))
 	for _, proposal := range preview.Proposals {
+		if err := validateClassicMindMapAISynthesisRole(proposal); err != nil {
+			return fmt.Errorf("%w: %v", ErrClassicMindMapAIChanged, err)
+		}
 		if proposal.ID == "" || ids[proposal.ID] {
 			return fmt.Errorf("%w: duplicate proposal ID", ErrClassicMindMapAIChanged)
 		}
@@ -1561,7 +1638,9 @@ func validateStoredClassicMindMapAIPreview(preview ClassicMindMapAIPreview) erro
 	return nil
 }
 
-func (s *Store) ApplyClassicMindMapAIPreview(request ClassicMindMapAIApplyRequest) (ClassicMindMapAIApplyResult, error) {
+func (s *Store) ApplyClassicMindMapAIPreview(request ClassicMindMapAIApplyRequest) (applogResult0 ClassicMindMapAIApplyResult, applogResult1 error) {
+	defer applog.Track("pkg.mem.Store.ApplyClassicMindMapAIPreview")(&applogResult1)
+
 	preview, err := s.LoadClassicMindMapAIPreview(request.RunID)
 	if err != nil {
 		return ClassicMindMapAIApplyResult{}, err
@@ -1643,7 +1722,7 @@ func selectClassicMindMapAIProposals(preview ClassicMindMapAIPreview, requested 
 	return selected, ids, nil
 }
 
-func (s *Store) verifyClassicMindMapAIPreviewTx(tx *sql.Tx, preview ClassicMindMapAIPreview) error {
+func verifyClassicMindMapAIPreviewTx(tx *sql.Tx, preview ClassicMindMapAIPreview) error {
 	var status, resultDigest string
 	if err := tx.QueryRow(`SELECT status, result_digest FROM mind_map_generation_runs WHERE id=?`, preview.RunID).Scan(&status, &resultDigest); err != nil {
 		return err
@@ -1682,83 +1761,86 @@ func resolveClassicMindMapAIEvidenceTx(tx *sql.Tx, anchor EvidenceAnchor) (Evide
 }
 
 func (s *Store) publishExistingClassicMindMapAIPreview(preview ClassicMindMapAIPreview, selected []ClassicMindMapAIProposal, selectedIDs []string, actor, comment string) (ClassicMindMapAIApplyResult, error) {
-	selectedJSON, _ := json.Marshal(selectedIDs)
-	selectedDigest, err := classicMindMapAIDigest(selectedIDs)
-	if err != nil {
-		return ClassicMindMapAIApplyResult{}, err
-	}
 	var publicationID int64
-	doc, _, err := s.mutateClassicMindMap(preview.TargetMapID, preview.BaseRevision, actor, comment,
-		"ai:"+string(preview.Action), func(tx *sql.Tx, item ClassicMindMap) (string, error) {
-			if err := s.verifyClassicMindMapAIPreviewTx(tx, preview); err != nil {
-				return "", err
-			}
-			current, err := loadClassicMindMapDocument(tx, item.ID)
-			if err != nil {
-				return "", err
-			}
-			current, _, err = finalizeClassicMindMapDocument(current)
-			if err != nil {
-				return "", err
-			}
-			target, err := resolveClassicMindMapNodeRef(tx, item.ID, preview.TargetNodeID)
-			if err != nil {
-				return "", err
-			}
-			if target.Locked {
-				return "", fmt.Errorf("%w: %q", ErrClassicMindMapLocked, target.Label)
-			}
-			if current.Map.Revision != preview.BaseRevision || current.Digest != preview.BaseDigest {
-				return "", fmt.Errorf("%w: target map differs from preview", ErrClassicMindMapAIChanged)
-			}
-			switch preview.Action {
-			case ClassicMindMapAIExpand:
-				if err := validateClassicMindMapAIExpansionLimits(current.Nodes, target.ID, selected); err != nil {
-					return "", err
-				}
-				if err := applyClassicMindMapAIExpansionTx(tx, item.ID, target, selected); err != nil {
-					return "", err
-				}
-			case ClassicMindMapAIFill:
-				if err := applyClassicMindMapAIFillTx(tx, item.ID, target, selected); err != nil {
-					return "", err
-				}
-			case ClassicMindMapAIFindSources:
-				if err := applyClassicMindMapAISourcesTx(tx, item.ID, target, selected); err != nil {
-					return "", err
-				}
-			default:
-				return "", fmt.Errorf("unsupported existing-map AI action %q", preview.Action)
-			}
-			if _, err := tx.Exec(`UPDATE mind_maps SET mode=? WHERE id=?`, ClassicMindMapModeHybrid, item.ID); err != nil {
-				return "", err
-			}
-			now := time.Now().UTC().Format(time.RFC3339Nano)
-			insert, err := tx.Exec(`INSERT INTO mind_map_generation_publications
-(run_id, map_id, base_revision, new_revision, selected_json, selected_digest, actor, comment, created)
-VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`, preview.RunID, item.ID, item.Revision, item.Revision+1,
-				string(selectedJSON), selectedDigest, actor, comment, now)
-			if err != nil {
-				return "", err
-			}
-			publicationID, err = insert.LastInsertId()
-			if err != nil {
-				return "", err
-			}
-			result, err := tx.Exec(`UPDATE mind_map_generation_runs SET status=?, map_id=?, completed=? WHERE id=? AND status=?`,
-				ClassicMindMapAIPublished, item.ID, now, preview.RunID, ClassicMindMapAIPreviewReady)
-			if err != nil {
-				return "", err
-			}
-			if changed, _ := result.RowsAffected(); changed != 1 {
-				return "", ErrClassicMindMapAIAlreadyApplied
-			}
-			return target.ID, nil
-		})
+	doc, _, err := s.mutateClassicMindMap(preview.TargetMapID, preview.BaseRevision, actor, comment, "ai:"+string(preview.Action), func(tx *sql.Tx, item ClassicMindMap) (string, error) {
+		return publishExistingClassicMindMapPreviewTx(tx, item, preview, selected, selectedIDs, actor, comment, &publicationID)
+	})
 	if err != nil {
 		return ClassicMindMapAIApplyResult{}, err
 	}
 	return ClassicMindMapAIApplyResult{Document: doc, RunID: preview.RunID, ProposalIDs: selectedIDs, PublicationID: publicationID}, nil
+}
+
+func publishExistingClassicMindMapPreviewTx(tx *sql.Tx, item ClassicMindMap, preview ClassicMindMapAIPreview, selected []ClassicMindMapAIProposal, selectedIDs []string, actor, comment string, publicationID *int64) (string, error) {
+	selectedJSON, _ := json.Marshal(selectedIDs)
+	selectedDigest, err := classicMindMapAIDigest(selectedIDs)
+	if err != nil {
+		return "", err
+	}
+	if err := verifyClassicMindMapAIPreviewTx(tx, preview); err != nil {
+		return "", err
+	}
+	current, err := loadClassicMindMapDocument(tx, item.ID)
+	if err != nil {
+		return "", err
+	}
+	current, _, err = finalizeClassicMindMapDocument(current)
+	if err != nil {
+		return "", err
+	}
+	target, err := resolveClassicMindMapNodeRef(tx, item.ID, preview.TargetNodeID)
+	if err != nil {
+		return "", err
+	}
+	if target.Locked {
+		return "", fmt.Errorf("%w: %q", ErrClassicMindMapLocked, target.Label)
+	}
+	if current.Map.Revision != preview.BaseRevision || current.Digest != preview.BaseDigest {
+		return "", fmt.Errorf("%w: target map differs from preview", ErrClassicMindMapAIChanged)
+	}
+	switch preview.Action {
+	case ClassicMindMapAIExpand:
+		if err := validateClassicMindMapAIExpansionLimits(current.Nodes, target.ID, selected); err != nil {
+			return "", err
+		}
+		if err := applyClassicMindMapAIExpansionTx(tx, item.ID, target, selected); err != nil {
+			return "", err
+		}
+	case ClassicMindMapAIFill:
+		if err := applyClassicMindMapAIFillTx(tx, item.ID, target, selected); err != nil {
+			return "", err
+		}
+	case ClassicMindMapAIFindSources:
+		if err := applyClassicMindMapAISourcesTx(tx, item.ID, target, selected); err != nil {
+			return "", err
+		}
+	default:
+		return "", fmt.Errorf("unsupported existing-map AI action %q", preview.Action)
+	}
+	if _, err := tx.Exec(`UPDATE mind_maps SET mode=? WHERE id=?`, ClassicMindMapModeHybrid, item.ID); err != nil {
+		return "", err
+	}
+	now := time.Now().UTC().Format(time.RFC3339Nano)
+	insert, err := tx.Exec(`INSERT INTO mind_map_generation_publications
+(run_id, map_id, base_revision, new_revision, selected_json, selected_digest, actor, comment, created)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`, preview.RunID, item.ID, item.Revision, item.Revision+1,
+		string(selectedJSON), selectedDigest, actor, comment, now)
+	if err != nil {
+		return "", err
+	}
+	*publicationID, err = insert.LastInsertId()
+	if err != nil {
+		return "", err
+	}
+	result, err := tx.Exec(`UPDATE mind_map_generation_runs SET status=?, map_id=?, completed=? WHERE id=? AND status=?`,
+		ClassicMindMapAIPublished, item.ID, now, preview.RunID, ClassicMindMapAIPreviewReady)
+	if err != nil {
+		return "", err
+	}
+	if changed, _ := result.RowsAffected(); changed != 1 {
+		return "", ErrClassicMindMapAIAlreadyApplied
+	}
+	return target.ID, nil
 }
 
 func validateClassicMindMapAIExpansionLimits(current []ClassicMindMapNode, targetID string, selected []ClassicMindMapAIProposal) error {
@@ -1994,7 +2076,7 @@ func (s *Store) publishNewClassicMindMapAIPreview(preview ClassicMindMapAIPrevie
 		_ = tx.Rollback()
 		return ClassicMindMapAIApplyResult{}, cause
 	}
-	if err := s.verifyClassicMindMapAIPreviewTx(tx, preview); err != nil {
+	if err := verifyClassicMindMapAIPreviewTx(tx, preview); err != nil {
 		return rollback(err)
 	}
 	rootID := ids[rootRef]

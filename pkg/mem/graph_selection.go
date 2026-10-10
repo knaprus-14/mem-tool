@@ -1,5 +1,7 @@
 package mem
 
+import "github.com/knaprus-14/mem-tool/internal/applog"
+
 import (
 	"context"
 	"crypto/sha256"
@@ -57,6 +59,7 @@ type KnowledgeSelectionObject struct {
 	EvidenceState  EvidenceState       `json:"evidence_state"`
 	EvidenceDigest string              `json:"evidence_digest"`
 	ContentDigest  string              `json:"content_digest"`
+	ReviewDigest   string              `json:"review_digest,omitempty"`
 }
 
 type KnowledgeSelectionBlocker struct {
@@ -141,7 +144,9 @@ type KnowledgeSelectionAnswerService struct {
 	Config   AnswerConfig
 }
 
-func (s *Store) BuildKnowledgeSelectionManifest(request KnowledgeSelectionRequest) (KnowledgeSelectionManifest, error) {
+func (s *Store) BuildKnowledgeSelectionManifest(request KnowledgeSelectionRequest) (applogResult0 KnowledgeSelectionManifest, applogResult1 error) {
+	defer applog.Track("pkg.mem.Store.BuildKnowledgeSelectionManifest")(&applogResult1)
+
 	nodeIDs, err := normalizeKnowledgeSelectionIDs(request.NodeIDs, MaxKnowledgeSelectionNodes, "node")
 	if err != nil {
 		return KnowledgeSelectionManifest{}, err
@@ -181,7 +186,7 @@ func (s *Store) BuildKnowledgeSelectionManifest(request KnowledgeSelectionReques
 		Evidence: make([]GroundedEvidence, 0),
 		Blockers: make([]KnowledgeSelectionBlocker, 0),
 	}
-	evidenceByCitation := make(map[string]GroundedEvidence)
+	evidenceByIdentity := make(map[string]GroundedEvidence)
 	documents, pages := make(map[string]bool), make(map[string]bool)
 	appendObject := func(objectType KnowledgeObjectType, id, kind, label string, status KnowledgeStatus, origin KnowledgeOrigin) error {
 		item, ok := reviews[string(objectType)+":"+id]
@@ -193,7 +198,7 @@ func (s *Store) BuildKnowledgeSelectionManifest(request KnowledgeSelectionReques
 		}
 		selected := KnowledgeSelectionObject{
 			ObjectType: objectType, ID: id, Kind: kind, Label: label, Status: status, Origin: origin,
-			EvidenceState: item.EvidenceState, EvidenceDigest: item.EvidenceDigest, ContentDigest: item.ContentDigest,
+			EvidenceState: item.EvidenceState, EvidenceDigest: item.EvidenceDigest, ContentDigest: item.ContentDigest, ReviewDigest: item.ReviewDigest,
 		}
 		if objectType == KnowledgeObjectNode {
 			manifest.Nodes = append(manifest.Nodes, selected)
@@ -223,13 +228,14 @@ func (s *Store) BuildKnowledgeSelectionManifest(request KnowledgeSelectionReques
 			if buildErr != nil {
 				return buildErr
 			}
-			if existing, exists := evidenceByCitation[grounded.CitationID]; exists {
+			identity := groundedEvidenceIdentity(grounded)
+			if existing, exists := evidenceByIdentity[identity]; exists {
 				if !reflect.DeepEqual(existing, grounded) {
 					return fmt.Errorf("knowledge selection citation %q resolves to conflicting anchors", grounded.CitationID)
 				}
 				continue
 			}
-			evidenceByCitation[grounded.CitationID] = grounded
+			evidenceByIdentity[identity] = grounded
 			switch resolution.State {
 			case EvidenceCurrent:
 				manifest.Summary.CurrentEvidence++
@@ -266,10 +272,12 @@ func (s *Store) BuildKnowledgeSelectionManifest(request KnowledgeSelectionReques
 			return KnowledgeSelectionManifest{}, err
 		}
 	}
-	for _, item := range evidenceByCitation {
+	for _, item := range evidenceByIdentity {
 		manifest.Evidence = append(manifest.Evidence, item)
 	}
-	sort.Slice(manifest.Evidence, func(i, j int) bool { return manifest.Evidence[i].CitationID < manifest.Evidence[j].CitationID })
+	sort.Slice(manifest.Evidence, func(i, j int) bool {
+		return groundedEvidenceIdentity(manifest.Evidence[i]) < groundedEvidenceIdentity(manifest.Evidence[j])
+	})
 	manifest.Summary.Nodes = len(manifest.Nodes)
 	manifest.Summary.Edges = len(manifest.Edges)
 	manifest.Summary.Documents = len(documents)
@@ -346,7 +354,9 @@ func knowledgeSelectionManifestDigest(manifest KnowledgeSelectionManifest) (stri
 // relations or finds a deterministic shortest path between two selected
 // nodes. The returned manifest pins the resulting subgraph for a subsequent
 // answer operation.
-func (s *Store) ExploreKnowledgeSelection(request KnowledgeSelectionExploreRequest) (KnowledgeSelectionExploreResult, error) {
+func (s *Store) ExploreKnowledgeSelection(request KnowledgeSelectionExploreRequest) (applogResult0 KnowledgeSelectionExploreResult, applogResult1 error) {
+	defer applog.Track("pkg.mem.Store.ExploreKnowledgeSelection")(&applogResult1)
+
 	sourceManifest, err := s.BuildKnowledgeSelectionManifest(request.Selection)
 	if err != nil {
 		return KnowledgeSelectionExploreResult{}, err
@@ -584,7 +594,9 @@ func knowledgeSelectionDifference(values, original []string) []string {
 	return result
 }
 
-func (s *Store) AnswerKnowledgeSelection(ctx context.Context, service *KnowledgeSelectionAnswerService, request KnowledgeSelectionAnswerRequest) (KnowledgeSelectionAnswerResult, error) {
+func (s *Store) AnswerKnowledgeSelection(ctx context.Context, service *KnowledgeSelectionAnswerService, request KnowledgeSelectionAnswerRequest) (applogResult0 KnowledgeSelectionAnswerResult, applogResult1 error) {
+	defer applog.Track("pkg.mem.Store.AnswerKnowledgeSelection")(&applogResult1)
+
 	if service == nil || service.Provider == nil {
 		return KnowledgeSelectionAnswerResult{}, ErrKnowledgeSelectionUnavailable
 	}
@@ -656,6 +668,18 @@ func (s *Store) AnswerKnowledgeSelection(ctx context.Context, service *Knowledge
 	if validated.Rejected {
 		return KnowledgeSelectionAnswerResult{}, fmt.Errorf("selected grounded answer rejected: %s", validated.Reason)
 	}
+	// Generation may outlive an import or graph edit. Only publish an answer
+	// while the exact selection and evidence sent to the model are still current.
+	current, err := s.BuildKnowledgeSelectionManifest(request.Selection)
+	if err != nil {
+		return KnowledgeSelectionAnswerResult{}, err
+	}
+	if current.Digest != manifest.Digest {
+		return KnowledgeSelectionAnswerResult{}, fmt.Errorf("%w: selection or evidence changed during generation", ErrKnowledgeSelectionChanged)
+	}
+	if !current.Ready {
+		return KnowledgeSelectionAnswerResult{}, ErrKnowledgeSelectionNotCurrent
+	}
 	return KnowledgeSelectionAnswerResult{
 		Mode: mode, Answer: validated.Answer, Insufficient: validated.Insufficient,
 		ManifestDigest: manifest.Digest, Sources: validated.Used, Summary: manifest.Summary,
@@ -696,13 +720,14 @@ func buildGroundedPromptFromEvidence(question string, source []GroundedEvidence,
 	selected := make([]GroundedEvidence, 0, len(source))
 	seen := make(map[string]bool, len(source))
 	for _, input := range source {
-		if strings.TrimSpace(input.Text) == "" || seen[input.CitationID] {
+		identity := groundedEvidenceIdentity(input)
+		if strings.TrimSpace(input.Text) == "" || seen[identity] {
 			return GroundedPrompt{}, fmt.Errorf("selected evidence %q is empty or duplicated", input.CitationID)
 		}
 		if _, anchorErr := evidenceAnchorFromGrounded(input); anchorErr != nil {
 			return GroundedPrompt{}, fmt.Errorf("selected evidence %q is invalid: %w", input.CitationID, anchorErr)
 		}
-		seen[input.CitationID] = true
+		seen[identity] = true
 		full := input
 		full.EvidenceRef = fmt.Sprintf("E%d", len(selected)+1)
 		trial := append(append([]GroundedEvidence(nil), selected...), full)

@@ -1,0 +1,11 @@
+[deploy] Checking destination access...
+Exception: C:\Users\ZMII\Documents\ChatGPT\mem-tool\deploy\windows.ps1:40
+Line |
+  40 |          throw "Deployment target '$targetPath' is not writable. Creat …
+     |          ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+     | Deployment target 'C:\Users\ZMII\bin' is not writable. Create, rename and delete access is required; tests and
+     | build have not started. Exception calling "Open" with "4" argument(s): "Access to the path
+     | 'C:\Users\ZMII\bin\.mem-deploy-probe-88d11cad22c7429290d0c14bb2faa9f7' is denied."
+
+
+Elapsed: 0,244 s

@@ -3,6 +3,7 @@ package mem
 import (
 	"encoding/json"
 	"errors"
+	"github.com/knaprus-14/mem-tool/internal/applog"
 	"io"
 	"mime"
 	"net/http"
@@ -31,7 +32,7 @@ func NewClassicMindMapWorkspaceHandlerWithAI(store *Store, sessionToken string, 
 }
 
 func newClassicMindMapWorkspaceHandler(store *Store, sessionToken string, assistant *ClassicMindMapAIWorkspace) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	return applog.HTTP("classic_map", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		setKnowledgeMapSecurityHeaders(w.Header())
 		if !knowledgeMapLoopbackHost(r.Host) {
 			http.Error(w, "forbidden host", http.StatusForbidden)
@@ -140,7 +141,7 @@ func newClassicMindMapWorkspaceHandler(store *Store, sessionToken string, assist
 		default:
 			http.NotFound(w, r)
 		}
-	})
+	}))
 }
 
 type classicMindMapRefRequest struct {
@@ -713,13 +714,28 @@ func serveClassicMindMapSourceFile(w http.ResponseWriter, r *http.Request, store
 		http.Error(w, "источник недоступен или изменён", http.StatusConflict)
 		return
 	}
-	file, err := os.Open(resolved.Path)
+	var file *os.File
+	if resolved.Evidence != nil {
+		file, err = openLocatedSource(r.Context(), store.db, filepath.Dir(store.Path()), *resolved.Evidence, true)
+	} else {
+		file, err = os.Open(resolved.Path)
+	}
 	if err != nil {
 		http.Error(w, "файл источника недоступен", http.StatusGone)
 		return
 	}
 	defer file.Close()
 	info, err := file.Stat()
+	contentFile := file
+	if resolved.Evidence != nil {
+		snapshot, err := store.verifiedSourceFile(r.Context(), *resolved.Evidence, file)
+		if err != nil {
+			http.Error(w, publicSourceFileError(err), http.StatusConflict)
+			return
+		}
+		defer closeSourceSnapshot(snapshot)
+		contentFile = snapshot
+	}
 	if err != nil || !info.Mode().IsRegular() {
 		http.Error(w, "файл источника недоступен", http.StatusGone)
 		return
@@ -732,7 +748,7 @@ func serveClassicMindMapSourceFile(w http.ResponseWriter, r *http.Request, store
 	// such as HTML, SVG and XML are additionally forced to octet-stream and
 	// attachment so they cannot inherit the editor origin or read its token.
 	w.Header().Set("Content-Security-Policy", classicMindMapSourceSandboxPolicy)
-	http.ServeContent(w, r, filepath.Base(resolved.Path), info.ModTime(), file)
+	http.ServeContent(w, r, filepath.Base(resolved.Path), info.ModTime(), contentFile)
 }
 
 func classicMindMapSourcePresentation(rawMediaType string) (mediaType, disposition string) {

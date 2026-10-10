@@ -1,0 +1,11 @@
+error acquiring upload token: creating token file: open C:\Users\ZMII\AppData\Roaming\go\telemetry\local\upload.token: Access is denied.
+--- FAIL: TestReviewGraphSessionsReleasedOnLogout (0.45s)
+    review_web_test.go:23: session 9: graph returned 429; graph handles=8, live sessions=1: {"error":"Открыто восемь сеансов графа. Перезапустите mem, чтобы освободить их."}
+2026/10/09 21:11:32 web operation failed: GetFileAttributesEx C:\Users\ZMII\AppData\Local\Temp\TestReviewMissingWorkspaceDoesNotBlockOtherWorkspace3795498223\001\workspaces\local\2cd9185df2c66937857eede2756dfd2c\.mem: The system cannot find the path specified.
+--- FAIL: TestReviewMissingWorkspaceDoesNotBlockOtherWorkspace (1.01s)
+    review_web_test.go:41: healthy base quota fails because another base disappeared: 500 {"error":"Не удалось прочитать или сохранить базу. Подробности в журнале сервера."}
+--- FAIL: TestReviewEvidenceRemainsReadableAtStorageLimit (0.26s)
+    review_web_test.go:61: search still succeeds but opening its valid evidence fails at quota: 507 {"error":"достигнут лимит хранилища; освободите место или увеличьте лимит в конфигурации сервера"}
+FAIL
+FAIL	github.com/knaprus-14/mem-tool/internal/webapp	7.527s
+FAIL

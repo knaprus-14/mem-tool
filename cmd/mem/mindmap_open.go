@@ -1,5 +1,7 @@
 package main
 
+import "github.com/knaprus-14/mem-tool/internal/applog"
+
 import (
 	"context"
 	"errors"
@@ -21,7 +23,9 @@ type mindMapOpenOptions struct {
 
 var launchClassicMindMapBrowser = openBrowserURL
 
-func handleClassicMindMapOpen(cfg *Config, store *Store, args []string) error {
+func handleClassicMindMapOpen(cfg *Config, store *Store, args []string) (applogResult0 error) {
+	defer applog.Track("cmd.mem.handleClassicMindMapOpen")(&applogResult0)
+
 	options, err := parseMindMapOpenOptions(args)
 	if err != nil {
 		return err

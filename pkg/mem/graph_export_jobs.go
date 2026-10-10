@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"github.com/knaprus-14/mem-tool/internal/applog"
 	"sync"
 	"time"
 )
@@ -86,6 +87,7 @@ type knowledgeMapExportManager struct {
 	queue     chan string
 	startOnce sync.Once
 	now       func() time.Time
+	expired   knowledgeJobTombstones[KnowledgeMapExportJobView]
 }
 
 func newKnowledgeMapExportManager(ctx context.Context, runner knowledgeMapExportRunner) *knowledgeMapExportManager {
@@ -132,7 +134,8 @@ func (m *knowledgeMapExportManager) start(request KnowledgeGraphExportRequest) (
 			m.mu.Unlock()
 			return KnowledgeMapExportJobView{}, idErr
 		}
-		if _, exists := m.jobs[candidate]; !exists {
+		_, expired := m.expired.get(candidate)
+		if _, exists := m.jobs[candidate]; !exists && !expired {
 			id = candidate
 			break
 		}
@@ -205,6 +208,8 @@ func (m *knowledgeMapExportManager) janitor() {
 }
 
 func (m *knowledgeMapExportManager) run(id string) {
+	defer applog.Track("graph.export.run")(nil)
+	applog.Event("INFO", "graph.export.started", applog.Fields{"job_id": id})
 	now := m.now().UTC()
 	m.mu.Lock()
 	job := m.jobs[id]
@@ -221,6 +226,7 @@ func (m *knowledgeMapExportManager) run(id string) {
 	artifact, err := m.runner(ctx, request, func(phase string, percent, completed, total int) {
 		m.updateProgress(id, phase, percent, completed, total)
 	})
+	applog.Error("graph.export.failed", err)
 	finished := m.now().UTC()
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -251,6 +257,7 @@ func (m *knowledgeMapExportManager) run(id string) {
 }
 
 func (m *knowledgeMapExportManager) updateProgress(id, phase string, percent, completed, total int) {
+	applog.Event("INFO", "graph.export.progress", applog.Fields{"job_id": id, "phase": phase, "percent": percent, "completed": completed, "total": total})
 	if percent < 0 {
 		percent = 0
 	}
@@ -280,6 +287,9 @@ func (m *knowledgeMapExportManager) status(id string) (KnowledgeMapExportJobView
 	m.cleanupLocked(now)
 	job := m.jobs[id]
 	if job == nil {
+		if view, ok := m.expired.get(id); ok {
+			return view, nil
+		}
 		return KnowledgeMapExportJobView{}, ErrKnowledgeMapExportJobNotFound
 	}
 	return m.viewLocked(job, now), nil
@@ -292,8 +302,12 @@ func (m *knowledgeMapExportManager) cancelJob(id string) (KnowledgeMapExportJobV
 	now := m.now().UTC()
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	m.cleanupLocked(now)
 	job := m.jobs[id]
 	if job == nil {
+		if _, ok := m.expired.get(id); ok {
+			return KnowledgeMapExportJobView{}, ErrKnowledgeMapExportJobNotCancelable
+		}
 		return KnowledgeMapExportJobView{}, ErrKnowledgeMapExportJobNotFound
 	}
 	switch job.view.Status {
@@ -318,8 +332,12 @@ func (m *knowledgeMapExportManager) artifact(id string) (KnowledgeGraphExportArt
 	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	m.cleanupLocked(m.now().UTC())
 	job := m.jobs[id]
 	if job == nil {
+		if _, ok := m.expired.get(id); ok {
+			return KnowledgeGraphExportArtifact{}, ErrKnowledgeMapExportJobNotReady
+		}
 		return KnowledgeGraphExportArtifact{}, ErrKnowledgeMapExportJobNotFound
 	}
 	if job.view.Status != KnowledgeMapExportJobCompleted || job.artifact == nil {
@@ -389,12 +407,13 @@ func (m *knowledgeMapExportManager) viewLocked(job *knowledgeMapExportJob, now t
 }
 
 func (m *knowledgeMapExportManager) cleanupLocked(now time.Time) {
+	m.expired.cleanup(now)
 	for _, id := range append([]string(nil), m.order...) {
 		job := m.jobs[id]
 		if job == nil || job.completedAt.IsZero() || now.Sub(job.completedAt) <= KnowledgeMapExportJobRetention {
 			continue
 		}
-		m.removeLocked(id)
+		m.expireLocked(id, job.completedAt.Add(KnowledgeMapExportJobRetention), now)
 	}
 	for len(m.jobs) >= MaxKnowledgeMapExportRetainedJobs {
 		removed := false
@@ -403,7 +422,7 @@ func (m *knowledgeMapExportManager) cleanupLocked(now time.Time) {
 			if job == nil || job.view.Status == KnowledgeMapExportJobQueued || job.view.Status == KnowledgeMapExportJobRunning {
 				continue
 			}
-			m.removeLocked(id)
+			m.expireLocked(id, now, now)
 			removed = true
 			break
 		}
@@ -428,9 +447,8 @@ func (m *knowledgeMapExportManager) ensureArtifactCapacityLocked(incoming int, k
 				continue
 			}
 			total -= len(job.artifact.Data)
-			job.artifact = nil
-			job.view.Status, job.view.Phase, job.view.DownloadReady = KnowledgeMapExportJobFailed, "expired", false
-			job.view.ErrorCode, job.view.Message = "expired", "Предыдущий файл удалён из памяти; запустите экспорт повторно."
+			now := m.now().UTC()
+			m.expireLocked(id, now, now)
 			removed = true
 			break
 		}
@@ -438,6 +456,24 @@ func (m *knowledgeMapExportManager) ensureArtifactCapacityLocked(incoming int, k
 			break
 		}
 	}
+}
+
+func (m *knowledgeMapExportManager) expireLocked(id string, expiredAt, now time.Time) {
+	job := m.jobs[id]
+	if job == nil || job.view.Status == KnowledgeMapExportJobQueued || job.view.Status == KnowledgeMapExportJobRunning {
+		return
+	}
+	// Reconstruct a compact view so artifact filenames, requests, errors or
+	// any future large fields cannot accidentally be retained by a tombstone.
+	view := KnowledgeMapExportJobView{
+		Version: KnowledgeMapExportJobVersion, ID: id, Status: KnowledgeMapExportJobFailed,
+		Phase: "expired", ErrorCode: "expired", Format: job.view.Format,
+		CreatedAt: job.view.CreatedAt, StartedAt: job.view.StartedAt, CompletedAt: job.view.CompletedAt,
+		ElapsedMS: m.viewLocked(job, now).ElapsedMS,
+		Message:   "Срок хранения результата экспорта в памяти истёк или результат вытеснен лимитом; запустите экспорт повторно.",
+	}
+	m.expired.remember(id, view, expiredAt, now)
+	m.removeLocked(id)
 }
 
 func (m *knowledgeMapExportManager) removeLocked(id string) {

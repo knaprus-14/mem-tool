@@ -1,5 +1,7 @@
 package fileindex
 
+import "github.com/knaprus-14/mem-tool/internal/applog"
+
 import (
 	"database/sql"
 	"encoding/json"
@@ -11,33 +13,33 @@ import (
 	"sync"
 	"time"
 
-	_ "modernc.org/sqlite"
-
+	"github.com/knaprus-14/mem-tool/internal/sqliteutil"
 	"github.com/knaprus-14/mem-tool/pkg/mem"
 )
 
 // FileEntry — одна запись в каталоге файлов.
 // Path хранится ОТНОСИТЕЛЬНО scan-root (для портабельности БД).
 type FileEntry struct {
-	ID             int64
-	Path           string // relative to scan-root
-	Name           string // basename
-	Ext            string // ".fb2", ".pdf", ...
-	Size           int64
-	Mtime          int64  // unix seconds
-	ParentDir      string // последние 2 уровня parent_dir_chain
-	Hash           string // xxhash первых 64 KB (опционально)
-	Annotation     string // извлечённый текст аннотации
-	Backend        string // ollama / polza
-	EmbeddingModel string
-	EmbeddingSpace string
-	Embedding      []float32
-	Dims           int
-	Tags           []string
-	Stale          bool
-	CreatedAt      string
-	UpdatedAt      string
-	LastSeenAt     string
+	ID              int64
+	Path            string // relative to scan-root
+	Name            string // basename
+	Ext             string // ".fb2", ".pdf", ...
+	Size            int64
+	Mtime           int64  // unix seconds
+	ParentDir       string // последние 2 уровня parent_dir_chain
+	Hash            string // xxhash первых 64 KB (опционально)
+	Annotation      string // извлечённый текст аннотации
+	AnnotationStale bool   // прежняя аннотация требует повторного извлечения
+	Backend         string // ollama / polza
+	EmbeddingModel  string
+	EmbeddingSpace  string
+	Embedding       []float32
+	Dims            int
+	Tags            []string
+	Stale           bool
+	CreatedAt       string
+	UpdatedAt       string
+	LastSeenAt      string
 }
 
 // Scored — обёртка для результатов Search с score.
@@ -61,6 +63,8 @@ type Store struct {
 	db      *sql.DB
 	files   []FileEntry
 	vectors [][]float32
+	byID    map[int64]int
+	byPath  map[string]int
 }
 
 // Схема БД. UNIQUE INDEX на path гарантирует UPSERT через ON CONFLICT.
@@ -75,6 +79,7 @@ CREATE TABLE IF NOT EXISTS files (
     parent_dir TEXT,
     hash TEXT,
     annotation TEXT,
+    annotation_stale INTEGER NOT NULL DEFAULT 0,
     backend TEXT NOT NULL,
     embedding_model TEXT NOT NULL DEFAULT '',
     embedding_space TEXT NOT NULL DEFAULT '',
@@ -93,12 +98,14 @@ CREATE INDEX IF NOT EXISTS idx_files_name ON files(name);
 
 // NewStore открывает (или создаёт) SQLite-базу в указанной директории (.fileindex/).
 // Загружает все записи в in-memory кэш для быстрого Search.
-func NewStore(dir string) (*Store, error) {
+func NewStore(dir string) (applogResult0 *Store, applogResult1 error) {
+	defer applog.Track("pkg.fileindex.NewStore")(&applogResult1)
+
 	if err := os.MkdirAll(dir, 0700); err != nil {
 		return nil, err
 	}
 	dbPath := filepath.Join(dir, "store.db")
-	db, err := sql.Open("sqlite", dbPath)
+	db, err := sqliteutil.Open(dbPath)
 	if err != nil {
 		return nil, fmt.Errorf("открытие БД: %w", err)
 	}
@@ -165,23 +172,32 @@ func ensureFileColumns(q schemaQuerier) error {
 			return fmt.Errorf("add files.%s: %w", column, err)
 		}
 	}
+	if !existing["annotation_stale"] {
+		if _, err := q.Exec("ALTER TABLE files ADD COLUMN annotation_stale INTEGER NOT NULL DEFAULT 0"); err != nil {
+			return fmt.Errorf("add files.annotation_stale: %w", err)
+		}
+	}
 	return nil
 }
 
 // Close закрывает соединение с БД.
-func (s *Store) Close() error {
+func (s *Store) Close() (applogResult0 error) {
+	defer applog.Track("pkg.fileindex.Store.Close")(&applogResult0)
+
 	return s.db.Close()
 }
 
 // loadAll загружает все записи в in-memory кэш.
 func (s *Store) loadAll() error {
 	rows, err := s.db.Query(`SELECT id, path, name, ext, size, mtime, parent_dir, hash,
-		annotation, backend, embedding_model, embedding_space, dims, embedding, tags, stale, created_at, updated_at, last_seen_at
+		annotation, annotation_stale, backend, embedding_model, embedding_space, dims, embedding, tags, stale, created_at, updated_at, last_seen_at
 		FROM files ORDER BY id`)
 	if err != nil {
 		return err
 	}
 	defer rows.Close()
+	s.files, s.vectors = nil, nil
+	s.byID, s.byPath = make(map[int64]int), make(map[string]int)
 
 	for rows.Next() {
 		var e FileEntry
@@ -190,7 +206,7 @@ func (s *Store) loadAll() error {
 		var stale int
 
 		if err := rows.Scan(&e.ID, &e.Path, &e.Name, &e.Ext, &e.Size, &e.Mtime,
-			&e.ParentDir, &e.Hash, &e.Annotation, &e.Backend, &e.EmbeddingModel,
+			&e.ParentDir, &e.Hash, &e.Annotation, &e.AnnotationStale, &e.Backend, &e.EmbeddingModel,
 			&e.EmbeddingSpace, &e.Dims, &embBytes,
 			&tagsJSON, &stale, &e.CreatedAt, &e.UpdatedAt, &e.LastSeenAt); err != nil {
 			return err
@@ -209,21 +225,39 @@ func (s *Store) loadAll() error {
 		e.Embedding = embedding
 		e.Stale = stale != 0
 
-		s.files = append(s.files, e)
-		s.vectors = append(s.vectors, e.Embedding)
+		s.cacheFile(e)
 	}
 	return rows.Err()
+}
+
+// cacheFile updates lookup indexes and vectors together; the caller holds mu.
+func (s *Store) cacheFile(entry FileEntry) {
+	cp := cloneFileEntry(entry)
+	if i, ok := s.byID[entry.ID]; ok {
+		delete(s.byPath, filepath.ToSlash(s.files[i].Path))
+		s.files[i], s.vectors[i] = cp, cp.Embedding
+		s.byPath[filepath.ToSlash(cp.Path)] = i
+		return
+	}
+	s.byID[cp.ID], s.byPath[filepath.ToSlash(cp.Path)] = len(s.files), len(s.files)
+	s.files = append(s.files, cp)
+	s.vectors = append(s.vectors, cp.Embedding)
 }
 
 // Upsert вставляет или обновляет запись по path.
 // Если path уже существует — обновляет все поля и сохраняет старый created_at.
 // Также обновляет in-memory кэш.
-func (s *Store) Upsert(entry *FileEntry) error {
+func (s *Store) Upsert(entry *FileEntry) (applogResult0 error) {
+	defer applog.Track("pkg.fileindex.Store.Upsert")(&applogResult0)
+
 	if entry.Path == "" {
 		return fmt.Errorf("Upsert: пустой path")
 	}
 	if entry.Backend == "" {
 		return fmt.Errorf("Upsert: пустой Backend")
+	}
+	if entry.AnnotationStale {
+		entry.Embedding = nil
 	}
 	if len(entry.Embedding) == 0 {
 		entry.EmbeddingModel = ""
@@ -251,83 +285,41 @@ func (s *Store) Upsert(entry *FileEntry) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	// Проверяем, существует ли запись с таким path.
-	var existingID int64
-	var existingCreated string
-	err = s.db.QueryRow(`SELECT id, created_at FROM files WHERE path = ?`, entry.Path).
-		Scan(&existingID, &existingCreated)
-
-	if err == sql.ErrNoRows {
-		// INSERT.
-		entry.CreatedAt = entry.LastSeenAt
-		entry.UpdatedAt = entry.LastSeenAt
-		res, err := s.db.Exec(`INSERT INTO files
-			(path, name, ext, size, mtime, parent_dir, hash, annotation, backend, embedding_model, embedding_space, dims,
-			 embedding, tags, stale, created_at, updated_at, last_seen_at)
-			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?)`,
-			entry.Path, entry.Name, entry.Ext, entry.Size, entry.Mtime,
-			entry.ParentDir, entry.Hash, entry.Annotation, entry.Backend,
-			entry.EmbeddingModel, entry.EmbeddingSpace, entry.Dims,
-			embBytes, tagsJSON, entry.CreatedAt, entry.UpdatedAt, entry.LastSeenAt)
-		if err != nil {
-			return fmt.Errorf("INSERT: %w", err)
-		}
-		id, _ := res.LastInsertId()
-		entry.ID = id
-
-		// Cache.
-		cp := cloneFileEntry(*entry)
-		s.files = append(s.files, cp)
-		s.vectors = append(s.vectors, cp.Embedding)
-		return nil
-	}
-	if err != nil {
-		return fmt.Errorf("Upsert SELECT: %w", err)
-	}
-
-	// UPDATE — сохраняем старый created_at.
-	entry.CreatedAt = existingCreated
 	entry.UpdatedAt = entry.LastSeenAt
-	entry.ID = existingID
-	_, err = s.db.Exec(`UPDATE files SET
-		name = ?, ext = ?, size = ?, mtime = ?, parent_dir = ?, hash = ?, annotation = ?,
-		backend = ?, embedding_model = ?, embedding_space = ?, dims = ?, embedding = ?, tags = ?, stale = 0,
-		updated_at = ?, last_seen_at = ?
-		WHERE id = ?`,
-		entry.Name, entry.Ext, entry.Size, entry.Mtime, entry.ParentDir, entry.Hash,
-		entry.Annotation, entry.Backend, entry.EmbeddingModel, entry.EmbeddingSpace,
-		entry.Dims, embBytes, tagsJSON,
-		entry.UpdatedAt, entry.LastSeenAt, existingID)
+	entry.Stale = false
+	// One statement serializes competing inserts and keeps the original created_at.
+	err = s.db.QueryRow(`INSERT INTO files
+		(path, name, ext, size, mtime, parent_dir, hash, annotation, annotation_stale,
+		 backend, embedding_model, embedding_space, dims, embedding, tags, stale,
+		 created_at, updated_at, last_seen_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?)
+		ON CONFLICT(path) DO UPDATE SET name=excluded.name, ext=excluded.ext,
+		 size=excluded.size, mtime=excluded.mtime, parent_dir=excluded.parent_dir,
+		 hash=excluded.hash, annotation=excluded.annotation, annotation_stale=excluded.annotation_stale,
+		 backend=excluded.backend, embedding_model=excluded.embedding_model,
+		 embedding_space=excluded.embedding_space, dims=excluded.dims, embedding=excluded.embedding,
+		 tags=excluded.tags, stale=0, updated_at=excluded.updated_at, last_seen_at=excluded.last_seen_at
+		RETURNING id, created_at`, entry.Path, entry.Name, entry.Ext, entry.Size, entry.Mtime,
+		entry.ParentDir, entry.Hash, entry.Annotation, entry.AnnotationStale, entry.Backend,
+		entry.EmbeddingModel, entry.EmbeddingSpace, entry.Dims, embBytes, tagsJSON,
+		entry.LastSeenAt, entry.UpdatedAt, entry.LastSeenAt).Scan(&entry.ID, &entry.CreatedAt)
 	if err != nil {
-		return fmt.Errorf("UPDATE: %w", err)
+		return fmt.Errorf("Upsert: %w", err)
 	}
-
-	// Cache: обновляем на месте.
-	for i := range s.files {
-		if s.files[i].ID == existingID {
-			cp := cloneFileEntry(*entry)
-			s.files[i] = cp
-			s.vectors[i] = cp.Embedding
-			return nil
-		}
-	}
-	// Если не нашли в кэше (странно) — добавляем.
-	cp := cloneFileEntry(*entry)
-	s.files = append(s.files, cp)
-	s.vectors = append(s.vectors, cp.Embedding)
+	s.cacheFile(*entry)
 	return nil
 }
 
 // Get возвращает запись по ID (глубокая копия Embedding/Tags).
-func (s *Store) Get(id int64) (*FileEntry, error) {
+func (s *Store) Get(id int64) (applogResult0 *FileEntry, applogResult1 error) {
+	defer applog.Track("pkg.fileindex.Store.Get")(&applogResult1)
+
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
-	for i := range s.files {
-		if s.files[i].ID == id {
-			cp := cloneFileEntry(s.files[i])
-			return &cp, nil
-		}
+	if i, ok := s.byID[id]; ok {
+		cp := cloneFileEntry(s.files[i])
+		return &cp, nil
 	}
 	return nil, fmt.Errorf("запись #%d не найдена", id)
 }
@@ -338,16 +330,16 @@ func (s *Store) GetByPath(relPath string) (FileEntry, bool) {
 	defer s.mu.RUnlock()
 
 	norm := filepath.ToSlash(relPath)
-	for i := range s.files {
-		if filepath.ToSlash(s.files[i].Path) == norm {
-			return cloneFileEntry(s.files[i]), true
-		}
+	if i, ok := s.byPath[norm]; ok {
+		return cloneFileEntry(s.files[i]), true
 	}
 	return FileEntry{}, false
 }
 
 // List возвращает последние N записей (по last_seen_at DESC, id DESC как tie-breaker).
-func (s *Store) List(limit int, includeStale bool) ([]FileEntry, error) {
+func (s *Store) List(limit int, includeStale bool) (applogResult0 []FileEntry, applogResult1 error) {
+	defer applog.Track("pkg.fileindex.Store.List")(&applogResult1)
+
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
@@ -380,7 +372,9 @@ func (s *Store) List(limit int, includeStale bool) ([]FileEntry, error) {
 // Search ищет top-K ближайших к queryVec записей (cosine similarity in-Go).
 // Исключает stale, metadata-only, legacy-unknown и несовместимые vector spaces.
 // Применяет гибридный boost: +0.05 если query substring встречается в Name.
-func (s *Store) Search(queryVec []float32, embeddingSpace string, k int, query string) ([]Scored, error) {
+func (s *Store) Search(queryVec []float32, embeddingSpace string, k int, query string) (applogResult0 []Scored, applogResult1 error) {
+	defer applog.Track("pkg.fileindex.Store.Search")(&applogResult1)
+
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
@@ -398,7 +392,7 @@ func (s *Store) Search(queryVec []float32, embeddingSpace string, k int, query s
 	var results []Scored
 	for i := range s.files {
 		e := s.files[i]
-		if e.Stale || e.EmbeddingSpace != embeddingSpace {
+		if e.Stale || e.AnnotationStale || e.EmbeddingSpace != embeddingSpace {
 			continue
 		}
 		if len(e.Embedding) == 0 || len(e.Embedding) != len(queryVec) {
@@ -434,7 +428,9 @@ func (s *Store) Search(queryVec []float32, embeddingSpace string, k int, query s
 }
 
 // Stats возвращает статистику базы.
-func (s *Store) Stats() (Stats, error) {
+func (s *Store) Stats() (applogResult0 Stats, applogResult1 error) {
+	defer applog.Track("pkg.fileindex.Store.Stats")(&applogResult1)
+
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
@@ -454,7 +450,9 @@ func (s *Store) Stats() (Stats, error) {
 }
 
 // Delete удаляет запись по ID (из БД и кэша).
-func (s *Store) Delete(id int64) error {
+func (s *Store) Delete(id int64) (applogResult0 error) {
+	defer applog.Track("pkg.fileindex.Store.Delete")(&applogResult0)
+
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -466,18 +464,23 @@ func (s *Store) Delete(id int64) error {
 	if affected == 0 {
 		return fmt.Errorf("запись #%d не найдена", id)
 	}
-	for i := range s.files {
-		if s.files[i].ID == id {
-			s.files = append(s.files[:i], s.files[i+1:]...)
-			s.vectors = append(s.vectors[:i], s.vectors[i+1:]...)
-			return nil
+	if i, ok := s.byID[id]; ok {
+		delete(s.byID, id)
+		delete(s.byPath, filepath.ToSlash(s.files[i].Path))
+		s.files = append(s.files[:i], s.files[i+1:]...)
+		s.vectors = append(s.vectors[:i], s.vectors[i+1:]...)
+		for j := i; j < len(s.files); j++ {
+			s.byID[s.files[j].ID] = j
+			s.byPath[filepath.ToSlash(s.files[j].Path)] = j
 		}
 	}
 	return nil
 }
 
 // MarkStale помечает записи по path как stale=1.
-func (s *Store) MarkStale(paths []string) error {
+func (s *Store) MarkStale(paths []string) (applogResult0 error) {
+	defer applog.Track("pkg.fileindex.Store.MarkStale")(&applogResult0)
+
 	if len(paths) == 0 {
 		return nil
 	}
@@ -507,11 +510,8 @@ func (s *Store) MarkStale(paths []string) error {
 	// Обновляем кэш.
 	for _, p := range paths {
 		norm := filepath.ToSlash(p)
-		for i := range s.files {
-			if filepath.ToSlash(s.files[i].Path) == norm {
-				s.files[i].Stale = true
-				break
-			}
+		if i, ok := s.byPath[norm]; ok {
+			s.files[i].Stale = true
 		}
 	}
 	return nil
@@ -519,7 +519,9 @@ func (s *Store) MarkStale(paths []string) error {
 
 // UnmarkStale снимает пометку stale (используется при scan, когда ранее
 // отсутствующий файл снова найден).
-func (s *Store) UnmarkStale(paths []string) error {
+func (s *Store) UnmarkStale(paths []string) (applogResult0 error) {
+	defer applog.Track("pkg.fileindex.Store.UnmarkStale")(&applogResult0)
+
 	if len(paths) == 0 {
 		return nil
 	}
@@ -548,18 +550,17 @@ func (s *Store) UnmarkStale(paths []string) error {
 
 	for _, p := range paths {
 		norm := filepath.ToSlash(p)
-		for i := range s.files {
-			if filepath.ToSlash(s.files[i].Path) == norm {
-				s.files[i].Stale = false
-				break
-			}
+		if i, ok := s.byPath[norm]; ok {
+			s.files[i].Stale = false
 		}
 	}
 	return nil
 }
 
 // AllPaths возвращает все path из БД (для reconciling при scan).
-func (s *Store) AllPaths() ([]string, error) {
+func (s *Store) AllPaths() (applogResult0 []string, applogResult1 error) {
+	defer applog.Track("pkg.fileindex.Store.AllPaths")(&applogResult1)
+
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 

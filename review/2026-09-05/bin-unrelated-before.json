@@ -1,0 +1,20 @@
+[
+  {
+    "Name": "mem-both.cmd",
+    "Length": 539,
+    "LastWriteTimeUtc": "2026-07-27T23:30:53.5144565Z",
+    "PSIsContainer": false
+  },
+  {
+    "Name": "mem-global.cmd",
+    "Length": 306,
+    "LastWriteTimeUtc": "2026-07-27T23:30:25.6984398Z",
+    "PSIsContainer": false
+  },
+  {
+    "Name": "mem.exe~",
+    "Length": 17823744,
+    "LastWriteTimeUtc": "2026-07-27T23:34:52.934485Z",
+    "PSIsContainer": false
+  }
+]

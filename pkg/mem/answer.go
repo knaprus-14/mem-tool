@@ -1,5 +1,7 @@
 package mem
 
+import "github.com/knaprus-14/mem-tool/internal/applog"
+
 import (
 	"bytes"
 	"context"
@@ -99,7 +101,9 @@ type ollamaChatResponse struct {
 	DoneReason string            `json:"done_reason"`
 }
 
-func NewOllamaAnswerProvider(cfg AnswerConfig) (*OllamaAnswerProvider, error) {
+func NewOllamaAnswerProvider(cfg AnswerConfig) (applogResult0 *OllamaAnswerProvider, applogResult1 error) {
+	defer applog.Track("pkg.mem.NewOllamaAnswerProvider")(&applogResult1)
+
 	cfg = cfg.WithDefaults()
 	model := strings.TrimSpace(cfg.Model)
 	if model == "" {
@@ -216,7 +220,10 @@ func (c AnswerConfig) WithMapGenerationDefaults() AnswerConfig {
 	return c
 }
 
-func (p *OllamaAnswerProvider) Generate(ctx context.Context, request AnswerRequest) (string, error) {
+func (p *OllamaAnswerProvider) Generate(ctx context.Context, request AnswerRequest) (applogResult0 string, applogResult1 error) {
+	defer applog.Track("pkg.mem.OllamaAnswerProvider.Generate")(&applogResult1)
+	applog.Event("DEBUG", "model.generation", applog.Fields{"max_tokens": request.MaxTokens, "prompt_chars": len([]rune(request.Prompt)), "model_id": applog.Ref(request.Model)})
+
 	if p == nil {
 		return "", errors.New("answer provider is nil")
 	}
@@ -273,6 +280,7 @@ func (p *OllamaAnswerProvider) Generate(ctx context.Context, request AnswerReque
 		client = http.DefaultClient
 	}
 	localClient := *client
+	localClient.Transport = applog.Transport{Base: client.Transport, Component: "model.http"}
 	localClient.CheckRedirect = func(*http.Request, []*http.Request) error {
 		return http.ErrUseLastResponse
 	}
@@ -334,6 +342,9 @@ func (p *OllamaAnswerProvider) Generate(ctx context.Context, request AnswerReque
 		}
 	}
 	if statusCode < 200 || statusCode >= 300 {
+		if (statusCode == 400 || statusCode == 413) && isAnswerContextLimit(responseBody) {
+			return "", ErrAnswerContextLimit
+		}
 		return "", fmt.Errorf("ollama answer: HTTP %d: %s", statusCode, strings.TrimSpace(string(responseBody)))
 	}
 	var decoded ollamaChatResponse
@@ -508,10 +519,11 @@ func BuildGroundedPromptWithOptions(question string, entries []Entry, contextBud
 		if !citationIDPattern.MatchString(full.CitationID) {
 			return GroundedPrompt{}, fmt.Errorf("grounded prompt: generated malformed citation ID %q", full.CitationID)
 		}
-		if seenCitations[full.CitationID] {
+		identity := groundedEvidenceIdentity(full)
+		if seenCitations[identity] {
 			return GroundedPrompt{}, fmt.Errorf("grounded prompt: duplicate citation ID %q", full.CitationID)
 		}
-		seenCitations[full.CitationID] = true
+		seenCitations[identity] = true
 		trial := append(append([]GroundedEvidence(nil), selected...), full)
 		if _, size, err := build(trial); err != nil {
 			return GroundedPrompt{}, err
@@ -679,6 +691,10 @@ func UsesGroundedAnswerSchema(model string) bool {
 // budgets while replacing only the response contract with a citation-bounded
 // JSON Schema. An empty claims array is the schema-mode insufficient answer.
 func GroundedAnswerSchemaRequest(request AnswerRequest, evidence []GroundedEvidence) (AnswerRequest, error) {
+	allowed, _, err := groundedEvidenceReferences(evidence)
+	if err != nil {
+		return AnswerRequest{}, err
+	}
 	refs := make([]string, 0, len(evidence))
 	seen := make(map[string]bool, len(evidence))
 	for _, item := range evidence {
@@ -688,6 +704,9 @@ func GroundedAnswerSchemaRequest(request AnswerRequest, evidence []GroundedEvide
 		}
 		if (!evidenceRefPattern.MatchString(ref) && !citationIDPattern.MatchString(ref)) || seen[ref] {
 			return AnswerRequest{}, fmt.Errorf("cannot build grounded answer schema from invalid or duplicate evidence reference %q", ref)
+		}
+		if _, ok := allowed[ref]; !ok {
+			return AnswerRequest{}, fmt.Errorf("cannot build grounded answer schema from ambiguous citation %q; supply distinct evidence refs", ref)
 		}
 		seen[ref] = true
 		refs = append(refs, ref)
@@ -810,26 +829,9 @@ func ValidateGroundedAnswer(answer string, evidence []GroundedEvidence) AnswerVa
 		return AnswerValidation{Answer: answer, Rejected: true, Reason: "answer contains no grounded claims"}
 	}
 
-	allowed := make(map[string]GroundedEvidence, len(evidence))
-	seenCitationIDs := make(map[string]bool, len(evidence))
-	for _, item := range evidence {
-		if !citationIDPattern.MatchString(item.CitationID) {
-			return AnswerValidation{Answer: answer, Rejected: true, Reason: "evidence contains malformed citation ID"}
-		}
-		if seenCitationIDs[item.CitationID] {
-			return AnswerValidation{Answer: answer, Rejected: true, Reason: "evidence contains duplicate citation ID"}
-		}
-		seenCitationIDs[item.CitationID] = true
-		allowed[item.CitationID] = item
-		if item.EvidenceRef != "" {
-			if !evidenceRefPattern.MatchString(item.EvidenceRef) {
-				return AnswerValidation{Answer: answer, Rejected: true, Reason: "evidence contains malformed evidence ref"}
-			}
-			if _, exists := allowed[item.EvidenceRef]; exists {
-				return AnswerValidation{Answer: answer, Rejected: true, Reason: "evidence contains duplicate answer reference"}
-			}
-			allowed[item.EvidenceRef] = item
-		}
+	allowed, ambiguous, err := groundedEvidenceReferences(evidence)
+	if err != nil {
+		return AnswerValidation{Answer: answer, Rejected: true, Reason: err.Error()}
 	}
 	usedNumbers := make(map[string]int)
 	used := make([]GroundedEvidence, 0, len(evidence))
@@ -853,14 +855,18 @@ func ValidateGroundedAnswer(answer string, evidence []GroundedEvidence) AnswerVa
 			}
 			item, ok := allowed[id]
 			if !ok {
+				if ambiguous[id] {
+					return AnswerValidation{Answer: answer, UnknownIDs: []string{id}, Rejected: true, Reason: "answer contains an ambiguous citation ID; use the exact evidence ref"}
+				}
 				return AnswerValidation{Answer: answer, UnknownIDs: []string{id}, Rejected: true, Reason: "answer contains citation IDs that were not supplied as evidence"}
 			}
-			if !claimSeen[item.CitationID] {
-				claimSeen[item.CitationID] = true
-				number, seen := usedNumbers[item.CitationID]
+			identity := groundedEvidenceIdentity(item)
+			if !claimSeen[identity] {
+				claimSeen[identity] = true
+				number, seen := usedNumbers[identity]
 				if !seen {
 					number = len(used) + 1
-					usedNumbers[item.CitationID] = number
+					usedNumbers[identity] = number
 					used = append(used, item)
 				}
 				claimMarkers = append(claimMarkers, humanCitationMarker(number, item))

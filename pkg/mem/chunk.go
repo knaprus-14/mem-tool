@@ -155,7 +155,7 @@ func chunkByParagraph(text string, maxSize, overlap int) []Chunk {
 		}
 
 		// Если не влезает — сбрасываем
-		if currentSize+paraSize+1 > maxSize && current.Len() > 0 {
+		if currentSize+paraSize+2 > maxSize && current.Len() > 0 {
 			flush()
 			current.Reset()
 			currentSize = 0
@@ -298,6 +298,10 @@ func chunkByFixed(text string, maxSize, overlap int) []Chunk {
 			Index: chunkIdx,
 		})
 		chunkIdx++
+
+		if end == len(runes) {
+			break
+		}
 
 		// Сдвиг с перекрытием
 		nextPos := end - overlap

@@ -1,0 +1,34 @@
+error acquiring upload token: creating token file: open C:\Users\ZMII\AppData\Roaming\go\telemetry\local\upload.token: Access is denied.
+=== RUN   TestReviewFixedChunkStopsAtEnd
+    review_20260905_test.go:17: one short input produced 2 chunks: []mem.Chunk{mem.Chunk{Text:"0123456789", Label:"0123456789", Index:0}, mem.Chunk{Text:"89", Label:"89", Index:1}}
+--- FAIL: TestReviewFixedChunkStopsAtEnd (0.00s)
+=== RUN   TestReviewParagraphRespectsMaxSize
+    review_20260905_test.go:24: max_size=10 but chunk has 11 runes: "12345\n\n6789"
+--- FAIL: TestReviewParagraphRespectsMaxSize (0.00s)
+=== RUN   TestReviewFilteredSearchIgnoresExcludedLexicalHits
+    review_20260905_test.go:41: adding an excluded-tag entry changed kept result score: 1 -> 0.5
+--- FAIL: TestReviewFilteredSearchIgnoresExcludedLexicalHits (0.18s)
+=== RUN   TestReviewDateIncludesEntireLastDay
+    review_20260905_test.go:47: -to 2026-09-05 excludes a record at 23:59:59.500 on that date
+--- FAIL: TestReviewDateIncludesEntireLastDay (0.00s)
+=== RUN   TestReviewSQLiteWaitsForShortExternalWrite
+    review_20260905_test.go:69: a 100ms external writer caused Add to fail after 752.8µs: database is locked (5) (SQLITE_BUSY)
+--- FAIL: TestReviewSQLiteWaitsForShortExternalWrite (0.20s)
+=== RUN   TestReviewIndexExplicitHiddenRoot
+[DIR] Сканирую: C:\Users\ZMII\AppData\Local\Temp\TestReviewIndexExplicitHiddenRoot1016559498\001\.notes
+
+
+[STATS] Результат: 0 файлов, 0 чанков
+    review_20260905_test.go:81: explicit hidden root containing one supported file returned 0 results with no error
+--- FAIL: TestReviewIndexExplicitHiddenRoot (0.08s)
+=== RUN   TestReviewSourceDoesNotServeChangedPDF
+    review_20260905_test.go:95: old citation returned HTTP 200 with replacement PDF bytes, without detecting source change
+--- FAIL: TestReviewSourceDoesNotServeChangedPDF (0.23s)
+FAIL
+FAIL	github.com/knaprus-14/mem-tool/pkg/mem	1.202s
+=== RUN   TestReviewScanInvalidatesChangedContentVector
+    review_20260905_test.go:31: changed file now has fresh size/mtime with the old annotation and a vector still marked current; subsequent scan -embed skips it
+--- FAIL: TestReviewScanInvalidatesChangedContentVector (0.11s)
+FAIL
+FAIL	github.com/knaprus-14/mem-tool/pkg/fileindex	0.599s
+FAIL

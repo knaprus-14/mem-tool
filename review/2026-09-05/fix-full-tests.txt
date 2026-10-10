@@ -1,0 +1,14 @@
+error acquiring upload token: creating token file: open C:\Users\ZMII\AppData\Roaming\go\telemetry\local\upload.token: Access is denied.
+# github.com/knaprus-14/mem-tool/pkg/mem [github.com/knaprus-14/mem-tool/pkg/mem.test]
+pkg\mem\mind_map_sources_test.go:291:55: undefined: context
+ok  	github.com/knaprus-14/mem-tool/cmd/mem	15.154s
+ok  	github.com/knaprus-14/mem-tool/cmd/mem-bot	4.268s
+ok  	github.com/knaprus-14/mem-tool/cmd/mem-index	2.206s
+ok  	github.com/knaprus-14/mem-tool/internal/buildinfo	1.632s
+ok  	github.com/knaprus-14/mem-tool/internal/sourcefile	2.694s
+ok  	github.com/knaprus-14/mem-tool/internal/sqliteutil	2.669s
+ok  	github.com/knaprus-14/mem-tool/pkg/fileindex	7.656s
+ok  	github.com/knaprus-14/mem-tool/pkg/ingest	3.229s
+FAIL	github.com/knaprus-14/mem-tool/pkg/mem [build failed]
+?   	github.com/knaprus-14/mem-tool/pkg/ui	[no test files]
+FAIL

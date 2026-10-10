@@ -1,5 +1,7 @@
 package mem
 
+import "github.com/knaprus-14/mem-tool/internal/applog"
+
 import (
 	"crypto/sha256"
 	"database/sql"
@@ -95,7 +97,8 @@ type KnowledgeNodeMergeResult struct {
 // KnowledgeNodeContentDigest pins the semantic object that a reviewer saw.
 // Status and timestamps are excluded so approval/merge transitions do not
 // invalidate the digest by themselves.
-func KnowledgeNodeContentDigest(node KnowledgeNode) (string, error) {
+func KnowledgeNodeContentDigest(node KnowledgeNode) (applogResult0 string, applogResult1 error) {
+
 	if err := validateKnowledgeID(node.ID); err != nil {
 		return "", err
 	}
@@ -117,7 +120,9 @@ func KnowledgeNodeContentDigest(node KnowledgeNode) (string, error) {
 // DetectKnowledgeNodeDuplicates compares embeddings of exact node label/body
 // text. The vectors are accepted only when pinned to the current node digest;
 // stored chunk embeddings are intentionally not reused for this purpose.
-func (s *Store) DetectKnowledgeNodeDuplicates(vectors []KnowledgeNodeVector, embeddingSpace string, threshold float64, limit int, kind KnowledgeNodeKind) (KnowledgeDuplicateReport, error) {
+func (s *Store) DetectKnowledgeNodeDuplicates(vectors []KnowledgeNodeVector, embeddingSpace string, threshold float64, limit int, kind KnowledgeNodeKind) (applogResult0 KnowledgeDuplicateReport, applogResult1 error) {
+	defer applog.Track("pkg.mem.Store.DetectKnowledgeNodeDuplicates")(&applogResult1)
+
 	embeddingSpace = strings.TrimSpace(embeddingSpace)
 	if embeddingSpace == "" {
 		return KnowledgeDuplicateReport{}, errors.New("knowledge duplicate embedding space is empty")
@@ -251,7 +256,9 @@ func validKnowledgeDuplicateVector(vector []float32) bool {
 	return norm > 0 && !math.IsNaN(norm) && !math.IsInf(norm, 0)
 }
 
-func (s *Store) MergeKnowledgeDuplicate(request KnowledgeNodeMergeRequest) (KnowledgeNodeMergeResult, error) {
+func (s *Store) MergeKnowledgeDuplicate(request KnowledgeNodeMergeRequest) (applogResult0 KnowledgeNodeMergeResult, applogResult1 error) {
+	defer applog.Track("pkg.mem.Store.MergeKnowledgeDuplicate")(&applogResult1)
+
 	request.SourceID = strings.TrimSpace(request.SourceID)
 	request.TargetID = strings.TrimSpace(request.TargetID)
 	request.Reviewer = strings.TrimSpace(request.Reviewer)
@@ -454,7 +461,9 @@ func knowledgeNodeDigests(q interface {
 	return nodeDigest, evidenceDigest, nil
 }
 
-func (s *Store) ListKnowledgeNodeMerges(limit int) ([]KnowledgeNodeMergeRecord, error) {
+func (s *Store) ListKnowledgeNodeMerges(limit int) (applogResult0 []KnowledgeNodeMergeRecord, applogResult1 error) {
+	defer applog.Track("pkg.mem.Store.ListKnowledgeNodeMerges")(&applogResult1)
+
 	if limit < 1 || limit > 1000 {
 		return nil, errors.New("knowledge node merge limit must be between 1 and 1000")
 	}

@@ -1,0 +1,70 @@
+{
+  "date": "2026-10-09",
+  "source_version": "1.71.0-alpha.37",
+  "review_baseline": "1.71.0-alpha.36",
+  "findings": {
+    "R1": "fixed_and_regression_tested",
+    "R2": "fixed_and_regression_tested",
+    "R3": "fixed_and_regression_tested",
+    "R4": "fixed_and_regression_tested",
+    "R5": "fixed_and_regression_tested",
+    "R6": "fixed_and_regression_tested",
+    "R7": "fixed_and_regression_tested"
+  },
+  "additional_fix": "generated upsert retains review state only for identical effective content and evidence",
+  "go_test": {
+    "status": "PASS",
+    "packages_with_tests": 13,
+    "packages_without_tests": 2
+  },
+  "go_vet": "PASS",
+  "final_template_targeted_tests": "PASS",
+  "javascript_tests": {
+    "passed": 12,
+    "skipped_private_corpus": 2,
+    "failed": 0
+  },
+  "build": "PASS",
+  "target": "windows/amd64",
+  "staged_binaries": [
+    {
+      "name": "mem.exe",
+      "path": "C:\\Users\\ZMII\\Documents\\ChatGPT\\mem-tool\\build\\web-alpha\\alpha37\\bin\\mem.exe",
+      "version": "mem-tool v1.71.0-alpha.37",
+      "sha256": "7D30A0925F1A46CC7D586117B01825A836D9666A856FE6EBA9A6F8644F7FA92C",
+      "bytes": 26551296
+    },
+    {
+      "name": "mem-index.exe",
+      "path": "C:\\Users\\ZMII\\Documents\\ChatGPT\\mem-tool\\build\\web-alpha\\alpha37\\bin\\mem-index.exe",
+      "version": "mem-index v1.71.0-alpha.37",
+      "sha256": "158607E55CF3F7228B52789D823A3BEF3276BDC9DBA4E3C68F7BC0F5E8E1DD00",
+      "bytes": 16655360
+    },
+    {
+      "name": "mem-bot.exe",
+      "path": "C:\\Users\\ZMII\\Documents\\ChatGPT\\mem-tool\\build\\web-alpha\\alpha37\\bin\\mem-bot.exe",
+      "version": "mem-bot v1.71.0-alpha.37",
+      "sha256": "C41C5E0C937EDB26241C05100F240219D74311DA36E45503D3244DDD2218D4C5",
+      "bytes": 16726528
+    }
+  ],
+  "deployment": {
+    "status": "BLOCKED",
+    "target": "C:\\Users\\ZMII\\bin",
+    "reason": "Access denied during deploy/windows.ps1 writable-target preflight",
+    "installed_version": "1.71.0-alpha.35",
+    "installed_hashes_unchanged": true
+  },
+  "changed_code_files": 36,
+  "real_databases_modified": false,
+  "commit_or_push_performed": false,
+  "not_verified": [
+    "race detector",
+    "new full browser E2E",
+    "Linux/VDS deployment",
+    "external LLM/OCR services",
+    "user database recovery"
+  ],
+  "verification_document": "../../docs/WEB_ALPHA37_VERIFICATION_RU.md"
+}

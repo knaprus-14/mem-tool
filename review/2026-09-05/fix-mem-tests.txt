@@ -1,0 +1,2 @@
+error acquiring upload token: creating token file: open C:\Users\ZMII\AppData\Roaming\go\telemetry\local\upload.token: Access is denied.
+ok  	github.com/knaprus-14/mem-tool/pkg/mem	49.292s

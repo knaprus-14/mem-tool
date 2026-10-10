@@ -1,5 +1,7 @@
 package mem
 
+import "github.com/knaprus-14/mem-tool/internal/applog"
+
 import (
 	"crypto/rand"
 	"database/sql"
@@ -53,7 +55,9 @@ type KnowledgeWorkspaceCreateResult struct {
 // CreateKnowledgeWorkspaceNode creates a draft manual workspace object and a
 // typed draft provenance edge in one transaction. Evidence is copied from the
 // pinned parent only after every anchor is verified against the current corpus.
-func (s *Store) CreateKnowledgeWorkspaceNode(request KnowledgeWorkspaceCreateRequest) (KnowledgeWorkspaceCreateResult, error) {
+func (s *Store) CreateKnowledgeWorkspaceNode(request KnowledgeWorkspaceCreateRequest) (applogResult0 KnowledgeWorkspaceCreateResult, applogResult1 error) {
+	defer applog.Track("pkg.mem.Store.CreateKnowledgeWorkspaceNode")(&applogResult1)
+
 	request, err := normalizeKnowledgeWorkspaceCreateRequest(request)
 	if err != nil {
 		return KnowledgeWorkspaceCreateResult{}, err
@@ -255,7 +259,9 @@ VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, record.NodeID, record.EdgeID, record.
 	return record, nil
 }
 
-func (s *Store) ListKnowledgeWorkspaceCreations(limit int) ([]KnowledgeWorkspaceCreationRecord, error) {
+func (s *Store) ListKnowledgeWorkspaceCreations(limit int) (applogResult0 []KnowledgeWorkspaceCreationRecord, applogResult1 error) {
+	defer applog.Track("pkg.mem.Store.ListKnowledgeWorkspaceCreations")(&applogResult1)
+
 	if limit <= 0 || limit > 10000 {
 		return nil, errors.New("knowledge workspace creation limit must be between 1 and 10000")
 	}

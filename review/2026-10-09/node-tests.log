@@ -1,0 +1,48 @@
+✖ pkg\mem\web\knowledgeSourcePreview.test.cjs (24.8488ms)
+✖ pkg\mem\web\knowledgeTopics.test.cjs (10.6168ms)
+ℹ tests 2
+ℹ suites 0
+ℹ pass 0
+ℹ fail 2
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 115.7178
+
+✖ failing tests:
+
+test at pkg\mem\web\knowledgeSourcePreview.test.cjs:1:1
+✖ pkg\mem\web\knowledgeSourcePreview.test.cjs (24.8488ms)
+  Error: spawn EPERM
+      at ChildProcess.spawn (node:internal/child_process:441:11)
+      at spawn (node:child_process:796:9)
+      at TestContext.<anonymous> (node:internal/test_runner/runner:501:19)
+      at FileTest.runInAsyncScope (node:async_hooks:227:14)
+      at FileTest.run (node:internal/test_runner/test:1325:25)
+      at FileTest.start (node:internal/test_runner/test:1191:17)
+      at runTestFile (node:internal/test_runner/runner:583:32)
+      at node:internal/test_runner/runner:974:25
+      at node:internal/per_context/primordials:561:37
+      at new Promise (<anonymous>) {
+    errno: -4048,
+    code: 'EPERM',
+    syscall: 'spawn'
+  }
+
+test at pkg\mem\web\knowledgeTopics.test.cjs:1:1
+✖ pkg\mem\web\knowledgeTopics.test.cjs (10.6168ms)
+  Error: spawn EPERM
+      at ChildProcess.spawn (node:internal/child_process:441:11)
+      at spawn (node:child_process:796:9)
+      at TestContext.<anonymous> (node:internal/test_runner/runner:501:19)
+      at FileTest.runInAsyncScope (node:async_hooks:227:14)
+      at FileTest.run (node:internal/test_runner/test:1325:25)
+      at FileTest.start (node:internal/test_runner/test:1191:17)
+      at runTestFile (node:internal/test_runner/runner:583:32)
+      at node:internal/test_runner/runner:974:25
+      at node:internal/per_context/primordials:561:37
+      at new Promise (<anonymous>) {
+    errno: -4048,
+    code: 'EPERM',
+    syscall: 'spawn'
+  }

@@ -1,0 +1,14 @@
+{
+  "head": "63fd134b3df548c802927eaf4af1053629decaa9",
+  "branch": "codex/stabilization-stage-0",
+  "source_version": "1.71.0-alpha.36",
+  "installed_version": "1.71.0-alpha.35",
+  "modified_tracked": 86,
+  "untracked_initial": 265,
+  "go_test": "PASS",
+  "go_vet": "PASS",
+  "review_findings": 7,
+  "regression_probes": 8,
+  "production_source_modified": false,
+  "deployment_performed": false
+}

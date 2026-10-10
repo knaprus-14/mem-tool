@@ -69,39 +69,49 @@ func (s *Store) invalidateEntryCacheUnlocked() {
 //
 // The caller must hold s.mu for the entire call and resulting transaction.
 func (s *Store) beginEntryMutationTx(operation string) (*sql.Tx, []Entry, error) {
+	tx, err := s.beginEntryWriteTx(operation)
+	if err != nil {
+		return nil, nil, err
+	}
+	return tx, append([]Entry(nil), s.entries...), nil
+}
+
+// beginEntryWriteTx pins the current cache without copying it. Single-entry
+// mutations apply their cache delta only after a successful commit.
+func (s *Store) beginEntryWriteTx(operation string) (*sql.Tx, error) {
 	const maxSnapshotAttempts = 4
 	for attempt := 0; attempt < maxSnapshotAttempts; attempt++ {
 		tx, err := s.db.Begin()
 		if err != nil {
-			return nil, nil, fmt.Errorf("begin %s: %w", operation, err)
+			return nil, fmt.Errorf("begin %s: %w", operation, err)
 		}
 		// Reserve SQLite's single writer before comparing generations. Once this
 		// no-op UPDATE succeeds, another process cannot commit an entries change
 		// between the comparison and the caller's document writes.
 		if _, err := tx.Exec(`UPDATE entry_cache_state SET generation = generation WHERE singleton = 1`); err != nil {
 			_ = tx.Rollback()
-			return nil, nil, fmt.Errorf("reserve %s writer: %w", operation, err)
+			return nil, fmt.Errorf("reserve %s writer: %w", operation, err)
 		}
 		databaseGeneration, err := loadEntryCacheGeneration(tx)
 		if err != nil {
 			_ = tx.Rollback()
-			return nil, nil, err
+			return nil, err
 		}
 		if databaseGeneration == s.entryGeneration {
-			return tx, append([]Entry(nil), s.entries...), nil
+			return tx, nil
 		}
 		if err := tx.Rollback(); err != nil && err != sql.ErrTxDone {
-			return nil, nil, fmt.Errorf("refresh %s cache: rollback stale snapshot: %w", operation, err)
+			return nil, fmt.Errorf("refresh %s cache: rollback stale snapshot: %w", operation, err)
 		}
 		if err := s.loadAll(); err != nil {
-			return nil, nil, fmt.Errorf("refresh %s cache after external entry change: %w", operation, err)
+			return nil, fmt.Errorf("refresh %s cache after external entry change: %w", operation, err)
 		}
 		// A refreshed entry snapshot may no longer match the shared FTS table.
 		// Callers which do not mutate indexed fields can leave it dirty; the next
 		// lexical read will rebuild it under the same writer serialization.
 		s.lexicalDirty = true
 	}
-	return nil, nil, fmt.Errorf("begin %s: entries kept changing in another process", operation)
+	return nil, fmt.Errorf("begin %s: entries kept changing in another process", operation)
 }
 
 func replaceSourceInEntryCache(cached []Entry, sourcePath string, replacement []Entry) ([]Entry, [][]float32) {

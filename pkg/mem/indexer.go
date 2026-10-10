@@ -1,5 +1,7 @@
 package mem
 
+import "github.com/knaprus-14/mem-tool/internal/applog"
+
 import (
 	"context"
 	"fmt"
@@ -7,6 +9,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/knaprus-14/mem-tool/internal/sourcefile"
 	"github.com/knaprus-14/mem-tool/pkg/ingest"
 )
 
@@ -29,7 +32,9 @@ var supportedExts = map[string]bool{
 }
 
 // IndexDirectory индексирует все поддерживаемые файлы в директории
-func IndexDirectory(cfg *Config, store *Store, dirPath string) ([]IndexResult, error) {
+func IndexDirectory(cfg *Config, store *Store, dirPath string) (applogResult0 []IndexResult, applogResult1 error) {
+	defer applog.Track("pkg.mem.IndexDirectory")(&applogResult1)
+
 	absPath, err := filepath.Abs(dirPath)
 	if err != nil {
 		return nil, fmt.Errorf("неверный путь: %w", err)
@@ -59,11 +64,15 @@ func IndexDirectory(cfg *Config, store *Store, dirPath string) ([]IndexResult, e
 
 	err = filepath.Walk(absPath, func(path string, info os.FileInfo, err error) error {
 		if err != nil {
+			results = append(results, IndexResult{FilePath: path, Err: err})
+			failedFiles++
+			totalFiles++
+			fmt.Printf("  [ERR] %s — ошибка обхода: %v\n", path, err)
 			return nil
 		}
 		if info.IsDir() {
 			// Пропускаем скрытые папки
-			if strings.HasPrefix(info.Name(), ".") && info.Name() != "." {
+			if path != absPath && strings.HasPrefix(info.Name(), ".") {
 				return filepath.SkipDir
 			}
 			return nil
@@ -116,7 +125,9 @@ func IndexDirectory(cfg *Config, store *Store, dirPath string) ([]IndexResult, e
 }
 
 // IndexFile индексирует один файл: читает, чанкует, эмбеддит, сохраняет
-func IndexFile(cfg *Config, store *Store, filePath string) (IndexResult, error) {
+func IndexFile(cfg *Config, store *Store, filePath string) (applogResult0 IndexResult, applogResult1 error) {
+	defer applog.Track("pkg.mem.IndexFile")(&applogResult1)
+
 	return indexFileWithEmbedder(cfg, store, filePath, GetEmbedding)
 }
 
@@ -129,7 +140,17 @@ func indexFileWithEmbedder(cfg *Config, store *Store, filePath string, embed emb
 		result.Err = err
 		return result, err
 	}
+	managedID, err := managedDocumentIDForSourcePath(context.Background(), store.db, absPath)
+	if err != nil {
+		result.Err = err
+		return result, err
+	}
 
+	fileHash, err := sourcefile.Hash(context.Background(), absPath)
+	if err != nil {
+		result.Err = err
+		return result, err
+	}
 	// Читаем содержимое файла
 	text, err := readFile(absPath)
 	if err != nil {
@@ -190,12 +211,25 @@ func indexFileWithEmbedder(cfg *Config, store *Store, filePath string, embed emb
 		result.Err = err
 		return result, err
 	}
+	currentHash, err := sourcefile.Hash(context.Background(), absPath)
+	if err != nil {
+		result.Err = err
+		return result, err
+	}
+	if currentHash != fileHash {
+		err = fmt.Errorf("исходный файл изменился во время индексации; документ не обновлён")
+		result.Err = err
+		return result, err
+	}
 
 	// Сохраняем чанки под каноническим абсолютным путём: одинаковые имена
 	// файлов в разных каталогах становятся разными документами.
 	fileName := filepath.Base(absPath)
 	documentID := documentIDForSourcePath(absPath)
-	documentRevision := ChunkContentHash(text)
+	if managedID != "" {
+		documentID = managedID
+	}
+	documentRevision := ingest.PhysicalSourceRevision(ChunkContentHash(text), absPath, fileHash)
 	mediaType := mediaTypeForSourcePath(absPath)
 	storedChunks := make([]DocumentChunk, len(chunks))
 	for i, chunk := range chunks {
@@ -206,7 +240,8 @@ func indexFileWithEmbedder(cfg *Config, store *Store, filePath string, embed emb
 			ChunkIndex: chunk.Index, TotalChunks: len(chunks),
 			Provenance: Provenance{
 				DocumentID: documentID, DocumentRevision: documentRevision,
-				ChunkHash: ChunkContentHash(chunk.Text), SourcePath: absPath, MediaType: mediaType,
+				SourceFileHash: fileHash,
+				ChunkHash:      ChunkContentHash(chunk.Text), SourcePath: absPath, MediaType: mediaType,
 				BlockIndex: 0, BlockChunkIndex: i, BlockTotalChunks: len(chunks),
 				ExtractionMethod: "text", OCRConfidence: -1,
 			},
@@ -226,7 +261,8 @@ func indexFileWithEmbedder(cfg *Config, store *Store, filePath string, embed emb
 // CanonicalSourcePath возвращает устойчивую identity документа. В базе хранится
 // полный очищенный путь; старые записи с basename остаются нетронутыми, потому
 // что автоматически сопоставить их с одним из одноимённых файлов небезопасно.
-func CanonicalSourcePath(path string) (string, error) {
+func CanonicalSourcePath(path string) (applogResult0 string, applogResult1 error) {
+
 	absPath, err := filepath.Abs(path)
 	if err != nil {
 		return "", err
@@ -241,7 +277,7 @@ func readFile(path string) (string, error) {
 
 	switch ext {
 	case ".txt", ".md", ".csv", ".json":
-		data, err := os.ReadFile(absPath)
+		data, err := sourcefile.ReadText(context.Background(), absPath)
 		if err != nil {
 			return "", err
 		}
@@ -270,7 +306,9 @@ func readPDF(path string) (string, error) {
 }
 
 // IndexSummary возвращает список файлов в директории с подсчётом
-func IndexSummary(store *Store) error {
+func IndexSummary(store *Store) (applogResult0 error) {
+	defer applog.Track("pkg.mem.IndexSummary")(&applogResult0)
+
 	sources := store.SourceFiles()
 	if len(sources) == 0 {
 		fmt.Println("[FILES] Нет проиндексированных документов")

@@ -1,0 +1,19 @@
+.reading-workspace{box-sizing:border-box;width:min(1200px,96vw);max-width:96vw;max-height:94vh;overflow:auto;padding:1.25rem}
+.reading-workspace *, .reading-workspace *::before, .reading-workspace *::after{box-sizing:border-box}
+.reading-workspace-toolbar{display:flex;flex-wrap:wrap;gap:.6rem;margin-block:1rem}
+.reading-workspace-layout{display:grid;grid-template-columns:minmax(150px,220px) minmax(0,1fr);gap:1rem}
+.reading-workspace-list{display:flex;flex-direction:column;gap:.5rem;max-height:65vh;overflow:auto}
+.reading-workspace-list button{text-align:left;white-space:normal;overflow-wrap:anywhere}
+.reading-workspace-list button[aria-pressed="true"]{outline:2px solid currentColor;outline-offset:-2px;font-weight:700}
+.reading-workspace-main,.reading-workspace-pane{min-width:0}
+.reading-workspace-main>label{display:flex;flex-wrap:wrap;gap:.6rem;align-items:center;margin-bottom:.8rem}
+.reading-workspace-main select{max-width:100%;min-width:0}
+.reading-workspace-panes{display:grid;grid-template-columns:minmax(0,1fr);gap:1rem}
+.reading-workspace-comparing{grid-template-columns:repeat(2,minmax(0,1fr))}
+.reading-workspace-pane{border:1px solid #94a3b866;border-radius:.5rem;padding:.8rem}
+.reading-workspace-pane>button{margin:.25rem .35rem .25rem 0;white-space:normal}
+.reading-workspace-pane p{overflow-wrap:anywhere}
+.reading-workspace-text{height:45vh;min-height:12rem;overflow:auto;white-space:pre-wrap;overflow-wrap:anywhere;line-height:1.55;padding:.75rem;border:1px solid #94a3b866;border-radius:.35rem;font-family:inherit}
+.reading-workspace-preview{max-height:12rem;overflow:auto;white-space:pre-wrap;overflow-wrap:anywhere}
+.reading-workspace button:focus-visible,.reading-workspace select:focus-visible,.reading-workspace-text:focus-visible{outline:3px solid #2680eb;outline-offset:3px}
+@media(max-width:760px){.reading-workspace{padding:.8rem}.reading-workspace-layout{grid-template-columns:minmax(0,1fr)}.reading-workspace-list{max-height:10rem}.reading-workspace-comparing{grid-template-columns:minmax(0,1fr)}.reading-workspace-text{height:38vh}.reading-workspace-toolbar>*{flex:1 1 12rem}}

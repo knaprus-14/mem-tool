@@ -1,13 +1,16 @@
 package ingest
 
+import "github.com/knaprus-14/mem-tool/internal/applog"
+
 import (
 	"context"
 	"fmt"
-	"os"
 	"path/filepath"
 	"regexp"
 	"strconv"
 	"strings"
+
+	"github.com/knaprus-14/mem-tool/internal/sourcefile"
 )
 
 var (
@@ -17,8 +20,10 @@ var (
 
 type MarkdownExtractor struct{}
 
-func (MarkdownExtractor) Extract(_ context.Context, path string) (Document, error) {
-	data, err := os.ReadFile(path)
+func (MarkdownExtractor) Extract(ctx context.Context, path string) (applogResult0 Document, applogResult1 error) {
+	defer applog.Track("pkg.ingest.MarkdownExtractor.Extract")(&applogResult1)
+
+	data, err := sourcefile.ReadText(ctx, path)
 	if err != nil {
 		return Document{}, fmt.Errorf("read Markdown %s: %w", path, err)
 	}
@@ -27,7 +32,9 @@ func (MarkdownExtractor) Extract(_ context.Context, path string) (Document, erro
 
 // ParseMarkdown preserves page marker lines in Document.Markdown and attaches
 // the active marker/page number to every emitted block.
-func ParseMarkdown(sourcePath, markdown string) (Document, error) {
+func ParseMarkdown(sourcePath, markdown string) (applogResult0 Document, applogResult1 error) {
+	defer applog.Track("pkg.ingest.ParseMarkdown")(&applogResult1)
+
 	canonicalPath, err := canonicalSourcePath(sourcePath)
 	if err != nil {
 		return Document{}, fmt.Errorf("canonical source path: %w", err)

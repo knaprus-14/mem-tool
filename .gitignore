@@ -8,3 +8,9 @@ mem-bot-linux.exe
 .env.local
 .env
 !.gitkeep
+# Local builds, caches, verification runs, and private database copies.
+/build/
+/deploy/__pycache__/
+mem-tool.log
+mem-tool.log.lock
+mem-tool.*.log

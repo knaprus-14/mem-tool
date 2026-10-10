@@ -1,5 +1,7 @@
 package mem
 
+import "github.com/knaprus-14/mem-tool/internal/applog"
+
 import (
 	"crypto/rand"
 	"crypto/sha256"
@@ -24,6 +26,7 @@ type KnowledgeSelectionAnalysisRequest struct {
 
 type KnowledgeSelectionSourceRef struct {
 	CitationID      string `json:"citation_id"`
+	EvidenceHash    string `json:"evidence_hash,omitempty"`
 	SourcePath      string `json:"source_path"`
 	Page            int    `json:"page"`
 	BlockIndex      int    `json:"block_index"`
@@ -132,7 +135,9 @@ type KnowledgeSelectionAnalysisSaveResult struct {
 	Report   KnowledgeSelectionReportRecord `json:"report"`
 }
 
-func (s *Store) AnalyzeKnowledgeSelection(request KnowledgeSelectionAnalysisRequest) (KnowledgeSelectionAnalysis, error) {
+func (s *Store) AnalyzeKnowledgeSelection(request KnowledgeSelectionAnalysisRequest) (applogResult0 KnowledgeSelectionAnalysis, applogResult1 error) {
+	defer applog.Track("pkg.mem.Store.AnalyzeKnowledgeSelection")(&applogResult1)
+
 	manifest, err := s.BuildKnowledgeSelectionManifest(request.Selection)
 	if err != nil {
 		return KnowledgeSelectionAnalysis{}, err
@@ -300,7 +305,7 @@ func knowledgeSelectionSourceRefs(anchors []EvidenceAnchor) []KnowledgeSelection
 			continue
 		}
 		seen[key] = true
-		refs = append(refs, KnowledgeSelectionSourceRef{CitationID: anchor.CitationID, SourcePath: anchor.SourcePath, Page: anchor.Page, BlockIndex: anchor.BlockIndex, BlockChunkIndex: anchor.BlockChunkIndex})
+		refs = append(refs, KnowledgeSelectionSourceRef{CitationID: anchor.CitationID, EvidenceHash: anchor.EvidenceHash, SourcePath: anchor.SourcePath, Page: anchor.Page, BlockIndex: anchor.BlockIndex, BlockChunkIndex: anchor.BlockChunkIndex})
 	}
 	sort.Slice(refs, func(i, j int) bool {
 		if refs[i].SourcePath != refs[j].SourcePath {
@@ -315,7 +320,10 @@ func knowledgeSelectionSourceRefs(anchors []EvidenceAnchor) []KnowledgeSelection
 		if refs[i].BlockChunkIndex != refs[j].BlockChunkIndex {
 			return refs[i].BlockChunkIndex < refs[j].BlockChunkIndex
 		}
-		return refs[i].CitationID < refs[j].CitationID
+		if refs[i].CitationID != refs[j].CitationID {
+			return refs[i].CitationID < refs[j].CitationID
+		}
+		return refs[i].EvidenceHash < refs[j].EvidenceHash
 	})
 	return refs
 }
@@ -346,7 +354,9 @@ func knowledgeSelectionAnalysisDigest(analysis KnowledgeSelectionAnalysis) (stri
 	return "sha256:" + hex.EncodeToString(digest[:]), nil
 }
 
-func (s *Store) SaveKnowledgeSelectionAnalysis(request KnowledgeSelectionAnalysisSaveRequest) (KnowledgeSelectionAnalysisSaveResult, error) {
+func (s *Store) SaveKnowledgeSelectionAnalysis(request KnowledgeSelectionAnalysisSaveRequest) (applogResult0 KnowledgeSelectionAnalysisSaveResult, applogResult1 error) {
+	defer applog.Track("pkg.mem.Store.SaveKnowledgeSelectionAnalysis")(&applogResult1)
+
 	nodeIDs, err := normalizeKnowledgeSelectionIDs(request.Selection.NodeIDs, MaxKnowledgeSelectionNodes, "node")
 	if err != nil {
 		return KnowledgeSelectionAnalysisSaveResult{}, err
@@ -519,7 +529,7 @@ func formatKnowledgeSelectionAnalysisReport(analysis KnowledgeSelectionAnalysis)
 func verifyKnowledgeSelectionManifestTx(tx *sql.Tx, manifest KnowledgeSelectionManifest) error {
 	objects := append(append([]KnowledgeSelectionObject(nil), manifest.Nodes...), manifest.Edges...)
 	for _, selected := range objects {
-		var label, body string
+		var label, body, from, to string
 		var status KnowledgeStatus
 		var kind string
 		var origin KnowledgeOrigin
@@ -530,7 +540,7 @@ func verifyKnowledgeSelectionManifestTx(tx *sql.Tx, manifest KnowledgeSelectionM
 			}
 			table, owner = "knowledge_node_evidence", "node_id"
 		} else {
-			if err := tx.QueryRow(`SELECT kind, label, status, origin FROM knowledge_edges WHERE id = ?`, selected.ID).Scan(&kind, &label, &status, &origin); err != nil {
+			if err := tx.QueryRow(`SELECT kind, label, status, origin, from_node, to_node FROM knowledge_edges WHERE id = ?`, selected.ID).Scan(&kind, &label, &status, &origin, &from, &to); err != nil {
 				return fmt.Errorf("verify selected edge %q: %w", selected.ID, err)
 			}
 			table, owner = "knowledge_edge_evidence", "edge_id"
@@ -541,6 +551,10 @@ func verifyKnowledgeSelectionManifestTx(tx *sql.Tx, manifest KnowledgeSelectionM
 		contentDigest, err := KnowledgeContentDigest(selected.ObjectType, label, body)
 		if err != nil || contentDigest != selected.ContentDigest {
 			return fmt.Errorf("%w: selected %s %q content changed", ErrKnowledgeSelectionChanged, selected.ObjectType, selected.ID)
+		}
+		reviewDigest := knowledgeReviewDigest(knowledgeReviewContent{Type: selected.ObjectType, ID: selected.ID, Kind: kind, Label: label, Body: body, Origin: origin, From: from, To: to})
+		if selected.ReviewDigest == "" || selected.ReviewDigest != reviewDigest {
+			return fmt.Errorf("%w: selected %s %q review content changed", ErrKnowledgeSelectionChanged, selected.ObjectType, selected.ID)
 		}
 		anchors, err := loadKnowledgeEvidence(tx, table, owner, selected.ID)
 		if err != nil {
@@ -594,7 +608,9 @@ VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, record.NodeID, string(edgeJSON), string(
 	return record, nil
 }
 
-func (s *Store) ListKnowledgeSelectionReports(limit int) ([]KnowledgeSelectionReportRecord, error) {
+func (s *Store) ListKnowledgeSelectionReports(limit int) (applogResult0 []KnowledgeSelectionReportRecord, applogResult1 error) {
+	defer applog.Track("pkg.mem.Store.ListKnowledgeSelectionReports")(&applogResult1)
+
 	if limit <= 0 || limit > 10000 {
 		return nil, errors.New("knowledge selection report limit must be between 1 and 10000")
 	}

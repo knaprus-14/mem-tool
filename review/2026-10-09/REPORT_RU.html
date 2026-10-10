@@ -1,0 +1,200 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>mem-tool — состояние проекта и код-ревью · 9 октября 2026</title>
+<style>
+:root{color-scheme:light;--ink:#172a3b;--muted:#536373;--line:#d9e2e8;--paper:#fff;--bg:#f1f5f7;--blue:#125c82;--red:#9a2932;--orange:#825007}
+*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--ink);font:16px/1.62 system-ui,-apple-system,"Segoe UI",sans-serif}main{max-width:1120px;margin:auto;padding:44px 38px 80px}header{padding:36px;background:#142b3c;color:white;border-radius:16px}header p{max-width:870px;color:#d5e3eb}h1{font-size:clamp(27px,4vw,40px);line-height:1.18;margin:12px 0 20px;letter-spacing:-.03em}h2{font-size:25px;line-height:1.3;margin:0 0 20px}h3{font-size:20px;line-height:1.35;margin:8px 0 15px}p{margin:12px 0}a{color:var(--blue);text-underline-offset:3px}header a{color:#a9def9}code,pre{font-family:Consolas,"Cascadia Code",monospace;font-size:.88em}code{overflow-wrap:anywhere}pre{background:#edf2f6;padding:17px;border-radius:8px;white-space:pre-wrap;overflow-wrap:anywhere;line-height:1.55}.eyebrow{font-size:12px;letter-spacing:.12em;text-transform:uppercase;font-weight:700}.lead{font-size:19px}.cards{display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin:20px 0}.card{background:white;border:1px solid var(--line);border-radius:11px;padding:20px}.card strong{display:block;font-size:27px;line-height:1.2;margin-bottom:9px}.card span{font-size:14px;color:var(--muted)}nav{display:flex;gap:10px 22px;flex-wrap:wrap;margin:26px 0;font-size:14px}section{padding:30px;background:white;border:1px solid var(--line);border-radius:12px;margin:22px 0;scroll-margin-top:20px}article{border-top:1px solid var(--line);padding:26px 0 6px}article:first-of-type{border-top:0;padding-top:0}.tag{display:inline-block;border-radius:5px;padding:2px 9px;font-size:12px;font-weight:750;background:#f4e8ce;color:var(--orange);vertical-align:middle}.p1{background:#f9e2e4;color:var(--red)}.ok{color:#21604b}.muted{color:var(--muted);font-size:14px}.notice{border-left:4px solid #c79643;padding:10px 18px;background:#fff7e8}.table-wrap{overflow:auto}table{width:100%;border-collapse:collapse;font-size:14px}th{text-align:left;font-weight:650;background:#edf3f6}th,td{padding:12px 13px;border:1px solid var(--line);vertical-align:top}li{margin:8px 0}ul,ol{padding-left:23px}dl{display:grid;grid-template-columns:125px 1fr;gap:9px 18px}dt{font-weight:650}dd{margin:0}.path{font-size:13px}.source{margin-top:12px;font-size:14px}.flow{display:flex;flex-wrap:wrap;gap:8px;align-items:center;padding:18px;background:var(--bg);border-radius:8px}.flow b{background:white;border:1px solid var(--line);padding:8px 12px;font-size:14px}.foot{padding-top:25px;color:var(--muted);font-size:13px}.checklist li::marker{color:var(--blue);font-weight:700}
+@media(max-width:720px){main{padding:18px 14px 40px}header,section{padding:22px}.cards{grid-template-columns:repeat(2,1fr)}.card{padding:16px}dl{grid-template-columns:1fr;gap:2px}dd{margin-bottom:13px}th,td{padding:9px}h2{font-size:22px}}
+@media print{body{background:white;font-size:10.5pt}main{max-width:none;padding:0}header{background:white;color:var(--ink);padding:0;border-radius:0}header p{color:var(--ink)}h1{font-size:27pt}nav{display:none}section{border:0;padding:20px 0;margin:0;border-radius:0}h2{break-after:avoid;font-size:18pt}h3{break-after:avoid;font-size:14pt}article{padding-top:18px}p,li{orphans:3;widows:3}.cards{gap:8px}.card{padding:10px}.card strong{font-size:20pt}pre,table{font-size:8.5pt}tr{break-inside:avoid}a{color:inherit}.notice{background:white}.foot{font-size:9pt}@page{size:A4;margin:17mm}}
+</style>
+</head>
+<body><main>
+<section class="notice" aria-label="Результат исправлений">
+<h2>Обновление: ошибки исправлены в alpha.37</h2>
+<p>Все семь дефектов ниже устранены и покрыты регрессиями; тесты проходят. Подготовлены три EXE alpha.37. Установка в <code>C:\Users\ZMII\bin</code> заблокирована правами текущего сеанса, поэтому там остаётся alpha.35.</p>
+<p><a href="FIXES_RU.html"><strong>Открыть результат исправлений и статус установки</strong></a>. Остальной текст этого отчёта — сохранённый снимок alpha.36 <em>до исправлений</em>.</p>
+</section>
+<header>
+<div class="eyebrow">Технический отчёт · 09.10.2026 · Руслан</div>
+<h1>mem-tool: где остановились<br>и что нужно довести до конца</h1>
+<p class="lead">В исходниках подготовлена <strong>1.71.0-alpha.36</strong>, в PATH установлена <strong>alpha.35</strong>. Основные пользовательские сценарии уже реализованы, но для завершения выпуска нужны исправления достоверности источников и подтверждений, стабилизация веб-операций и закрытие оставшегося паритета с CLI.</p>
+<p>Код-ревью выявило <strong>7 подтверждённых дефектов: 2 P1 и 5 P2</strong>. Восемь изолированных проверок воспроизвели нарушения. Штатные тесты Go при этом проходят: найденные сценарии пока не покрыты основной регрессией.</p>
+</header>
+<div class="cards">
+<div class="card"><strong>alpha.36</strong><span>исходники и ранее собранные артефакты</span></div>
+<div class="card"><strong>alpha.35</strong><span>все три установленных Windows EXE</span></div>
+<div class="card"><strong>7 ошибок</strong><span>каждая подтверждена отдельным сценарием</span></div>
+<div class="card"><strong>13 пакетов</strong><span>штатные Go-тесты прошли; ещё 2 без тестов</span></div>
+</div>
+<nav aria-label="Оглавление"><a href="#state">Точка остановки</a><a href="#architecture">Устройство</a><a href="#findings">Ошибки</a><a href="#remaining">Незавершённое</a><a href="#plan">Порядок работ</a><a href="#checks">Проверки</a><a href="#evidence">Материалы</a></nav>
+
+<section id="state"><h2>1. Фактическая точка остановки</h2>
+<p>Последний описанный этап разработки — <strong>просмотр формул, таблиц и схем через оригинальную страницу PDF</strong>. В карточке графа можно увеличить страницу, выбрать область мышью или числовыми границами и показать её в карточке. Извлечённый текст сохраняется отдельно. Это ответ на потерю дробей, корней и индексов при преобразовании PDF в текст.</p>
+<p>Выделение хранится в <code>sessionStorage</code> текущей вкладки, а не в базе. Изображения и границы не входят в автономный HTML-экспорт. Восстановление формул в LaTeX/MathML не реализовано и не обещано этим этапом. Нужны сохранённый оригинал, его проверяемый отпечаток и доступный PDF-renderer.</p>
+<div class="table-wrap"><table><thead><tr><th>Слой</th><th>Проверенное состояние</th><th>Что это означает</th></tr></thead><tbody>
+<tr><td>Git</td><td><code>codex/stabilization-stage-0</code><br><code>63fd134b3df548c802927eaf4af1053629decaa9</code><br>Последний коммит: 27.08.2026; версия HEAD — 1.70.3.</td><td>История коммитов заметно отстаёт от рабочего состояния.</td></tr>
+<tr><td>Рабочее дерево до ревью</td><td>86 изменённых tracked-файлов, 265 отдельных untracked-файлов; число включает прежние материалы ревью.</td><td>Существенные части веба, ingestion и тестов ещё не зафиксированы Git. Для анализа учитывались и новые файлы. Обычный <code>git diff</code> их не показывает.</td></tr>
+<tr><td>Исходники</td><td><code>internal/buildinfo/version.go</code>: <strong>1.71.0-alpha.36</strong>.</td><td>Единый номер версии трёх команд; документация указывает тот же релиз.</td></tr>
+<tr><td>Установленные программы</td><td><code>C:\Users\ZMII\bin\mem.exe</code>, <code>mem-index.exe</code>, <code>mem-bot.exe</code>: <strong>alpha.35</strong>.</td><td>Сегодня проверены команды <code>version</code> и SHA-256. Возможность alpha.36 в этих файлах отсутствует.</td></tr>
+<tr><td>Подготовленные программы</td><td><code>build/web-alpha/alpha36/bin</code>: все три EXE отвечают <strong>alpha.36</strong>; хеши совпадают с журналом этапа alpha.36.</td><td>Комплект существует и проверен по версии/хешам. В ходе ревью новая сборка и установка не выполнялись.</td></tr>
+<tr><td>Сервер</td><td>Есть <code>mem serve</code>, шаблоны systemd/nginx, backup/restore.</td><td>В этом ревью нет подтверждения работающего целевого VDS/HTTPS или проверенного восстановления на нём.</td></tr>
+</tbody></table></div>
+<p>Документ alpha.36 фиксирует прежний отказ установки: <code>Access is denied</code> при создании deployment probe в <code>C:\Users\ZMII\bin</code>. Сегодня подтверждено именно отставание установленной версии; повторная запись в защищённый каталог не предпринималась.</p>
+<p class="source">Основания: <a href="../../docs/WEB_ALPHA36_VERIFICATION_RU.md">проверка alpha.36</a>, <a href="../../DOCUMENTATION.md">release notes</a>, <a href="binary-versions.json">версии и хеши сегодня</a>, <a href="status-before.txt">исходное состояние Git</a>.</p>
+</section>
+
+<section id="architecture"><h2>2. Что представляет собой проект</h2>
+<p>Это уже несколько интерфейсов к общей системе знаний: CLI/TUI, локальная веб-библиотека, серверный веб-режим, файловый каталог и Telegram-бот. Базовый стек — Go, SQLite через <code>modernc.org/sqlite</code>, обычный JavaScript и HTML. В <code>go.mod</code> указана Go 1.25.0; проверки выполнены установленной Go 1.26.5 на Windows/amd64.</p>
+<div class="flow" aria-label="Путь данных"><b>Документ / заметка</b><span>→</span><b>Извлечение и provenance</b><span>→</span><b>SQLite и embeddings</b><span>→</span><b>Поиск / ответы / карты</b></div>
+<div class="table-wrap"><table><thead><tr><th>Область</th><th>Роль</th><th>Где смотреть</th></tr></thead><tbody>
+<tr><td>Команды</td><td>CLI, TUI, запуск локального и серверного веба, индексатор, бот.</td><td><code>cmd/mem</code>, <code>cmd/mem-index</code>, <code>cmd/mem-bot</code></td></tr>
+<tr><td>Веб и фоновые задания</td><td>Сессии, принадлежность баз, HTTP API, загрузки, очередь, квоты, UI.</td><td><code>internal/webapp</code>, <code>internal/webjobs</code>, <code>internal/workspace</code></td></tr>
+<tr><td>Основная предметная логика</td><td>Хранилище, импорт, поиск и ответы, цитаты, граф знаний, интеллект-карты, история, перенос базы.</td><td><code>pkg/mem</code></td></tr>
+<tr><td>Извлечение файлов</td><td>PDF, DjVu, Markdown, DOCX и текстовые форматы; физические страницы там, где они определимы.</td><td><code>pkg/ingest</code></td></tr>
+<tr><td>Каталог файлов</td><td>Имена, пути, аннотации и семантический поиск файлов; отдельная <code>.fileindex</code>.</td><td><code>pkg/fileindex</code></td></tr>
+<tr><td>Эксплуатация</td><td>Windows staging/install с проверкой хешей и откатом; шаблоны Linux и аварийного восстановления.</td><td><code>deploy</code></td></tr>
+</tbody></table></div>
+<p><strong>Хорошая основа:</strong> общие сервисы для нескольких интерфейсов, транзакционная история, проверки актуальности evidence, ограничения длительных операций, восстановление фоновых заданий, отдельные тесты неблагоприятных сценариев. Новая обработка полного документа сохраняет его структуру до смыслового обогащения и отмечает незавершённые места.</p>
+<p><strong>Основная зона риска:</strong> контракты между слоями. Подтверждение должно относиться к конкретной формулировке, цитата — к конкретному оригиналу, отмена — сохраняться при переходе задачи в работу. Найденные ошибки относятся именно к этим границам.</p>
+<p class="muted">Область cmd/internal/pkg содержит 331 Go-файл, в том числе 176 не-тестовых. Обзор был выборочным по рискованным путям, а не построчной сертификацией всего проекта.</p>
+</section>
+
+<section id="findings"><h2>3. Подтверждённые ошибки код-ревью</h2>
+<p class="muted">P1 — исправить до выпуска, которому доверяют подтверждённые знания и источники. P2 — существенная функциональная ошибка, исправить в ближайшем цикле стабилизации. Восемь диагностических тестов намеренно проверяют желаемый контракт и завершаются FAIL на текущем коде; это воспроизведения, а не применённые исправления.</p>
+
+<article id="f1"><h3><span class="tag p1">P1 · R1</span> Старая цитата может получить изменённый физический оригинал</h3>
+<dl><dt>Место</dt><dd class="path"><a href="../../pkg/mem/source_fingerprint.go">pkg/mem/source_fingerprint.go:44–45</a>; <a href="../../pkg/ingest/document.go">pkg/ingest/document.go:346–367</a>.</dd>
+<dt>Условие</dt><dd>Исходный PDF изменился в картинке, формуле или вёрстке, но извлечённый текст и учитываемые координаты остались прежними. Затем выполняется повторный импорт.</dd>
+<dt>Причина</dt><dd><code>ContentRevision</code> не включает хеш исходных байтов. Таблица <code>document_source_files</code> хранит одну запись на пару document/revision, а UPSERT перезаписывает её путь и хеш.</dd>
+<dt>Последствие</dt><dd>Существующая цитата остаётся <code>current</code>; проверка источника принимает уже новые байты. Для формулы это особенно опасно: изображение может измениться без изменения OCR-строки. Другой эффект той же причины: обновление одинаковым текстом по новому пути и восстановление прежнего snapshot приводят к ложному <code>ErrSourceFileChanged</code> для нетронутого старого оригинала.</dd>
+<dt>Доказательство</dt><dd>Два теста воспроизвели выдачу новых байтов старой citation и отказ старому источнику после настоящей транзакции restore. PDF-fixture синтетическая: проверялся контракт проверки/выдачи байтов, нативный renderer не запускался. Restore проверен через реальное извлечение временных TXT.</dd>
+<dt>Исправление</dt><dd>Сделать физическую редакцию неизменяемой, хранить её идентичность в anchors и истории. Новый путь/хеш не должен заменять привязку опубликованной редакции. Нужна совместимость со старыми базами и сохранение исторических оригиналов.</dd></dl>
+<p class="source"><a href="storage-probes/test-output.txt">Лог</a> · <a href="storage-probes/storage_regression_test.go.txt">TestReviewStoragePhysicalSourceRevisionIsImmutable / TestReviewStorageRestoreKeepsSameContentOriginalFingerprint</a></p>
+</article>
+
+<article id="f2"><h3><span class="tag p1">P1 · R2</span> Подтверждение из старой вкладки одобряет новый, не просмотренный текст</h3>
+<dl><dt>Место</dt><dd class="path"><a href="../../pkg/mem/graph_review.go">pkg/mem/graph_review.go:74–80, 376–378</a>; <a href="../../pkg/mem/web/knowledgeMapHTMLSuffix.html">pkg/mem/web/knowledgeMapHTMLSuffix.html:216</a>.</dd>
+<dt>Сценарий</dt><dd>Вкладка A открывает черновик. Во вкладке B меняют заголовок/текст при тех же цитатах. Вкладка A нажимает «Подтвердить».</dd>
+<dt>Причина</dt><dd>Approval проверяет статус и <code>ExpectedEvidenceDigest</code>, но не хеш просмотренного содержимого. При редактировании текста digest evidence остаётся прежним.</dd>
+<dt>Последствие</dt><dd>Изменённый текст получает статус <code>active</code>, хотя проверяющий видел другую формулировку. Ручное подтверждение перестаёт доказывать, какую именно редакцию проверили.</dd>
+<dt>Доказательство</dt><dd>Фактический результат: <code>status=active content_changed=true evidence_unchanged=true approvals=1</code>.</dd>
+<dt>Исправление</dt><dd>Передавать и проверять внутри транзакции обязательный content digest для интерактивного и batch approval; сохранять его в аудите. Для связей учитывать смысловую структуру. Проверить тот же контракт для reject/reopen/undo.</dd></dl>
+<p class="source"><a href="maps-probes/maps-probes.log">Лог</a> · <a href="maps-probes/maps_review_probe_test.go.txt">TestReviewProbeApprovalRejectsChangedContent</a></p>
+</article>
+
+<article id="f3"><h3><span class="tag">P2 · R3</span> Worker перезаписывает успешно отменённое задание</h3>
+<dl><dt>Место</dt><dd class="path"><a href="../../pkg/mem/web_operations.go">pkg/mem/web_operations.go:316, 326–328</a>.</dd>
+<dt>Сценарий</dt><dd>Worker выбрал queued-задачу. До следующего UPDATE пользователь успешно отменил её. Worker без проверки прежнего состояния записывает <code>running</code>.</dd>
+<dt>Последствие</dt><dd>Отмена теряется; операция выполняется. В проверке <code>graph-analyze</code> закончилась как <code>completed</code>. Для операций изменения данных, например rechunk, это допускает работу после подтверждённой отмены.</dd>
+<dt>Доказательство</dt><dd>Управляемое воспроизведение вставляет только scheduling hook после SELECT через отдельный Go overlay. Hook вызывает настоящий cancel и проверяет <code>cancelled</code>, после чего исходный worker доводит задачу до <code>completed</code>. Частота гонки под реальной нагрузкой не измерялась.</dd>
+<dt>Исправление</dt><dd>Атомарный переход <code>UPDATE … WHERE id=? AND status='queued'</code> с обязательной проверкой <code>RowsAffected()==1</code>. При проигранной гонке обработку не начинать.</dd></dl>
+<p class="source"><a href="maps-probes/maps-probes.log">Лог</a> · <a href="maps-probes/maps_review_probe_test.go.txt">TestReviewProbeCancellationDuringClaim</a> · <a href="maps-probes/web_operations_instrumented.go.txt">Worker с диагностическим hook</a></p>
+</article>
+
+<article id="f4"><h3><span class="tag">P2 · R4</span> Сеансы графа накапливаются и блокируют дальнейшую работу</h3>
+<dl><dt>Место</dt><dd class="path"><a href="../../internal/webapp/graph.go">internal/webapp/graph.go:53, 63–68</a>; <a href="../../internal/webapp/server.go">internal/webapp/server.go:177–183</a>.</dd>
+<dt>Сценарий</dt><dd>Восемь раз войти, открыть один и тот же граф, выйти. На девятом входе граф отвечает <code>429</code>, хотя активная пользовательская сессия одна.</dd>
+<dt>Причина</dt><dd>Ключ графового обработчика содержит CSRF сессии. Logout удаляет сессию входа, но не обработчик графа и его ресурсы. Они освобождаются только при остановке приложения; лимит восемь — общий.</dd>
+<dt>Последствие</dt><dd>Повседневные входы и истечения сессий постепенно делают граф недоступным; в серверном режиме исчерпание общего лимита затрагивает других пользователей.</dd>
+<dt>Исправление</dt><dd>Освобождать ресурсы при logout/expiry с учётом запросов в работе либо применять ограниченный кеш с безопасным вытеснением. Проверить несколько пользователей и окончание срока сессии.</dd></dl>
+<p class="source"><a href="web-probes/probe-output.txt">Лог</a> · <a href="web-probes/review_web_test.go.txt">TestReviewGraphSessionsReleasedOnLogout</a></p>
+</article>
+
+<article id="f5"><h3><span class="tag">P2 · R5</span> Одна недоступная локальная база мешает работе остальных</h3>
+<dl><dt>Место</dt><dd class="path"><a href="../../internal/webapp/storage.go">internal/webapp/storage.go:15–19</a>.</dd>
+<dt>Сценарий</dt><dd>В каталоге зарегистрированы две базы. Папку первой перенесли либо отключили диск. У второй <code>/library</code> возвращает 200, но <code>/storage</code> — 500.</dd>
+<dt>Причина</dt><dd>Расчёт квоты обходит все базы пользователя и прерывается при ошибке любой папки. Этот же gate применяется к записям, созданию баз и фоновой работе.</dd>
+<dt>Последствие</dt><dd>Исправная база теряет доступ к операциям из-за другой регистрации. Отдельного штатного удаления устаревшей регистрации в проверенном интерфейсе не найдено.</dd>
+<dt>Исправление</dt><dd>Явное состояние «база недоступна», управление регистрациями и отдельная политика учёта локальных отключённых баз. Для серверного режима сохранить корректный консервативный учёт квот.</dd></dl>
+<p class="source"><a href="web-probes/probe-output.txt">Лог</a> · <a href="web-probes/review_web_test.go.txt">TestReviewMissingWorkspaceDoesNotBlockOtherWorkspace</a></p>
+</article>
+
+<article id="f6"><h3><span class="tag">P2 · R6</span> При достигнутой квоте нельзя открыть источник результата поиска</h3>
+<dl><dt>Место</dt><dd class="path"><a href="../../internal/webapp/storage.go">internal/webapp/storage.go:62–68</a>; <a href="../../internal/webapp/query.go">internal/webapp/query.go:30–43</a>.</dd>
+<dt>Сценарий</dt><dd>Найти запись и открыть её evidence. После достижения лимита хранилища повторить: поиск — 200, открытие того же действительного evidence — 507.</dd>
+<dt>Причина</dt><dd>POST-маршрут <code>/evidence</code> только читает данные, но отсутствует в исключениях <code>storageWriteRequest</code>. Для <code>/search</code> и <code>/ask</code> исключения уже есть.</dd>
+<dt>Исправление</dt><dd>Классифицировать evidence как чтение. В перспективе задавать тип операции явно, вместо определения по суффиксу URL. Добавить проверку полного пути «поиск → источник» на заполненной базе.</dd></dl>
+<p class="source"><a href="web-probes/probe-output.txt">Лог</a> · <a href="web-probes/review_web_test.go.txt">TestReviewEvidenceRemainsReadableAtStorageLimit</a></p>
+</article>
+
+<article id="f7"><h3><span class="tag">P2 · R7</span> Старый путь индексации меняет идентичность веб-документа</h3>
+<dl><dt>Место</dt><dd class="path"><a href="../../pkg/mem/indexer.go">pkg/mem/indexer.go:222–234</a>, особенно строка 223.</dd>
+<dt>Сценарий</dt><dd>TXT импортирован как managed-документ с ID <code>web:…</code>. Затем тот же физический файл обрабатывается путём <code>mem index</code>.</dd>
+<dt>Причина</dt><dd>Индексатор безусловно вычисляет новый <code>doc-…</code> из пути вместо сохранения уже установленного ID.</dd>
+<dt>Последствие</dt><dd>Текущие записи получают другой ID. Ссылки библиотеки и графа, относящиеся к прежнему <code>web:…</code>, перестают соответствовать текущим фрагментам; история разделяется между идентичностями.</dd>
+<dt>Доказательство</dt><dd>Настоящий ingestion временного TXT с managed identity, затем реальный <code>indexFileWithEmbedder</code> с тестовыми векторами: сохранённый DocumentID меняется с <code>web:…</code> на <code>doc-…</code>.</dd>
+<dt>Исправление</dt><dd>Сохранять установленную идентичность документа либо явно запрещать legacy-индексацию управляемого оригинала, направляя пользователя к штатному обновлению документа.</dd></dl>
+<p class="source"><a href="storage-probes/test-output.txt">Лог</a> · <a href="storage-probes/storage_regression_test.go.txt">TestReviewStorageLegacyIndexPreservesManagedIdentity</a></p>
+</article>
+</section>
+
+<section id="remaining"><h2>4. Что осталось доделать помимо исправления ошибок</h2>
+<div class="table-wrap"><table><thead><tr><th>Задача</th><th>Текущее состояние</th><th>Критерий завершения</th></tr></thead><tbody>
+<tr><td>Веб-форма <code>map build</code></td><td>Есть полный разбор документа и extract-порции; это другой сценарий, чем граф по поисковой выборке.</td><td>Фокус, число фрагментов, фильтры и контекст задаются в форме; результат и источники проверены в браузере.</td></tr>
+<tr><td>Область extract/coverage и план без модели</td><td>CLI поддерживает страницы, тег и dry-run; соответствующий веб-контракт неполон. Полный <code>--all-chunks</code> имеет собственную семантику и не принимает эти фильтры.</td><td>Фильтры и предпросмотр плана для порционного режима; пользователю ясно, что именно будет обработано и вызовет ли действие модель.</td></tr>
+<tr><td>Параметры обслуживания</td><td>Profile фиксирует одну итерацию, списки истории ограничены, часть настроек duplicates/prune жёстко задана.</td><td>Нужные параметры доступны либо их ограничения явно согласованы и описаны: iterations/view, threshold/kind/nodes/limit, keep/срок, фильтры истории.</td></tr>
+<tr><td>Окончательный паритет CLI/веба</td><td>Не завершена пофлаговая сверка AI evidence-scope, recent и общей справки.</td><td>Матрица «доступно / намеренно ограничено / требуется» с проверенным пользовательским сценарием для каждой строки.</td></tr>
+<tr><td>Формулы как переносимый материал</td><td>alpha.36 даёт просмотр и выделение в одной вкладке. Сохранения областей в базе и включения в автономный экспорт нет.</td><td>Если требуется сохранять формулы как часть знания/отчёта — отдельно спроектировать постоянные области, привязку к физической редакции и перенос. Это расширение, а не обещание текущей alpha.36.</td></tr>
+<tr><td>Качество смыслового извлечения</td><td>Исторически оценены 4 контрольных требования на ограниченной выборке. Есть строгие цитаты и устойчивость к отказам модели, но нет оценки полноты всего документа.</td><td>Независимый размеченный набор требований, исключений, чисел, таблиц и формул; точность узлов/связей и полнота извлечения отдельно от технического покрытия фрагментов.</td></tr>
+<tr><td>Следующие возможности графа</td><td>Рабочий документ оставляет графовый поиск для RAG, загрузку большого графа по области интереса, адаптивные маршруты изучения.</td><td>Отдельные измеримые задачи после стабилизации; существующие карты и маршруты сами по себе не доказывают выполнение этих расширений.</td></tr>
+<tr><td>Поставка</td><td>Исходники/готовый комплект alpha.36 и PATH alpha.35 расходятся.</td><td>После исправлений — единая версия, release notes, штатная проверка и установка трёх EXE, одинаковые SHA-256 и smoke-команды на реальном target.</td></tr>
+<tr><td>VDS и эксплуатация</td><td>Конфигурации подготовлены; фактический target в этом ревью не проверен.</td><td>Linux runtime, HTTPS/сессии/изоляция, restart/cancel, backup и восстановление на отдельном каталоге/узле; измерение нагрузки на реальном размере базы.</td></tr>
+</tbody></table></div>
+<p class="notice"><strong>Документацию нужно свести к одному актуальному списку.</strong> В <code>WEB_PARITY_RU.md</code> ранняя таблица ещё сообщает об отсутствии текстовых форматов, хотя ниже зафиксирован их импорт в alpha.33. В <code>WEB_ROADMAP_RU.md</code> есть исторические отметки «впереди» для уже реализованных сценариев. Закрытый список alpha.27 означает завершение того этапа, а не полный нынешний паритет.</p>
+<p>Ограничение веб-поиска — 20&nbsp;000 записей и 64 МиБ содержимого с векторами — явно задано в <a href="../../pkg/mem/query_service.go">query_service.go</a>. Это ограничение продукта, а не найденная ошибка. Увеличивать его следует после измерения памяти и задержек, а не только сменой константы.</p>
+<p>Публичная регистрация, SSO, биллинг, совместные роли, двусторонняя синхронизация и веб-управление mem-index/ботом описаны как отдельные расширения. В остаток согласованного первого веб-выпуска их автоматически не включала.</p>
+<p class="source">Основания: <a href="../../docs/WEB_PARITY_RU.md">актуальный список паритета</a>, <a href="../../internal/webapp/maintenance.go">фактические параметры HTTP</a>, <a href="../../internal/webapp/assets/operations.js">формы обслуживания</a>, <a href="../../docs/GRAPH_QUALITY_STAGE2_RU.md">границы оценки качества</a>, <a href="../../docs/GRAPH_QUALITY_WORK_RU.md">следующие этапы графа</a>.</p>
+</section>
+
+<section id="plan"><h2>5. Рекомендуемый порядок работ</h2>
+<ol class="checklist">
+<li><strong>Зафиксировать управляемую исходную точку.</strong> Сверить состав 86 изменённых и 265 новых файлов, отделить поставляемый код от локальных артефактов и приватных материалов. Подготовить осмысленные группы изменений для последующего разрешённого коммита. Сейчас Git HEAD не воспроизводит текущую alpha.</li>
+<li><strong>Исправить R1 и R2 — источник и подтверждение.</strong> Сначала закрепить регрессии в штатных тестах, затем определить совместимость схемы/anchors и аудита. Критерий: старая citation не принимает другую физическую редакцию; старая вкладка не подтверждает изменённый текст; restore сохраняет проверяемость оригинала.</li>
+<li><strong>Закрыть R3–R7.</strong> Атомарный захват задания, жизненный цикл графа, независимость доступных баз, чтение evidence при квоте, стабильные IDs документов. Восемь diagnostic probes должны превратиться в обычные проходящие регрессии.</li>
+<li><strong>Доделать выбранный веб-паритет и обновить единую матрицу.</strong> Приоритет — map build и план extract; затем нужные параметры обслуживания и сверка AI/recent/help. Проверить полные пути в браузере, включая два окна, заполненную квоту и недоступную соседнюю базу.</li>
+<li><strong>Отдельно принять качество знаний.</strong> На одноразовой копии корпуса проверить содержательные требования и исключения, отображение формул и связи. Успешный импорт, отсутствие падений и 100% техническое покрытие не равны корректному полному графу.</li>
+<li><strong>Выпустить проверенную версию.</strong> До сборки обновить единый номер и release notes; выполнить релевантные тесты, vet, CI/race на подходящей среде, затем <code>deploy/windows.ps1</code> в контексте с доступом к <code>C:\Users\ZMII\bin</code>. Сверить все три установленных файла. После этого — отдельная приёмка VDS, если серверный запуск нужен.</li>
+</ol>
+<p><strong>Практическое решение:</strong> ближайший этап лучше посвятить стабилизации существующего функционала. Наиболее важный результат — доверять сохранённым источникам, проверенным формулировкам и состояниям фоновых операций.</p>
+</section>
+
+<section id="checks"><h2>6. Что проверено в этом ревью</h2>
+<div class="table-wrap"><table><thead><tr><th>Проверка</th><th>Результат</th><th>Доказательство / граница</th></tr></thead><tbody>
+<tr><td><code>go test ./... -count=1 -timeout=300s</code></td><td class="ok">PASS</td><td>13 пакетов с тестами, 2 без тестов. <code>pkg/mem</code> — 230.004 с в условиях параллельных проверок; это не изолированный performance benchmark. <a href="go-test.log">Лог</a>.</td></tr>
+<tr><td><code>go vet ./...</code></td><td class="ok">PASS</td><td><a href="go-vet.log">Финальный лог</a>. Первый запуск был испорчен размещением диагностических .go-файлов в review; они переименованы в .go.txt, затем vet повторён. Это помеха от ревью, а не дефект приложения.</td></tr>
+<tr><td>8 диагностических Go-сценариев</td><td>8 ожидаемых FAIL</td><td>3 storage, 2 graph/worker, 3 HTTP. Соответствуют 7 найденным причинам. Реальные БД и production-исходники не изменены.</td></tr>
+<tr><td>JavaScript: темы и PDF-preview</td><td class="ok">10 PASS, 2 SKIP</td><td>Topics: 8 PASS + 2 приватных корпусных SKIP; preview: 2 PASS. <a href="node-topics.log">Topics</a>, <a href="node-preview.log">Preview</a>.</td></tr>
+<tr><td>Синтаксис JS</td><td class="ok">PASS: 17 файлов</td><td><code>node --check</code> для JS в assets и редакторах карт. <a href="js-syntax.log">Лог</a>.</td></tr>
+<tr><td>Backup / restore Python</td><td class="ok">4 PASS</td><td>Roundtrip, committed WAL, повреждение и небезопасные архивы — на временных файлах. <a href="python-backup-tests.log">Лог</a>.</td></tr>
+<tr><td>PowerShell recovery / preflight</td><td class="ok">PASS</td><td>Существующие тесты отката, сохранения посторонних данных и среды, блокировок и cleanup — на fixtures. <a href="windows-recovery-tests.log">Recovery</a>, <a href="windows-preflight-tests.log">Preflight</a>. Реальная установка не выполнялась.</td></tr>
+<tr><td><code>git diff --check</code></td><td class="ok">PASS</td><td>Предупреждения о CRLF/LF. Проверка относится к tracked diff, не ко всем untracked-файлам. <a href="diff-check.log">Лог</a>.</td></tr>
+<tr><td><code>gofmt -l</code></td><td>7 файлов в списке</td><td>Есть различия, включая окончания строк; это не включено в функциональные дефекты. Автоформатирование не выполнялось. <a href="gofmt.log">Список</a>.</td></tr>
+<tr><td>Установленные / staged EXE</td><td class="ok">Версии и SHA-256 прочитаны</td><td>Установлены alpha.35; подготовлены alpha.36. <a href="binary-versions.json">Полный манифест</a>. Это не новая сборка из текущего дерева.</td></tr>
+</tbody></table></div>
+<p><strong>Ограничения среды:</strong> Go выводил <code>Access is denied</code> для <code>go/telemetry/local/upload.token</code>; тесты и vet завершились с кодом 0. Использовался разрешённый <code>GOCACHE=build/go-cache</code>. Запуск <code>node --test</code> получил <code>spawn EPERM</code>; те же тестовые файлы успешно выполнены напрямую через Node без запуска дочернего runner.</p>
+<p><strong>Не проверялось:</strong> новый browser E2E, нативный PDF-renderer на пользовательском документе, реальные ответы моделей, Telegram, фактический VDS/HTTPS, нагрузка и race detector. В PATH не обнаружены GCC/Clang для локального Windows race. Сетевые модельные эксперименты и приватные корпусные проверки не активировались. Предыдущие браузерные и корпусные результаты в документах — исторические свидетельства, а не проверки 9 октября.</p>
+<p>В GitHub workflow есть Windows/Linux test+vet и Linux race. Но рабочие изменения ещё не зафиксированы, и удалённый запуск текущего дерева не проверялся. Кроме того, CI использует лимит 120 с для обычных тестов, локальная проверка — 300 с; пакет mem занял 230 с под параллельной нагрузкой. Это повод измерить длительность в чистом CI, но не доказательство, что CI обязательно упадёт.</p>
+</section>
+
+<section id="evidence"><h2>7. Материалы и воспроизведение</h2>
+<p>Отчёт сохранён вместе с исходниками диагностических проверок, overlays и журналами. Он самодостаточен для чтения; для переходов к исходникам и логам сохраняйте его в этой папке проекта. HTML можно редактировать и печатать из браузера.</p>
+<ul>
+<li><a href="summary.json">Краткий машинно-читаемый итог</a> и <a href="binary-versions.json">версии/хеши программ</a>.</li>
+<li><a href="storage-probes/findings.txt">Детали storage-review</a>, <a href="storage-probes/overlay.json">storage overlay</a>, <a href="storage-probes/README.txt">команда воспроизведения</a>.</li>
+<li><a href="maps-probes/overlay.json">Graph/worker overlay</a> и <a href="web-probes/overlay.json">HTTP overlay</a>.</li>
+<li><a href="../../docs/WEB_PARITY_RU.md">Матрица CLI/веба</a>, <a href="../../docs/WEB_ALPHA36_VERIFICATION_RU.md">последний этап</a>, <a href="../../deploy/WEB_SERVER_RU.md">серверное руководство</a>.</li>
+</ul>
+<pre>$env:GOCACHE = Join-Path $PWD 'build\go-cache'
+$env:GOTELEMETRY = 'off'
+# Из корня mem-tool; на проверенной версии ожидается FAIL:
+go test -overlay review/2026-10-09/storage-probes/overlay.json ./pkg/mem -run '^TestReviewStorage' -count=1 -timeout=120s
+go test -overlay review/2026-10-09/maps-probes/overlay.json ./pkg/mem -run '^TestReviewProbe' -count=1 -v -timeout=120s
+go test -overlay review/2026-10-09/web-probes/overlay.json ./internal/webapp -run '^TestReview' -count=1 -timeout=120s</pre>
+<p class="muted">Overlay содержит абсолютные пути этой рабочей копии. После переноса репозитория их нужно обновить. Файлы .go.txt не входят в обычный набор пакетов. Hook worker существует только в диагностическом overlay.</p>
+<p><strong>Результат работы:</strong> исследование текущего дерева, код-ревью, воспроизведения и отчёт. Код приложения, версия, пользовательские базы и установленные программы не менялись. Коммит, push и deployment не выполнялись.</p>
+</section>
+<div class="foot">mem-tool · отчёт по локальному рабочему дереву на 9 октября 2026 года. Выводы привязаны к указанным исходникам и проверкам; отсутствие других ошибок этим ревью не доказано.</div>
+</main></body></html>

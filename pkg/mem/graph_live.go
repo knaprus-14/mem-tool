@@ -8,6 +8,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/knaprus-14/mem-tool/internal/applog"
+	"github.com/knaprus-14/mem-tool/pkg/ingest"
 	"io"
 	"mime"
 	"net"
@@ -15,6 +17,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 )
 
 // NewKnowledgeMapLiveHandler returns a read-only handler that renders the
@@ -54,21 +57,41 @@ func NewKnowledgeMapWorkspaceHandlerWithSelectionContext(ctx context.Context, st
 }
 
 func newKnowledgeMapHandler(ctx context.Context, store *Store, title string, workspace *KnowledgeMapWorkspace, selection *KnowledgeSelectionAnswerService) http.Handler {
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	var exportJobs *knowledgeMapExportManager
 	var learningJobs *knowledgeLearningJobManager
+	life, _ := ctx.Value(sharedGraphLifetimeKey{}).(*sharedGraphLifetime)
 	if workspace != nil {
 		exportJobs = newKnowledgeMapExportManager(ctx, func(jobCtx context.Context, request KnowledgeGraphExportRequest, progress knowledgeGraphExportProgressFunc) (KnowledgeGraphExportArtifact, error) {
+			if life != nil {
+				if !life.begin() {
+					return KnowledgeGraphExportArtifact{}, context.Canceled
+				}
+				defer life.runners.Done()
+			}
 			return store.exportKnowledgeGraph(jobCtx, request, progress)
 		})
 		if selection != nil && selection.Provider != nil {
 			learningJobs = newKnowledgeLearningJobManager(ctx, func(jobCtx context.Context, request KnowledgeLearningGenerateRequest, progress knowledgeLearningProgressFunc) (KnowledgeLearningRun, error) {
+				if life != nil {
+					if !life.begin() {
+						return KnowledgeLearningRun{}, context.Canceled
+					}
+					defer life.runners.Done()
+				}
 				return store.generateKnowledgeLearningCandidates(jobCtx, selection, request, progress)
 			})
 		}
 	}
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	if life != nil {
+		life.exports, life.learning = exportJobs, learningJobs
+	}
+	return applog.HTTP("knowledge_map", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		setKnowledgeMapSecurityHeaders(w.Header())
-		if !knowledgeMapLoopbackHost(r.Host) {
+		_, shared := r.Context().Value(sharedGraphKey{}).(sharedGraphContext)
+		if !shared && !knowledgeMapLoopbackHost(r.Host) {
 			http.Error(w, "forbidden host", http.StatusForbidden)
 			return
 		}
@@ -140,7 +163,7 @@ func newKnowledgeMapHandler(ctx context.Context, store *Store, title string, wor
 		default:
 			http.NotFound(w, r)
 		}
-	})
+	}))
 }
 
 type knowledgeMapExportJobRequest struct {
@@ -1176,7 +1199,9 @@ func serveKnowledgeMapReviewMutation(w http.ResponseWriter, r *http.Request, sto
 	}
 	if err != nil {
 		switch {
-		case errors.Is(err, ErrKnowledgeEvidenceChanged), errors.Is(err, ErrKnowledgeEvidenceNotCurrent),
+		case errors.Is(err, ErrKnowledgeReviewPinRequired):
+			http.Error(w, err.Error(), http.StatusBadRequest)
+		case errors.Is(err, ErrKnowledgeContentChanged), errors.Is(err, ErrKnowledgeEvidenceChanged), errors.Is(err, ErrKnowledgeEvidenceNotCurrent),
 			errors.Is(err, ErrKnowledgeReviewChanged), errors.Is(err, ErrKnowledgeActiveRelations),
 			errors.Is(err, ErrKnowledgeReviewNotReversible):
 			http.Error(w, "review state changed; refresh the map before retrying", http.StatusConflict)
@@ -1238,8 +1263,10 @@ func serveKnowledgeMapApproval(w http.ResponseWriter, r *http.Request, store *St
 	batch, err := store.ApproveKnowledgeObjects([]KnowledgeApprovalRequest{request})
 	if err != nil {
 		switch {
-		case errors.Is(err, ErrKnowledgeEvidenceChanged):
-			http.Error(w, "source evidence changed; refresh the map before approval", http.StatusConflict)
+		case errors.Is(err, ErrKnowledgeReviewPinRequired):
+			http.Error(w, err.Error(), http.StatusBadRequest)
+		case errors.Is(err, ErrKnowledgeContentChanged), errors.Is(err, ErrKnowledgeEvidenceChanged):
+			http.Error(w, "reviewed object or source evidence changed; refresh the map before approval", http.StatusConflict)
 		case errors.Is(err, ErrKnowledgeEvidenceNotCurrent):
 			http.Error(w, "source evidence is not current", http.StatusConflict)
 		case errors.Is(err, ErrKnowledgeEndpointsNotActive):
@@ -1289,7 +1316,7 @@ func serveKnowledgeMapPage(w http.ResponseWriter, r *http.Request, store *Store,
 			return
 		}
 		data.Workspace = &copy
-		if copy.SessionToken != "" {
+		if copy.SessionToken != "" && copy.APIBase == "" {
 			http.SetCookie(w, knowledgeMapSourceCookie(copy.SessionToken))
 		}
 	}
@@ -1307,6 +1334,10 @@ func serveKnowledgeMapPage(w http.ResponseWriter, r *http.Request, store *Store,
 }
 
 func serveKnowledgeMapSource(w http.ResponseWriter, r *http.Request, store *Store, workspace *KnowledgeMapWorkspace) {
+	serveKnowledgeMapSourceWithRenderer(w, r, store, workspace, ingest.RenderPDFPage)
+}
+
+func serveKnowledgeMapSourceWithRenderer(w http.ResponseWriter, r *http.Request, store *Store, workspace *KnowledgeMapWorkspace, render knowledgePageRenderer) {
 	if workspace == nil {
 		http.NotFound(w, r)
 		return
@@ -1329,7 +1360,51 @@ func serveKnowledgeMapSource(w http.ResponseWriter, r *http.Request, store *Stor
 		http.NotFound(w, r)
 		return
 	}
-	anchor, err := store.ResolveKnowledgeMapPDFSource(values[0])
+	pin, err := parseKnowledgeMapSourcePin(r.URL.Query())
+	if err != nil {
+		http.Error(w, "invalid source revision pin", http.StatusBadRequest)
+		return
+	}
+	format := r.URL.Query().Get("format")
+	if format != "" && format != "text" && format != "png" {
+		http.Error(w, "unsupported source format", http.StatusBadRequest)
+		return
+	}
+	if format == "png" {
+		select {
+		case knowledgeSourcePreviewSlots <- struct{}{}:
+			defer func() { <-knowledgeSourcePreviewSlots }()
+		default:
+			w.Header().Set("Retry-After", "2")
+			http.Error(w, "Просмотр страниц занят. Повторите через несколько секунд.", http.StatusTooManyRequests)
+			return
+		}
+		ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
+		defer cancel()
+		r = r.WithContext(ctx)
+	}
+	if r.URL.Query().Get("format") == "text" {
+		ctx, cancel := context.WithTimeout(r.Context(), 15*time.Second)
+		defer cancel()
+		result, err := store.knowledgeMapSourceContextPinned(ctx, values[0], pin)
+		if err != nil {
+			switch {
+			case errors.Is(err, ErrKnowledgeMapSourceNotFound):
+				http.NotFound(w, r)
+			case errors.Is(err, ErrKnowledgeMapSourceNotCurrent), errors.Is(err, ErrKnowledgeMapSourceAmbiguous):
+				http.Error(w, "source evidence is not current", http.StatusConflict)
+			default:
+				http.Error(w, "source context is unavailable", http.StatusInternalServerError)
+			}
+			return
+		}
+		w.Header().Set("Content-Type", "application/json; charset=utf-8")
+		if r.Method != http.MethodHead {
+			_ = json.NewEncoder(w).Encode(result)
+		}
+		return
+	}
+	anchor, err := store.resolveKnowledgeMapPDFSourcePinned(values[0], pin)
 	if err != nil {
 		switch {
 		case errors.Is(err, ErrKnowledgeMapSourceNotFound):
@@ -1343,7 +1418,12 @@ func serveKnowledgeMapSource(w http.ResponseWriter, r *http.Request, store *Stor
 		}
 		return
 	}
-	file, err := os.Open(anchor.SourcePath)
+	local := true
+	if shared, ok := r.Context().Value(sharedGraphKey{}).(sharedGraphContext); ok {
+		local = shared.Local
+	}
+	file, err := openLocatedSource(r.Context(), store.db, filepath.Dir(store.Path()), anchor, local)
+
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
 			http.Error(w, "source file is unavailable", http.StatusGone)
@@ -1353,6 +1433,16 @@ func serveKnowledgeMapSource(w http.ResponseWriter, r *http.Request, store *Stor
 		return
 	}
 	defer file.Close()
+	snapshot, err := store.verifiedSourceFile(r.Context(), anchor, file)
+	if err != nil {
+		http.Error(w, publicSourceFileError(err), http.StatusConflict)
+		return
+	}
+	defer closeSourceSnapshot(snapshot)
+	if format == "png" {
+		serveKnowledgeMapPagePNG(w, r, store, anchor, snapshot.Name(), render)
+		return
+	}
 	info, err := file.Stat()
 	if err != nil || !info.Mode().IsRegular() {
 		http.Error(w, "source file is unavailable", http.StatusGone)
@@ -1360,7 +1450,7 @@ func serveKnowledgeMapSource(w http.ResponseWriter, r *http.Request, store *Stor
 	}
 	w.Header().Set("Content-Type", "application/pdf")
 	w.Header().Set("Content-Disposition", mime.FormatMediaType("inline", map[string]string{"filename": filepath.Base(anchor.SourcePath)}))
-	http.ServeContent(w, r, filepath.Base(anchor.SourcePath), info.ModTime(), file)
+	http.ServeContent(w, r, filepath.Base(anchor.SourcePath), info.ModTime(), snapshot)
 }
 
 func knowledgeMapSourceCookie(sessionToken string) *http.Cookie {
@@ -1385,6 +1475,9 @@ func knowledgeMapSourceAuthorized(r *http.Request, expectedToken string) bool {
 	if site := strings.ToLower(strings.TrimSpace(r.Header.Get("Sec-Fetch-Site"))); site != "" && site != "same-origin" {
 		return false
 	}
+	if _, ok := r.Context().Value(sharedGraphKey{}).(sharedGraphContext); ok {
+		return true
+	} // Owner/session checked by the shared application.
 	cookie, err := r.Cookie(knowledgeMapSourceCookieName(expectedToken))
 	if err != nil || len(cookie.Value) != len(expectedToken) {
 		return false
@@ -1471,7 +1564,11 @@ func knowledgeMapRequestedView(r *http.Request, fallback string) (string, error)
 }
 
 func knowledgeMapWorkspaceAuthorized(r *http.Request, expectedToken string) bool {
-	if expectedToken == "" || !strings.EqualFold(r.Header.Get("Origin"), "http://"+r.Host) {
+	origin := "http://" + r.Host
+	if shared, ok := r.Context().Value(sharedGraphKey{}).(sharedGraphContext); ok {
+		origin = shared.Origin
+	}
+	if expectedToken == "" || !strings.EqualFold(r.Header.Get("Origin"), origin) {
 		return false
 	}
 	if site := strings.ToLower(strings.TrimSpace(r.Header.Get("Sec-Fetch-Site"))); site != "" && site != "same-origin" {
@@ -1483,7 +1580,7 @@ func knowledgeMapWorkspaceAuthorized(r *http.Request, expectedToken string) bool
 
 func setKnowledgeMapSecurityHeaders(header http.Header) {
 	header.Set("Cache-Control", "no-store")
-	header.Set("Content-Security-Policy", "default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; connect-src 'self'")
+	header.Set("Content-Security-Policy", "default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; connect-src 'self'; img-src 'self' blob: data:")
 	header.Set("Cross-Origin-Resource-Policy", "same-origin")
 	header.Set("Referrer-Policy", "no-referrer")
 	header.Set("X-Content-Type-Options", "nosniff")

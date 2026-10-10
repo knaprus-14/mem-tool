@@ -1,0 +1,413 @@
+{
+  "schema_version": 1,
+  "updated": "2026-10-10",
+  "instructions": "Добавляйте entries по порядку. id уникален, feature_id берётся из features.json. state: in_progress, implemented или verified. Только verified допускает status_override и замену remaining; это осознанная оценка конкретного acceptance, а не следствие PASS. Для verified нужны evidence и хотя бы одна checks со status=passed. Сборка: node review/2026-10-10/mindmap-stage3/build-coverage.cjs. Можно передать другой overlay аргументом --delta <repo-relative.json>. Пустой entries воспроизводит статический срез alpha.3.",
+  "entries": [
+    {
+      "id": "alpha4-ops07-expired",
+      "feature_id": "OPS07",
+      "release": "1.72.0-alpha.4",
+      "state": "verified",
+      "title": "Ограниченные expired-записи graph jobs",
+      "summary": "Реализовано и проверено целевыми тестами: export/learning после time/count/bytes eviction освобождают payload и сохраняют компактное объяснение expired. Status известного ID — HTTP200, status=failed, phase/error_code=expired, ready=false; result/download/cancel —409; неизвестного —404. До128 записей на manager и до1 часа с фактического expiry. Опрос не продлевает срок. Это не долговечная очередь и не доказательство всего OPS07.",
+      "remaining": [
+        "Общая политика transient results и durable artifacts, её документация и комплексная приёмка logout/restart остаются предметом окончательной проверки root. Уже сохранённые пользовательские карты/history не очищаются этим механизмом.",
+        "Tombstones теряются при пересоздании manager или process restart; после часа либо вытеснения из128 записей ID становится неизвестным. Durable graph jobs остаются отдельной задачей AI07."
+      ],
+      "evidence": [
+        "pkg/mem/graph_job_retention.go:8",
+        "pkg/mem/graph_export_jobs.go:461",
+        "pkg/mem/graph_learning_jobs.go:412",
+        "pkg/mem/graph_job_retention_test.go:245"
+      ],
+      "checks": [
+        {
+          "kind": "targeted_go_tests",
+          "status": "passed",
+          "command": "go test ./pkg/mem -run '^(TestGraphJobRetention|TestKnowledgeMapExportManager|TestKnowledgeMapExportJob|TestKnowledgeLearningJob|TestGenerateKnowledgeLearningCandidatesReportsProgress|TestSharedGraph)' -count=1 -timeout=120s",
+          "result": "PASS pkg/mem 2.835s; изолированные fixtures, без модели/реальных баз",
+          "limitations": "Не browser E2E и не release/deploy; Go telemetry upload.token сообщил Access is denied, сам test завершился exit0."
+        }
+      ]
+    },
+    {
+      "id": "alpha4-tru09-candidate-search",
+      "feature_id": "TRU09",
+      "release": "1.72.0-alpha.4",
+      "state": "in_progress",
+      "title": "История: поиск кандидатов до приёмки",
+      "summary": "Историческая запись этапа реализации alpha.4. На тот момент сохранялась оценка partial: ручной reanchor alpha.3 ещё не закрывал поиск кандидатов. Более поздние verified-записи ниже определяют актуальный статус; эта запись сохранена для истории и сама его не меняет.",
+      "evidence": [],
+      "checks": []
+    },
+    {
+      "id": "alpha4-src04-regions-accepted",
+      "feature_id": "SRC04",
+      "release": "1.72.0-alpha.4",
+      "state": "verified",
+      "status_override": "delivered",
+      "title": "Области PDF: масштаб, перезапуск и смена редакции",
+      "summary": "Исходный критерий SRC04 проверен на изолированной PDF-фикстуре. В alpha.3 сохранены пять областей и проверено отображение при масштабе 150%; после перезапуска данных на alpha.4 все пять ID и page/x/y/width/height/file_hash совпали с исходным HTTP-снимком. Добавление шестой области получило строгий успешный ответ, нумерация первых пяти сохранилась. После изменения редакции документа API вернул все шесть областей как stale, сохранив геометрию и хеш исходного файла. Проверка не распространяется на точность OCR или извлечение формул.",
+      "remaining": [
+        "Область добавляется к аннотации с обязательным текстовым основанием; самостоятельные выделения без текстового anchor этим сценарием не реализованы.",
+        "Автоматического совмещения OCR и пиксельных областей нет. Браузерная проверка использовала синтетический текст и отдельно подготовленный PDF.",
+        "PDF физически не переписывается: координаты и file_hash хранятся отдельно. Геометрия старой области не переносится автоматически на другую редакцию."
+      ],
+      "evidence": [
+        "pkg/mem/document_annotation_regions_test.go:13",
+        "build/mindmap-alpha3/verification/browser.json",
+        "build/mindmap-alpha4/verification/browser.json",
+        "build/mindmap-alpha4/verification/persistence-before.json",
+        "build/mindmap-alpha4/verification/persistence-after.json",
+        "build/mindmap-alpha4/verification/regions-after-revision.json",
+        "build/mindmap-alpha4/verification/summary.json"
+      ],
+      "checks": [
+        {
+          "kind": "browser_and_http_acceptance",
+          "status": "passed",
+          "result": "Root провела браузерную приёмку: пять областей, масштаб 150%, перезапуск alpha.3→alpha.4, шестая область и стабильные номера. HTTP-снимки подтверждают точное сохранение пяти исходных координат и шесть stale после изменения редакции.",
+          "limitations": "Изолированная синтетическая фикстура. Не OCR/pixel-alignment, не перезапись PDF, не проверка большого корпуса или мобильного интерфейса."
+        },
+        {
+          "kind": "release_tests_recorded_by_root",
+          "status": "passed",
+          "result": "Alpha.4: go test ./... -count=1 -timeout=300s PASS (pkg/mem 111.921s), go vet ./... PASS; 137 JS-тестов в 18 наборах и syntax checks 23 файлов PASS.",
+          "limitations": "Результаты прочитаны из verification/summary.json; сборщик реестра тесты приложения не запускает. PASS не означает приёмку всех 120 пунктов или установку релиза."
+        }
+      ]
+    },
+    {
+      "id": "alpha4-tru09-candidates-accepted",
+      "feature_id": "TRU09",
+      "release": "1.72.0-alpha.4",
+      "state": "verified",
+      "status_override": "delivered",
+      "title": "Точная перепривязка: один кандидат, выбор из двух и история",
+      "summary": "Исходный критерий TRU09 проверен двумя способами. Core regression после вставки абзаца находит один точный кандидат с новым pin и смещением в Unicode codepoints; поиск сохраняет старый anchor и не создаёт lineage. В браузере после вставки 15 codepoints найдены два совпадения [50,64) и [108,122): GET и preview оставили lineage пустой, затем явный выбор второго и apply создали новую current-аннотацию [108,122), сохранив старую stale-аннотацию [35,49). История содержит одну связь между ними, а reader выделяет только выбранное второе вхождение. Это предложение точного текстового target, а не автоматическое решение о смысловой эквивалентности редакций.",
+      "remaining": [
+        "Поиск точного текста ограничен тем же логическим документом и locator, внутри отдельных chunks. Fuzzy matching, OCR-нормализации, поиск через границы chunks и геометрический поиск target не реализованы.",
+        "Не более 50 кандидатов, 1024 chunks и 8 МиБ текста за поиск; дополнительно один chunk ограничен 2 МиБ, чтение полных записей — 64 МиБ. Неполный результат явно отмечается complete=false с причинами; он не доказывает единственность совпадения во всём документе.",
+        "Даже один кандидат требует явного выбора и повторной проверки pin в preview/apply. Совпадение текста само по себе не доказывает смысловую эквивалентность; старая аннотация, её области и графовые связи автоматически не переносятся.",
+        "Приёмка выполнена на изолированных синтетических данных. Точность OCR, крупный реальный корпус, семантический recall и учебный эффект не измерялись."
+      ],
+      "evidence": [
+        "pkg/mem/document_annotation_reanchor_candidates.go:11",
+        "pkg/mem/document_annotation_reanchor_candidates_test.go:43",
+        "build/mindmap-alpha4/verification/reanchor-unique-regression.log",
+        "build/mindmap-alpha4/verification/browser.json",
+        "build/mindmap-alpha4/verification/candidates-before-apply.json",
+        "build/mindmap-alpha4/verification/candidates-after-apply.json",
+        "build/mindmap-alpha3/qa/regions-02/alpha4-reanchor-fixture.json",
+        "build/mindmap-alpha4/verification/summary.json"
+      ],
+      "checks": [
+        {
+          "kind": "targeted_go_regression",
+          "status": "passed",
+          "result": "Root дополнила TestDocumentAnnotationCandidatesInsertedParagraphExplicitChoiceAndStalePin шагом: вставленный абзац → один shifted exact candidate → lineage=0 и старый anchor неизменён. Targeted прогон PASS pkg/mem 2.567s, exit0.",
+          "limitations": "После общего release-прогона изменился только тест, production-код и бинарники не менялись. В логе есть отказ Go telemetry upload.token; сам test завершился успешно."
+        },
+        {
+          "kind": "browser_and_http_acceptance",
+          "status": "passed",
+          "result": "Root проверила два точных совпадения, обязательный явный выбор второго, отсутствие записи до apply, сохранение старого stale anchor, новый current anchor, lineage=1 и точную подсветку второго вхождения. Сохранённые HTTP JSON подтверждают ranges [35,49) и [108,122) и отсутствие lineage до применения.",
+          "limitations": "Синтетическая вставка текста в изолированной фикстуре; не OCR, не fuzzy matching и не оценка качества на пользовательском корпусе."
+        },
+        {
+          "kind": "release_tests_recorded_by_root",
+          "status": "passed",
+          "result": "Alpha.4 до дополнительного тестового шага: полный Go PASS (pkg/mem 111.921s), vet PASS; 137 JS-тестов в 18 наборах и syntax checks 23 файлов PASS.",
+          "limitations": "Сборщик только фиксирует прочитанный verification/summary.json и отдельный лог regression; не запускает Go или браузер и не подтверждает установку релиза."
+        }
+      ]
+    },
+    {
+      "id": "alpha5-src10-reading-workspace",
+      "feature_id": "SRC10",
+      "title": "Личное рабочее место нескольких документов",
+      "status_override": "partial",
+      "summary": "Реализованы сохранённый набор до24 выдержек, точные редакции/страницы/диапазоны, позиции и активный фрагмент, сравнение двух текстов и ссылка на выбранный classic-узел. Отдельный процесс на изолированной базе подтвердил сохранность трёх документов и позиций после смены редакции одного источника; прежний текст остаётся, источник stale. Браузерная приёмка заблокирована автоматической проверкой запуска; полный acceptance не заявляется.",
+      "remaining": [
+        "Пройти браузерный сценарий трёх документов, закрытия вкладки/перезапуска, позиций и stale-предупреждения на готовой сборке.",
+        "Набор хранит выдержки до8000символов, не полные вкладки PDF. Сохранение прокрутки явное; выбор второго столбца не сохраняется между открытиями.",
+        "Развитие до произвольных документов/страниц, общего ObjectRef и автоматического восстановления рабочего пространства остаётся за пределами текущего среза."
+      ],
+      "evidence": [
+        "pkg/mem/reading_workspace.go:1",
+        "pkg/mem/reading_workspace_test.go:1",
+        "internal/webapp/reading_workspace.go:1",
+        "internal/webapp/assets/reading-workspace.js:1",
+        "build/mindmap-alpha5/verification/summary.json",
+        "build/mindmap-alpha5/qa/reading-02/reading-before-revision.json",
+        "build/mindmap-alpha5/qa/reading-02/reading-after-revision.json"
+      ],
+      "release": "1.72.0-alpha.5",
+      "state": "verified",
+      "checks": [
+        {
+          "kind": "scoped_release_checks",
+          "status": "passed",
+          "command": "deploy/windows.ps1 -Target build/mindmap-alpha5/bin; go vet ./...; build/mindmap-alpha5/verify-js.ps1",
+          "result": "Full Go PASS, vet PASS, 166 JS tests /21 suites and25 syntax checks PASS; source revision integration PASS.",
+          "limitations": "Browser launch rejected by automatic permission review. Windows PATH deployment blocked by destination ACL/sandbox. No full M0–M6 acceptance."
+        }
+      ]
+    },
+    {
+      "id": "alpha5-nav07-reading-context",
+      "feature_id": "NAV07",
+      "title": "Возобновление сохранённого чтения и выбранного узла",
+      "summary": "Активный фрагмент, страница, Unicode-диапазон, доля прокрутки и optional map/node/revision хранятся по пользователю. Переключение записи и сохранение позиции используют CAS и ограниченные безопасные повторы. При изменённой карте открывается текущая ревизия с предупреждением, при удалённом узле сохранённая цитата остаётся. Устранён сбой перехода из поздней страницы библиотеки.",
+      "remaining": [
+        "Полная история навигации назад/вперёд и автоматическое восстановление любого читателя после закрытия браузера ещё не реализованы.",
+        "Нет общего ObjectRef для всех сущностей classic/graph; нет сохраняемого состояния свёрнутых ветвей в этом наборе.",
+        "Позиция сохраняется отдельной кнопкой; browser E2E этого выпуска заблокирован."
+      ],
+      "evidence": [
+        "internal/webapp/assets/app.js:147",
+        "internal/webapp/reading_navigation_test.cjs:1",
+        "internal/webapp/reading_workspace_test.cjs:1",
+        "pkg/mem/reading_workspace_test.go:1"
+      ],
+      "release": "1.72.0-alpha.5",
+      "state": "verified",
+      "checks": [
+        {
+          "kind": "scoped_release_checks",
+          "status": "passed",
+          "command": "deploy/windows.ps1 -Target build/mindmap-alpha5/bin; go vet ./...; build/mindmap-alpha5/verify-js.ps1",
+          "result": "Full Go PASS, vet PASS, 166 JS tests /21 suites and25 syntax checks PASS; source revision integration PASS.",
+          "limitations": "Browser launch rejected by automatic permission review. Windows PATH deployment blocked by destination ACL/sandbox. No full M0–M6 acceptance."
+        }
+      ]
+    },
+    {
+      "id": "alpha5-edt02-safe-markdown",
+      "feature_id": "EDT02",
+      "title": "Безопасный Markdown в classic-узлах",
+      "summary": "Просмотр Markdown в инспекторе и сравнении с документом строится через DOM: заголовки, абзацы, плоские списки, цитаты, код и выделение. HTTP(S)-ссылки проходят проверку схемы, внутренние mem://map/.../node/... переходят к узлу текущей базы. HTML/опасные URI не исполняются; source редактора не меняется; сложный/длинный текст получает явный fallback.",
+      "remaining": [
+        "Нет общего ObjectRef, таблиц, вложенных списков, встроенных картинок и математической вёрстки. Формулы сверяются существующим механизмом областей PDF.",
+        "Привязка областей PDF непосредственно в Markdown не реализована; этот срез не закрывает полный EDT02 acceptance.",
+        "Нужна браузерная визуальная проверка поддержанной разметки."
+      ],
+      "evidence": [
+        "internal/webapp/assets/safe-markdown.js:1",
+        "internal/webapp/assets/safe-markdown.css:1",
+        "internal/webapp/safe_markdown_test.cjs:1",
+        "internal/webapp/assets/map-document.js:1"
+      ],
+      "release": "1.72.0-alpha.5",
+      "state": "verified",
+      "checks": [
+        {
+          "kind": "scoped_release_checks",
+          "status": "passed",
+          "command": "deploy/windows.ps1 -Target build/mindmap-alpha5/bin; go vet ./...; build/mindmap-alpha5/verify-js.ps1",
+          "result": "Full Go PASS, vet PASS, 166 JS tests /21 suites and25 syntax checks PASS; source revision integration PASS.",
+          "limitations": "Browser launch rejected by automatic permission review. Windows PATH deployment blocked by destination ACL/sandbox. No full M0–M6 acceptance."
+        }
+      ]
+    },
+    {
+      "id": "alpha6-exp02-outline-import",
+      "feature_id": "EXP02",
+      "release": "1.72.0-alpha.6",
+      "state": "verified",
+      "title": "Импорт внешних карт с предпросмотром и архивом исходника",
+      "summary": "OPML, FreeMind, XMind JSON/XML и Markdown импортируются отдельной картой через UI/CLI. Дерево и предупреждения доступны до применения; точные исходные байты, карта, история/снимок и квитанция создаются атомарно. Повтор не дублирует карту при потере ответа и заполненной квоте. Реальный staged CLI в отдельных процессах подтвердил все четыре формата, неизменность файлов/архивов и повтор. Исправлены открытие writable DB при CLI preview и разбиение вложенного fenced code в Markdown.",
+      "remaining": [
+        "Нужен режим архивного восстановления native JSON с сохранением IDs/evidence/history и явной политикой коллизий. Нынешний импорт создаёт новые IDs и начальную историю.",
+        "Внешние оформление/геометрия/отношения/вложения/учебный прогресс не переносятся полностью; неподдержанные свойства сохраняются только в raw source с предупреждениями.",
+        "Нужна браузерная приёмка и корпус реальных пользовательских файлов разных версий редакторов. API/component/CLI проверки её не заменяют.",
+        "Importer отдельной semantic graph map и общее адресование объектов остаются самостоятельными задачами."
+      ],
+      "evidence": [
+        "pkg/mem/mind_map_import_outline.go:1",
+        "pkg/mem/mind_map_import_xml.go:1",
+        "pkg/mem/mind_map_import_xmind.go:1",
+        "pkg/mem/mind_map_import_markdown.go:1",
+        "pkg/mem/mind_map_import_formats_test.go:1",
+        "pkg/mem/mind_map_import_outline_test.go:1",
+        "internal/webapp/maps_outline_import_test.go:1",
+        "internal/webapp/assets/map-import.test.cjs:1",
+        "cmd/mem/mindmap_import_run_test.go:1",
+        "build/mindmap-alpha6/verification/summary.json"
+      ],
+      "checks": [
+        {
+          "kind": "scoped_release_checks",
+          "status": "passed",
+          "command": "deploy/windows.ps1 -Target build/mindmap-alpha6/bin; go vet ./...; build/mindmap-alpha6/verify-js.ps1; build/mindmap-alpha6/verify-cli.ps1",
+          "result": "Full Go tests and vet PASS;177 JS tests/21 suites,25 syntax checks PASS; staged CLI preview/apply/retry of4formats and byte-identical archives PASS.",
+          "limitations": "Browser launch/upload remains restricted; no workaround attempted. Windows PATH deployment denied by target permissions. No full M0–M6 acceptance."
+        }
+      ]
+    },
+    {
+      "id": "alpha7-nav07-saved-view",
+      "feature_id": "NAV07",
+      "title": "Личный сохранённый вид классической карты",
+      "summary": "Явное сохранение и восстановление режима, раскладки, выбора узла, свёрнутых ветвей, масштаба, прокрутки и параметров таблицы. Отдельный actor/map CAS; чтение без миграций и записи, адаптация удалённых узлов только в ответе. Карта, источники, история и снимки не меняются. Поздние ответы ограничены текущим контекстом, точный повтор защищён квитанцией.",
+      "status_override": "partial",
+      "remaining": [
+        "Нет общей истории back/forward, автоматического восстановления последнего открытого документа/страницы/карты и именованных видов. Для возврата надо открыть карту, вид сохраняется явно.",
+        "Удалённый выбранный узел заменяется корнем карты; общего fallback к исходному документу пока нет.",
+        "Нужна браузерная приёмка после перезагрузки и закрытия окна. Отдельные процессы подтвердили SQLite persistence; это не UI acceptance."
+      ],
+      "evidence": [
+        "pkg/mem/web_map_view_state.go:1",
+        "pkg/mem/web_map_view_state_test.go:1",
+        "internal/webapp/map_view_state_test.go:1",
+        "internal/webapp/assets/map-view-controls.js:1",
+        "internal/webapp/map_view_controls_test.cjs:1",
+        "build/mindmap-alpha7/verification/persistence.json",
+        "build/mindmap-alpha7/verification/summary.json"
+      ],
+      "release": "1.72.0-alpha.7",
+      "state": "verified",
+      "checks": [
+        {
+          "kind": "scoped_release_checks",
+          "status": "passed",
+          "command": "deploy/windows.ps1 -Target build/mindmap-alpha7/bin; go vet ./...; build/mindmap-alpha7/verify-js.ps1; build/mindmap-alpha7/qa/run.ps1",
+          "result": "Full Go tests/vet PASS;228 JS tests in25suites and28syntax checks PASS; HTTP assets and view-state API PASS; persisted view read by a separate Go process with unchanged map/history.",
+          "limitations": "Browser/visual acceptance not performed; previous QA server launch rejected by automatic approval review. Windows PATH deployment denied by write preflight. No full milestone acceptance."
+        }
+      ]
+    },
+    {
+      "id": "alpha7-nav08-three-layouts",
+      "feature_id": "NAV08",
+      "title": "Три раскладки дерева и SVG выбранного вида",
+      "summary": "Вправо, сверху вниз и в обе стороны работают поверх одного дерева без изменения IDs, родителей, порядка и источников. Тесты геометрии проверяют границы/пересечения на1000узлах и глубине256. SVG видимых узлов использует тот же layout и записывает раскладку, ревизию и scope; текст экранируется.",
+      "status_override": "partial",
+      "remaining": [
+        "Нужна визуальная приёмка читаемости интерфейса и SVG на реальных картах и разных экранах.",
+        "Выбранная раскладка передаётся новым SVG видимых узлов. Прежний полный экспорт сохраняет свой контракт; единый выбор раскладки для остальных форматов не добавлен.",
+        "Свободная, радиальная и другие дополнительные раскладки не реализованы."
+      ],
+      "evidence": [
+        "internal/webapp/assets/map-layout.js:1",
+        "internal/webapp/map_layout_test.cjs:1",
+        "internal/webapp/assets/map-view-export.js:1",
+        "internal/webapp/map_view_export_test.cjs:1",
+        "internal/webapp/map_views_integration_test.cjs:1",
+        "build/mindmap-alpha7/verification/summary.json"
+      ],
+      "release": "1.72.0-alpha.7",
+      "state": "verified",
+      "checks": [
+        {
+          "kind": "scoped_release_checks",
+          "status": "passed",
+          "command": "deploy/windows.ps1 -Target build/mindmap-alpha7/bin; go vet ./...; build/mindmap-alpha7/verify-js.ps1; build/mindmap-alpha7/qa/run.ps1",
+          "result": "Full Go tests/vet PASS;228 JS tests in25suites and28syntax checks PASS; HTTP assets and view-state API PASS; persisted view read by a separate Go process with unchanged map/history.",
+          "limitations": "Browser/visual acceptance not performed; previous QA server launch rejected by automatic approval review. Windows PATH deployment denied by write preflight. No full milestone acceptance."
+        }
+      ]
+    },
+    {
+      "id": "alpha7-nav10-structured-editors",
+      "feature_id": "NAV10",
+      "title": "Редактируемые план и таблица классической карты",
+      "summary": "Полное дерево и таблица по100узлов на страницу, поиск и сортировка только представления, выбор строки и правка label/summary/body через существующий CAS/history API. Черновик и неподтверждённая отправка сохраняются в памяти вкладки; заблокированные узлы защищены. Переход к узлу показывает нужную страницу и явно снимает скрывающий фильтр.",
+      "status_override": "partial",
+      "remaining": [
+        "Это представления classic; общий редактор semantic graph объектов и общие pins обоих интерфейсов не добавлены.",
+        "Нет массовой правки, применения порядка таблицы к ветвям и перестройки дерева текстовым планом.",
+        "Нужна браузерная приёмка ввода, клавиатурной навигации, масштабирования и больших пользовательских материалов."
+      ],
+      "evidence": [
+        "internal/webapp/assets/map-structured-view.js:1",
+        "internal/webapp/assets/map-structured-view.css:1",
+        "internal/webapp/map_structured_view_test.cjs:1",
+        "internal/webapp/map_views_integration_test.cjs:1",
+        "internal/webapp/map_view_assets_test.go:1",
+        "build/mindmap-alpha7/verification/summary.json"
+      ],
+      "release": "1.72.0-alpha.7",
+      "state": "verified",
+      "checks": [
+        {
+          "kind": "scoped_release_checks",
+          "status": "passed",
+          "command": "deploy/windows.ps1 -Target build/mindmap-alpha7/bin; go vet ./...; build/mindmap-alpha7/verify-js.ps1; build/mindmap-alpha7/qa/run.ps1",
+          "result": "Full Go tests/vet PASS;228 JS tests in25suites and28syntax checks PASS; HTTP assets and view-state API PASS; persisted view read by a separate Go process with unchanged map/history.",
+          "limitations": "Browser/visual acceptance not performed; previous QA server launch rejected by automatic approval review. Windows PATH deployment denied by write preflight. No full milestone acceptance."
+        }
+      ]
+    },
+    {
+      "id": "alpha8-nav07-named-views",
+      "feature_id": "NAV07",
+      "title": "Личные именованные виды классической карты",
+      "summary": "До20 видов на карту и пользователя; создание, открытие, замена, переименование и удаление. Полный набор параметров представления, независимый от содержимого и default view. Общий CAS коллекции, проверка ревизии карты, атомарные bounded receipts, exact retry до quota/current-map checks, удаление при полной квоте. GET адаптирует удалённые ссылки только в ответе. Два отдельных процесса подтвердили сохранение двух видов и неизменность SQL rows карты/источников/истории/снимков. Исправлена очистка памяти черновиков при явном logout.",
+      "status_override": "partial",
+      "remaining": [
+        "Нет общей истории back/forward между документами и картами и автоматического возврата к последнему открытому документу/странице после закрытия браузера.",
+        "Именованные виды относятся к classic; общего механизма обоих редакторов, переноса с экспортом и совместного доступа к видам нет.",
+        "При удалённом узле используется корень карты; общего fallback к исходному документу нет.",
+        "Браузерная приёмка ещё требуется. Отдельные процессы, HTTP и JS-компоненты её не заменяют."
+      ],
+      "evidence": [
+        "pkg/mem/web_map_view_presets.go:1",
+        "pkg/mem/web_map_view_presets_test.go:1",
+        "internal/webapp/map_view_presets.go:1",
+        "internal/webapp/map_view_presets_test.go:1",
+        "internal/webapp/assets/map-view-presets.js:1",
+        "internal/webapp/map_view_presets_test.cjs:1",
+        "internal/webapp/map_view_assets_test.go:1",
+        "build/mindmap-alpha8/verification/persistence.json",
+        "build/mindmap-alpha8/verification/summary.json"
+      ],
+      "release": "1.72.0-alpha.8",
+      "state": "verified",
+      "checks": [
+        {
+          "kind": "scoped_release_checks",
+          "status": "passed",
+          "command": "deploy/windows.ps1 -Target build/mindmap-alpha8/bin; go vet ./...; build/mindmap-alpha8/verify-js.ps1; build/mindmap-alpha8/qa/run.ps1",
+          "result": "Full Go tests/vet PASS;240 JS tests in26suites and29syntax checks PASS; HTTP assets and named-view API PASS; two named views read by a separate Go process with unchanged map/history.",
+          "limitations": "Browser/visual acceptance not performed; previous QA server launch rejected by automatic approval review. Windows PATH deployment denied by write preflight. No full milestone acceptance."
+        }
+      ]
+    },
+    {
+      "id": "alpha9-nav07-map-source-navigation",
+      "feature_id": "NAV07",
+      "title": "История переходов по классическим картам и источникам",
+      "summary": "Назад/вперёд, список и очистка истории; до 100 мест и около 8 МиБ метаданных в памяти вкладки. Восстанавливаются карта, узел, режим, раскладка, ветви, масштаб, прокрутка и таблица. Источник перечитывается только по точному ID и ревизии карты; при изменении карты или исчезновении узла предлагается текущий вид без подстановки другого документа. Удаление DOM-списка при закрытии/смене контекста, изоляция по базе и сессии, защита от поздних запросов. История навигации не изменяет содержимое карты или историю правок.",
+      "status_override": "partial",
+      "remaining": [
+        "Цепочка ограничена classic и сравнением узла с источником; библиотечный читатель и semantic graph не объединены в общую историю.",
+        "Нет восстановления истории и последнего документа/страницы после закрытия браузера или синхронизации между вкладками и устройствами.",
+        "Именованные виды не переносятся с экспортом и не предоставляют совместный доступ или общий механизм обоих редакторов.",
+        "При удалённом узле открывается корень текущей карты, при старой ревизии источник не открывается автоматически. Общего fallback к библиотечному документу нет.",
+        "Браузерная приёмка нужна отдельно; HTTP и управляемые DOM/API-тесты её не заменяют."
+      ],
+      "evidence": [
+        "internal/webapp/assets/map-navigation.js:1",
+        "internal/webapp/assets/map-document.js:1",
+        "internal/webapp/assets/map-view-controls.js:1",
+        "internal/webapp/assets/app.js:133",
+        "internal/webapp/map_views_integration_test.cjs:1",
+        "internal/webapp/map_document_test.cjs:1",
+        "internal/webapp/map_view_assets_test.go:1",
+        "build/mindmap-alpha9/verification/summary.json"
+      ],
+      "release": "1.72.0-alpha.9",
+      "state": "verified",
+      "checks": [
+        {
+          "kind": "scoped_release_checks",
+          "status": "passed",
+          "command": "deploy/windows.ps1 -Target build/mindmap-alpha9/bin; go vet ./...; build/mindmap-alpha9/verify-js.ps1",
+          "result": "Full Go tests/vet PASS;261 JS tests in26suites and30syntax checks PASS. Actual app navigation checked across maps/views/sources, removed-node and stale-source fallback, history count/byte bounds, identity reset and late requests. Embedded module served through real HTTP handler in httptest.",
+          "limitations": "Browser/visual acceptance not performed after earlier automatic approval rejection of QA server launch. Windows PATH installation blocked by destination write preflight. No persistence or full milestone acceptance claimed."
+        }
+      ]
+    }
+  ]
+}

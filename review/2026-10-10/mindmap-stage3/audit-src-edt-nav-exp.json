@@ -1,0 +1,321 @@
+{
+  "schema_version": 1,
+  "date": "2026-10-10",
+  "source_catalog": "review/2026-10-09/mindmap-research/features.json",
+  "scope": "40 пунктов SRC/EDT/NAV/EXP; текущее рабочее дерево после alpha.1–alpha.3. Адаптер annotation↔knowledge параллельно интегрируется и отмечен отдельно.",
+  "method": "Read-only поиск и чтение исходников, интерфейсов и тестовых сценариев. Production не изменялся; модели, пользовательские базы и браузер не запускались.",
+  "tests_executed_in_this_audit": [],
+  "status_legend": {
+    "delivered": "Реализация покрывает функциональный критерий. Это вывод о коде, а не отметка успешного прогона или релизной приёмки.",
+    "partial": "Есть существенная реализация, но остаётся конкретная часть исходного acceptance либо незавершённая интеграция.",
+    "absent": "Реализация именно запрошенной возможности не найдена в проверенных core/API/UI. Соседние функции отдельно отмечены.",
+    "empirical": "Не найден обязательный пробел реализации, но итоговый критерий требует визуальной, клавиатурной или комплексной приёмки, не выполненной этим аудитом."
+  },
+  "negative_search_scope": [
+    "pkg, internal, cmd: json canvas, Zotero, BibTeX, RIS, annotated PDF, printed page/page label, OPML/FreeMind/Xmind import",
+    "Перечни поддерживаемых экспортов, единственный native-map parser и HTTP importer; Markdown ingestion документа не считается импортом карты",
+    "Состояние integrated app/map-document, сохранённые graph layouts, отдельные legacy classic/graph clients"
+  ],
+  "items": [
+    {
+      "id": "SRC01", "status": "delivered",
+      "interfaces": "Integrated classic: создание по документам; graph: отдельный выбор документа и полный разбор.",
+      "evidence": ["pkg/mem/web_map_from_sources.go:30", "pkg/mem/web_map_from_sources.go:84", "pkg/mem/web_map_from_sources.go:95", "internal/webapp/assets/map-from-sources.js:8", "pkg/mem/web_map_from_sources_test.go:157"],
+      "implemented": "Выбираются полные документы, фиксируются pins всех chunks; превышение 20 документов/512 chunks/600000 runes отклоняется до генерации. UI заранее показывает документы и chunks; текстовый предел проверяет сервер.",
+      "remaining": "Обязательного расширения для указанного критерия не найдено. Приёмочный сценарий ровно с тремя документами и отдельной проверкой текстового лимита здесь не запускался."
+    },
+    {
+      "id": "SRC02", "status": "partial",
+      "interfaces": "Integrated classic reader и отдельная панель graph; новый bridge аннотаций связывает их через явные ссылки.",
+      "evidence": ["internal/webapp/assets/map-document.js:13", "internal/webapp/assets/map-document.js:19", "internal/webapp/assets/document-annotations.js:242", "pkg/mem/web/knowledgeMapHTMLSuffix.html:153"],
+      "implemented": "Открытие точного evidence, соседних passages, проверенного PDF и сохранённых highlights; возврат к использованию аннотации через backlinks.",
+      "remaining": "Единая двусторонняя синхронизация reader↔выбранный объект для произвольной цитаты classic/graph не завершена. Проверить три цитаты и обратное выделение в одной закреплённой редакции."
+    },
+    {
+      "id": "SRC03", "status": "partial",
+      "interfaces": "Shared persistent core + integrated reader/classic; adapter annotation→knowledge и graph→app сейчас интегрируется.",
+      "evidence": ["pkg/mem/document_annotations.go:123", "pkg/mem/document_annotations.go:189", "pkg/mem/document_annotation_knowledge.go:94", "internal/webapp/annotation_knowledge.go:11", "internal/webapp/assets/annotation-knowledge.js:53", "pkg/mem/web/knowledgeMapHTMLSuffix.html:254", "internal/webapp/document_annotations_test.cjs:147"],
+      "implemented": "Отдельная неизменяемая цитата с Unicode range, комментарием, историей, архивом, current/stale/missing; source anchor не меняется при правке комментария. Есть core/API и новый UI создания связанного knowledge node, просмотра снимка связи и обратных ссылок.",
+      "remaining": "Завершить интеграционную проверку graph adapter и сценарий restart→открытие из classic и graph. Модуль UI уже записан; его проверка идёт параллельно этому аудиту. Bridge хранит снимок связи; редактирование заметки не синхронизирует body knowledge node автоматически."
+    },
+    {
+      "id": "SRC04", "status": "empirical",
+      "interfaces": "Integrated annotation reader: области PDF; shared region core, JSON transfer.",
+      "evidence": ["pkg/mem/document_annotation_regions.go:26", "pkg/mem/document_annotation_regions.go:96", "internal/webapp/assets/annotation-regions.js:12", "internal/webapp/assets/annotation-regions.js:22", "pkg/mem/document_annotation_regions_test.go:13"],
+      "implemented": "Нормализованные координаты страницы, hash файла, автор, неизменяемые записи, масштабы 100/150/200%, pointer и числовой ввод. До 100 областей на аннотацию/10000 на базу; старый hash даёт stale.",
+      "remaining": "Визуально принять пять областей после масштабирования и повторного открытия. Область пока принадлежит текстовой аннотации; самостоятельная графическая аннотация без цитаты не реализована и не должна подразумеваться."
+    },
+    {
+      "id": "SRC05", "status": "empirical",
+      "interfaces": "Graph PNG/PDF; classic проверенный PDF и annotation page renderer.",
+      "evidence": ["pkg/mem/graph_source_preview.go:13", "pkg/ingest/pdf_preview.go:18", "pkg/ingest/pdf_preview.go:65", "pkg/mem/web_map_document.go:189", "internal/webapp/assets/map-document.js:22"],
+      "implemented": "Закрытый проверенный snapshot, запрет изменённых/непроверенных байтов, обработка отсутствующего renderer и невалидного PNG. Graph renderer ограничен двумя параллельными запросами; длинная сторона страницы до 2000 px.",
+      "remaining": "Сравнить одну формулу в обоих пользовательских интерфейсах на реальном renderer. Наличие кода и unit fixtures не подтверждает визуальную читаемость оригинала."
+    },
+    {
+      "id": "SRC06", "status": "absent",
+      "interfaces": "Импорт текста и визуальный PDF доступны; общей модели таблицы нет.",
+      "evidence": ["pkg/ingest/document.go:73", "pkg/mem/graph.go:102"],
+      "implemented": "Есть текстовый Block и page/chunk evidence; таблицу можно проверить глазами по оригиналу.",
+      "remaining": "Модель таблица/строка/колонка/ячейка, merged cells, координаты ячеек и OCR confidence; экспорт с возвратом от каждой ячейки к оригиналу и размеченный корпус."
+    },
+    {
+      "id": "SRC07", "status": "partial",
+      "interfaces": "Knowledge graph formula node и оригинал PDF; classic может ссылаться на evidence/область.",
+      "evidence": ["pkg/mem/graph.go:22", "pkg/mem/graph.go:120", "pkg/mem/graph_source_preview.go:13"],
+      "implemented": "Тип formula, текстовое объяснение, evidence и визуальный оригинал уже существуют.",
+      "remaining": "Структурированный разбор формулы, переменных и единиц, явный статус проверки преобразований; приёмка на десяти размеченных формулах. Тип узла сам по себе не является математической проверкой."
+    },
+    {
+      "id": "SRC08", "status": "partial",
+      "interfaces": "Shared ingestion manifest; graph coverage API/CLI и integrated graph-documents.",
+      "evidence": ["pkg/ingest/document.go:51", "pkg/mem/graph_coverage.go:30", "pkg/mem/graph_coverage.go:114", "internal/webapp/assets/graph-documents.js:59", "internal/webapp/assets/graph-documents.js:63"],
+      "implemented": "Физический знаменатель, empty/failed pages, OCR warnings/confidence и отдельное semantic coverage представлены в данных. UI показывает failed pages и незавершённый разбор.",
+      "remaining": "В UI явно вывести обе категории empty/failed с координатами и переходом к оригиналу каждой проблемной страницы, включая страницу без chunk. Принять fixture пустой и испорченной OCR-страницы."
+    },
+    {
+      "id": "SRC09", "status": "partial",
+      "interfaces": "Shared anchor, classic/graph/annotation reader.",
+      "evidence": ["pkg/ingest/document.go:62", "pkg/ingest/document.go:73", "pkg/mem/graph.go:104", "internal/webapp/assets/map-document.js:22"],
+      "implemented": "Физическая страница хранится и используется при открытии PDF.",
+      "remaining": "Отдельный printed label/page-label map для титула, римского введения и основной части; отображать оба номера, не менять physical coordinates."
+    },
+    {
+      "id": "SRC10", "status": "absent",
+      "interfaces": "Integrated reader держит один modal context; graph views сохраняются отдельно.",
+      "evidence": ["internal/webapp/assets/map-document.js:3", "internal/webapp/assets/map-document.js:6", "pkg/mem/graph_layout.go:98"],
+      "implemented": "Отдельные документы и цитаты открываются, но current reader context сбрасывается при закрытии.",
+      "remaining": "Постоянный рабочий набор из нескольких документов с позициями, выбранными узлами и revision pins; восстановление трёх вкладок после restart и честный stale fallback."
+    },
+    {
+      "id": "EDT01", "status": "delivered",
+      "interfaces": "Classic core/CLI, legacy editor и integrated web.",
+      "evidence": ["pkg/mem/mind_map.go:1373", "pkg/mem/mind_map.go:1399", "pkg/mem/web_map_actions.go:31", "pkg/mem/web_map_actions_test.go:86"],
+      "implemented": "Add/edit/move/delete/promote children с сохранением node IDs, порядка, sources, revision guard и транзакционным откатом; цикл и locked branch отклоняются.",
+      "remaining": "Функционального пробела по acceptance не найдено. Аудит не выполнял существующие structure/cycle tests."
+    },
+    {
+      "id": "EDT02", "status": "partial",
+      "interfaces": "Classic и graph хранят текст; integrated reader выводит безопасный plain text.",
+      "evidence": ["pkg/mem/mind_map.go:98", "internal/webapp/assets/map-document.js:29", "internal/webapp/assets/app.js:15", "pkg/mem/graph_edit.go:116"],
+      "implemented": "Body Markdown и заметки сохраняются; textContent/pre не исполняют HTML документа. Формула доступна отдельно как проверенный оригинал.",
+      "remaining": "Общий безопасный Markdown preview со списками, внутренними ссылками и ссылкой на область формулы; редактируемый исходный текст должен сохраняться без потери."
+    },
+    {
+      "id": "EDT03", "status": "empirical",
+      "interfaces": "Integrated classic, native dialogs, annotation reader; legacy editor и graph имеют собственные shortcuts.",
+      "evidence": ["internal/webapp/assets/app.js:187", "internal/webapp/assets/map-resize.js:22", "internal/webapp/document_annotations_test.cjs:132", "internal/webapp/document_annotations_test.cjs:157"],
+      "implemented": "Фокусируемые узлы, Enter/Space/стрелки для раскрытия, клавиатурный resize, native form controls и действия с highlights/областями без обязательной мыши.",
+      "remaining": "Полная keyboard-only приёмка создания, переноса, удаления, source/review/study и новых dialogs; проверить возврат фокуса и отсутствие ловушек. Тесты отдельных обработчиков не заменяют этот аудит."
+    },
+    {
+      "id": "EDT04", "status": "empirical",
+      "interfaces": "Legacy classic drag/drop плюс форма; integrated classic — форма parent/position.",
+      "evidence": ["pkg/mem/web/classicMindMapWorkspaceHTML.html:140", "pkg/mem/web/classicMindMapWorkspaceHTML.html:150", "pkg/mem/web/classicMindMapWorkspaceHTML.html:152", "internal/webapp/assets/map-actions.js:1", "pkg/mem/web_map_actions_test.go:10"],
+      "implemented": "Перенос без удержания кнопки доступен через выбор родителя и позиции; shared core проверяет порядок, цикл и блокировку.",
+      "remaining": "Сравнить один перенос через legacy drag и формы обоих UI. Не выдавать наличие drag в legacy за реализацию drag в integrated editor."
+    },
+    {
+      "id": "EDT05", "status": "partial",
+      "interfaces": "Classic style JSON/core/export и kind colors в UI.",
+      "evidence": ["pkg/mem/mind_map.go:102", "pkg/mem/mind_map.go:764", "internal/webapp/assets/map-layout.js:21"],
+      "implemented": "Поле style ограничено 8192 bytes, сохраняется вместе с узлом; kind участвует в представлении.",
+      "remaining": "Пользовательский style editor, boundaries и summary groups, независимость оформления от evidence/review и читаемый outline fallback группы."
+    },
+    {
+      "id": "EDT06", "status": "delivered",
+      "interfaces": "Knowledge graph standalone/shared web; classic автоматический tree layout отдельно.",
+      "evidence": ["pkg/mem/graph_layout.go:65", "pkg/mem/graph_layout.go:96", "pkg/mem/graph_layout.go:149", "pkg/mem/graph_layout_test.go:8"],
+      "implemented": "Позиции, pinned, viewport, filters и named views сохраняются отдельно от knowledge content/evidence; reload восстанавливает layout.",
+      "remaining": "Обязательного расширения не найдено. Повторить acceptance с именованным видом и контролем content/evidence digest; этот аудит его не запускал."
+    },
+    {
+      "id": "EDT07", "status": "partial",
+      "interfaces": "Graph selection/explore и batch approve; integrated classic действует по одному узлу.",
+      "evidence": ["pkg/mem/graph_selection.go:116", "pkg/mem/graph_review.go:311", "pkg/mem/graph_review.go:329", "pkg/mem/web_map_actions.go:31"],
+      "implemented": "У graph есть закреплённый manifest и атомарное batch review с проверкой pins. Это не общий bulk editor двух моделей.",
+      "remaining": "Единый preview точного набора и нужные групповые операции classic; десять объектов, конфликт одного и отсутствие частичной записи проверить для каждой разрешённой операции."
+    },
+    {
+      "id": "EDT08", "status": "delivered",
+      "interfaces": "Classic core/CLI/integrated web; graph имеет отдельную историю ручных правок/review.",
+      "evidence": ["pkg/mem/web_map_history.go:133", "pkg/mem/web_map_history.go:147", "pkg/mem/web_map_redo_test.go:32", "pkg/mem/web_map_redo_test.go:72", "pkg/mem/web_map_snapshot_restore.go:213"],
+      "implemented": "Persistent undo/redo, revision conflict, retry receipts и snapshots/restore; источники сохраняются в снимках изменения. История карты не заменена новым импортом.",
+      "remaining": "Функционального пробела для classic не найдено. Точный комплексный edit→move→source-add сценарий в этом аудите не прогонялся."
+    },
+    {
+      "id": "EDT09", "status": "delivered",
+      "interfaces": "Classic AI и ручной редактор; graph generated upsert/manual override.",
+      "evidence": ["pkg/mem/mind_map_ai.go:1749", "pkg/mem/mind_map_ai.go:1887", "pkg/mem/mind_map.go:1485", "pkg/mem/graph_edit.go:565", "pkg/mem/mind_map_test.go:160"],
+      "implemented": "Classic fill дописывает текст; locked target/ветвь защищены. Graph сохраняет ручной content override при новой генерации до явной отмены правки.",
+      "remaining": "Нового обязательного механизма не найдено. Проверить повторную генерацию и все locked fill/move/delete сценарии в релизной приёмке."
+    },
+    {
+      "id": "EDT10", "status": "partial",
+      "interfaces": "Integrated library/classic/reader/study, отдельная graph вкладка, legacy editors и CLI.",
+      "evidence": ["internal/webapp/maps.go:12", "internal/webapp/graph.go:106", "internal/webapp/assets/map-library.js:86", "internal/webapp/assets/map-document.js:3"],
+      "implemented": "Большинство повседневных переходов уже имеют кнопки без ввода ID, включая открытие graph node и источника; classic snapshots и study доступны из библиотеки.",
+      "remaining": "Единый сохранённый рабочий контекст документа/карты/review/обучения и возврат между интерфейсами. Некоторые advanced operations остаются отдельными маршрутами и формами."
+    },
+    {
+      "id": "NAV01", "status": "empirical",
+      "interfaces": "Knowledge graph; это восемь представлений одной graph модели, не восемь classic layouts.",
+      "evidence": ["pkg/mem/graph_layout.go:54", "pkg/mem/web/knowledgeMapHTMLSuffix.html:72", "pkg/mem/web/knowledgeMapHTMLSuffix.html:79", "pkg/mem/web/knowledgeMapHTMLSuffix.html:81", "pkg/mem/web/knowledgeMapHTMLSuffix.html:84", "pkg/mem/web/knowledgeMapHTMLSuffix.html:88"],
+      "implemented": "Graph, topics, document-tree, causal, procedure-sequence, timeline, comparison-matrix, findings-board реализованы; специальные views используют подходящие реальные relations и показывают пустые состояния.",
+      "remaining": "Открыть все восемь на fixtures нужных типов и проверить пустые случаи в браузере. Не планировать эти views заново как отсутствующие."
+    },
+    {
+      "id": "NAV02", "status": "delivered",
+      "interfaces": "Graph named views/API; classic named views отдельно не реализованы и не входят в этот graph acceptance.",
+      "evidence": ["pkg/mem/graph_layout.go:29", "pkg/mem/graph_layout.go:149", "pkg/mem/graph_layout.go:228", "pkg/mem/graph_layout.go:271", "pkg/mem/graph_layout_test.go:83"],
+      "implemented": "Именованные виды сохраняют filters/positions/viewport, разделяя общий graph content. Удаление затрагивает layout. Лимиты: 100 views, 1 МиБ layout, 10000 node positions.",
+      "remaining": "Функционального пробела не найдено; сценарий двух видов с общей правкой текста здесь не запускался."
+    },
+    {
+      "id": "NAV03", "status": "partial",
+      "interfaces": "Graph semantic zoom и smart relation lens; classic поиск раскрывает скрытую ветвь.",
+      "evidence": ["pkg/mem/web/knowledgeMapHTMLSuffix.html:48", "pkg/mem/web/knowledgeMapHTMLSuffix.html:50", "pkg/mem/web/knowledgeMapHTMLSuffix.html:53", "pkg/mem/web/knowledgeMapHTMLSuffix.html:115", "internal/webapp/assets/app.js:341"],
+      "implemented": "Overview/topics/detail, budgets, выделение и поиск сверх разрежения, счётчики показанных объектов. Это разрежение отображения, а не отсутствие знаний в базе.",
+      "remaining": "Явный возврат к прежним camera/scale после поиска/фокуса и единое объяснение scope/filter/budget. Named view даёт обходной путь, но не равен navigation back."
+    },
+    {
+      "id": "NAV04", "status": "delivered",
+      "interfaces": "Graph selection explore/API/CLI и selection UI.",
+      "evidence": ["pkg/mem/graph_selection.go:30", "pkg/mem/graph_selection.go:116", "pkg/mem/graph_selection.go:357", "pkg/mem/graph_selection_test.go:195"],
+      "implemented": "Направления both/incoming/outgoing, allowed relation kinds, детерминированный shortest path; глубина соседства до 3 и path до 24. Результат закреплён manifest.",
+      "remaining": "Функционального пробела не найдено. Удерживать в UI различие пути по рёбрам и доказанной причинности; тестовый сценарий здесь не выполнялся."
+    },
+    {
+      "id": "NAV05", "status": "partial",
+      "interfaces": "Classic поиск по всей загруженной карте, graph search по загруженному graph, отдельный QueryIn по корпусу.",
+      "evidence": ["internal/webapp/assets/map-layout.js:37", "internal/webapp/assets/app.js:329", "pkg/mem/query_service.go:32", "pkg/mem/web/knowledgeMapHTMLSuffix.html:117"],
+      "implemented": "Classic считает результаты и раскрывает collapsed ancestors; corpus retrieval имеет свои filters/counts. Ни один локальный canvas search не является поиском всего корпуса.",
+      "remaining": "Общий явный выбор и описание области current view/whole map/document/corpus, переход к найденной вне вида цитате с сохранением предыдущего контекста. Source picker всё ещё отдельный постраничный список."
+    },
+    {
+      "id": "NAV06", "status": "partial",
+      "interfaces": "Annotation→classic links и stable node IDs; новый annotation↔knowledge adapter в интеграции.",
+      "evidence": ["pkg/mem/web_annotation_sources.go:147", "pkg/mem/web_annotation_sources.go:231", "pkg/mem/document_annotation_knowledge.go:243", "pkg/mem/document_annotation_knowledge.go:247", "internal/webapp/assets/annotation-knowledge.js:20", "pkg/mem/web/knowledgeMapHTMLSuffix.html:254"],
+      "implemented": "Явные использования аннотации в classic перечисляются; новые graph links сохраняют связь с revision аннотации и дают обратный переход. Перенос classic node не меняет ID.",
+      "remaining": "Принять adapter и общий список всех использований произвольного passage, включая старые прямые evidence без annotation link. Существующие списки нельзя называть полным backlinks index корпуса."
+    },
+    {
+      "id": "NAV07", "status": "partial",
+      "interfaces": "Graph persistent layouts и sessionStorage selection; classic runtime state.",
+      "evidence": ["pkg/mem/graph_layout.go:98", "pkg/mem/web/knowledgeMapHTMLSuffix.html:237", "pkg/mem/web/knowledgeMapHTMLSuffix.html:265", "internal/webapp/assets/map-document.js:6"],
+      "implemented": "Graph сохраняет представление и camera, часть selection живёт в sessionStorage. Reader/выбранный classic node не составляют постоянную reading history.",
+      "remaining": "Resume после закрытия браузера: документ, physical page, selected node, revision и fallback при удалении/изменении. Не подменять это restore карты из snapshot."
+    },
+    {
+      "id": "NAV08", "status": "absent",
+      "interfaces": "Classic horizontal auto tree в integrated/legacy; graph views не относятся к этому пункту.",
+      "evidence": ["internal/webapp/assets/map-layout.js:21", "pkg/mem/web/classicMindMapWorkspaceHTML.html:140"],
+      "implemented": "Есть одна основная горизонтальная tree layout и экспорт представления.",
+      "remaining": "Три переключаемые альтернативные classic layouts с сохранением IDs/parent/order/sources и указанием выбранного вида при экспорте."
+    },
+    {
+      "id": "NAV09", "status": "partial",
+      "interfaces": "Graph filters/representation state; classic status/evidence badges отдельно.",
+      "evidence": ["pkg/mem/graph_layout.go:79", "pkg/mem/web/knowledgeMapHTMLSuffix.html:117", "pkg/mem/web/knowledgeMapHTMLPrefix.html:18", "pkg/mem/web/knowledgeMapHTMLPrefix.html:20"],
+      "implemented": "Filters по kind/relation/status/evidence, счётчики и сохранение состояния уже есть. Несоответствующие objects в canvas получают dim, а scope-excluded скрываются.",
+      "remaining": "Согласовать acceptance «исчезают»: сейчас stale после current filter может оставаться полупрозрачным контекстом (opacity .08/.16). Для строгого hide добавить явный режим, сохранить общий счётчик и проверить reset. Это расхождение критерия и UX, не доказанная порча данных."
+    },
+    {
+      "id": "NAV10", "status": "absent",
+      "interfaces": "Graph document-tree/comparison-matrix являются views; classic outline/Markdown доступны на экспорт.",
+      "evidence": ["pkg/mem/web/knowledgeMapHTMLSuffix.html:68", "pkg/mem/web/knowledgeMapHTMLSuffix.html:84", "pkg/mem/mind_map_export.go:290"],
+      "implemented": "Существуют читаемые структурные представления и инспектор выбранного объекта, но не editable table/outline.",
+      "remaining": "Редактирование общих объектов прямо в таблице/outline с revision guards; сортировка представления отдельно от явного изменения parent order."
+    },
+    {
+      "id": "EXP01", "status": "delivered",
+      "interfaces": "Classic core/CLI/UI: 8 форматов; graph portable/export jobs и selection reports.",
+      "evidence": ["pkg/mem/mind_map_export.go:32", "pkg/mem/mind_map_export.go:135", "pkg/mem/graph_portable_export.go:28", "pkg/mem/graph_selection_export.go:62", "pkg/mem/mind_map_export_test.go:19", "pkg/mem/graph_portable_export_test.go:15"],
+      "implemented": "Classic HTML/SVG/PNG/JSON/OPML/Markdown/Mermaid/Obsidian; graph Markdown/outline/OPML/GraphML/GEXF/Mermaid/Obsidian и scoped reports. Полный export строится по данным, а не видимости DOM.",
+      "remaining": "Прогнать имеющиеся parser/smoke fixtures для релизной приёмки. Совместимость импорта внешними приложениями не доказана наличием экспортера; см. EXP02/EXP04."
+    },
+    {
+      "id": "EXP02", "status": "partial",
+      "interfaces": "Integrated classic native JSON preview/apply и Store API; graph map importer отсутствует.",
+      "evidence": ["pkg/mem/mind_map_import.go:106", "pkg/mem/mind_map_import.go:207", "pkg/mem/mind_map_import.go:283", "internal/webapp/maps_import.go:11", "pkg/mem/mind_map_import_test.go:35"],
+      "implemented": "Строгий собственный JSON, limits/preview digest, новые IDs, привязки evidence с честным current/stale, исходник сохраняется. История исходной карты намеренно не переносится; external_file отклоняется.",
+      "remaining": "Это clone round-trip, а acceptance требует сохранения IDs/evidence/history. Нужен отдельный режим архивного восстановления с явной политикой коллизий. OPML, Markdown outline, FreeMind, Xmind imports не реализованы; перечислять потери до применения."
+    },
+    {
+      "id": "EXP03", "status": "absent",
+      "interfaces": "Ни classic, ни graph не имеют JSON Canvas adapter.",
+      "evidence": ["pkg/mem/mind_map_export.go:32", "pkg/mem/graph_portable_export.go:28", "pkg/mem/graph_layout.go:65"],
+      "implemented": "Graph positions и refs дают внутренние данные для будущего adapter; HTML canvas/PNG renderer не является JSON Canvas.",
+      "remaining": "Версионный import/export text/file/link/group/edge, координаты и labels, preflight отчёт неподдержанных полей; file/link не должны порождать выдуманное evidence или чтение произвольных путей."
+    },
+    {
+      "id": "EXP04", "status": "partial",
+      "interfaces": "Classic и graph Obsidian Markdown export.",
+      "evidence": ["pkg/mem/mind_map_export.go:290", "pkg/mem/graph_portable_export.go:411", "pkg/mem/graph_portable_export.go:599"],
+      "implemented": "Один .obsidian.md с block IDs, структурой и provenance; в classic включается Mermaid.",
+      "remaining": "Linked vault/package отдельных объектов, устойчивые имена и разрешимые связи, manifest managed files и безопасное повторное обновление без удаления чужих заметок."
+    },
+    {
+      "id": "EXP05", "status": "delivered",
+      "interfaces": "Graph learning route exports: Anki TSV, Markdown, CSV. Classic study имеет отдельную модель.",
+      "evidence": ["pkg/mem/graph_learning_export.go:76", "pkg/mem/graph_learning_export.go:132", "pkg/mem/graph_learning_route.go:134", "pkg/mem/graph_learning_route.go:144", "pkg/mem/graph_learning_export_test.go:11"],
+      "implemented": "Stable node ID встроен в Anki Front и tags, citations сохраняются; маршрут допускает active/current, исключения содержат причину. Route/manifest digest перепроверяется.",
+      "remaining": "Обязательного нового экспортера не требуется. Проверка импорта/повторного обновления в настоящем Anki здесь не проводилась; наличие SRS и Anki не следует маркировать отсутствием."
+    },
+    {
+      "id": "EXP06", "status": "absent",
+      "interfaces": "Есть verified PDF reader/page image, JSON и Markdown transfer аннотаций; PDF writer отсутствует.",
+      "evidence": ["pkg/mem/document_annotation_regions.go:26", "pkg/mem/document_annotations_transfer.go:309", "pkg/mem/web_map_document.go:189"],
+      "implemented": "Координаты и комментарии сохранены, оригинал открывается через проверенный snapshot.",
+      "remaining": "Создавать отдельный annotated PDF/report с текстовыми/областными annotations, сохранять hash оригинала и проверить страницы/области в двух согласованных viewers."
+    },
+    {
+      "id": "EXP07", "status": "absent",
+      "interfaces": "Проверены ingestion/core/CLI/HTTP/UI; библиографического adapter не найдено.",
+      "evidence": ["pkg/mem/graph.go:104", "pkg/mem/mind_map_sources.go:31"],
+      "implemented": "Source identity и citation anchors есть, но они не являются Zotero item ID или библиографической записью.",
+      "remaining": "Тип bibliographic item, Zotero/BibTeX/RIS parser, idempotency внешнего ID, author/year/DOI и связь annotation target; удаление карты должно быть независимо от внешнего item."
+    },
+    {
+      "id": "EXP08", "status": "partial",
+      "interfaces": "Graph #node, integrated #workspace/#annotation/#knowledge_node; classic node navigation преимущественно внутрипроцессная.",
+      "evidence": ["internal/webapp/assets/map-library.js:86", "internal/webapp/graph.go:127", "internal/webapp/assets/app.js:35", "pkg/mem/web/knowledgeMapHTMLSuffix.html:254"],
+      "implemented": "Stable IDs и часть deep links; доступ к workspace проверяется сервером, новый bridge открывает связанный объект после переименования.",
+      "remaining": "Единый документированный URI-контракт classic node/graph claim/annotation с permission-safe resolve и fallback. Принять rename и чужой workspace без раскрытия title/excerpt."
+    },
+    {
+      "id": "EXP09", "status": "empirical",
+      "interfaces": "Whole portable database API/UI и отдельный deployment backup; не map JSON export.",
+      "evidence": ["pkg/mem/portable_database.go:77", "pkg/mem/portable_database.go:227", "pkg/mem/portable_database.go:453", "pkg/mem/portable_database.go:558", "pkg/mem/portable_database_test.go:13", "pkg/mem/portable_database_test.go:78"],
+      "implemented": "Согласованный SQLite snapshot, сохранение истории/логических anchors, перенос физических файлов через source_locations, hash/size/integrity checks, только новый destination. Лимит пакета 2 ГиБ; активные фоновые jobs при restore отменяются.",
+      "remaining": "Комплексная fixture с graph/classic, attachments, annotation regions/lineage и learning attempts должна сверить counts и повторные открытия после restore. Имеющийся тест покрывает историю карты и relocated PDF, но не доказывает весь acceptance."
+    },
+    {
+      "id": "EXP10", "status": "partial",
+      "interfaces": "Integrated /api/v1 + session/CSRF/workspace checks, отдельный graph live /api и CLI families.",
+      "evidence": ["internal/webapp/server.go:151", "internal/webapp/maps.go:12", "pkg/mem/graph_live.go:59", "cmd/mem/mindmap.go:18", "cmd/mem/commands_map.go:16"],
+      "implemented": "Рабочие HTTP handlers, строгие DTO, revision/digest errors, CLI и сценарные тесты есть. Prefix /api/v1 уже существует и не должен описываться как отсутствие любой версии.",
+      "remaining": "Полный внешний contract/schema и контрактный клиент create/read/update/export; явная политика неизвестных версий, совместимости graph/classic endpoints и документированные ошибки без side effects."
+    }
+  ],
+  "next_slices": [
+    {
+      "name": "Сохраняемый рабочий набор чтения",
+      "ids": ["SRC10", "NAV07", "EDT10", "SRC02"],
+      "scope": "Один shared reader-session store: несколько открытых документов, physical page/позиция, выбранный classic/graph объект и revision pins; restore после restart, back/forward и понятный stale/deleted fallback.",
+      "acceptance": "Три документа переживают закрытие браузера; изменение одного источника не подменяет старую цитату; переход к карте и обратно восстанавливает позицию."
+    },
+    {
+      "name": "Полный native map archive round-trip как отдельный режим",
+      "ids": ["EXP02", "EXP08"],
+      "scope": "Сохранить текущий clone importer. Добавить архивный JSON с IDs/evidence/history и versioned preview; восстанавливать в новую область только при отсутствии коллизий, иначе отклонять без перезаписи. Внешние OPML/Markdown/FreeMind/Xmind adapters оставить отдельными последующими этапами.",
+      "acceptance": "Export→restore сохраняет IDs, anchors и history; коллизия, повреждённый payload и stale preview атомарно отклоняются; исходная карта не изменена."
+    },
+    {
+      "name": "Редактируемый outline и безопасное чтение заметок",
+      "ids": ["NAV10", "EDT02", "EDT03"],
+      "scope": "Outline поверх существующих classic mutations, отдельные view sorting и parent order, безопасный Markdown preview ограниченного набора элементов, полный keyboard path для outline и dialogs.",
+      "acceptance": "Одна правка видна в outline и карте; сортировка не меняет структуру, undo/redo сохраняет anchors; списки и внутренние ссылки читаются, HTML не исполняется, фокус предсказуем."
+    }
+  ]
+}

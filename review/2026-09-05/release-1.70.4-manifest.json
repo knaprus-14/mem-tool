@@ -1,0 +1,20 @@
+[
+  {
+    "Name": "mem.exe",
+    "Bytes": 23915520,
+    "SHA256": "5A0069388D68451C5B5681B3A20CEE63E6FDF7B542D88C4EBC8517C3BF7D1CCF",
+    "Path": "C:\\Users\\ZMII\\AppData\\Local\\Temp\\mem-tool-windows-build-286a8b0dffc740f59d17d7b2b16e5d19\\mem.exe"
+  },
+  {
+    "Name": "mem-index.exe",
+    "Bytes": 16538624,
+    "SHA256": "2E5ACE00045C201EEFCB7363EDC3212BDF55F0A6F62E929F31F0DE96B6818482",
+    "Path": "C:\\Users\\ZMII\\AppData\\Local\\Temp\\mem-tool-windows-build-286a8b0dffc740f59d17d7b2b16e5d19\\mem-index.exe"
+  },
+  {
+    "Name": "mem-bot.exe",
+    "Bytes": 16571392,
+    "SHA256": "091D8D4F64CAA9B18BED84D08D89155BEE0961E314A07D28C2FA52E2DF8243D9",
+    "Path": "C:\\Users\\ZMII\\AppData\\Local\\Temp\\mem-tool-windows-build-286a8b0dffc740f59d17d7b2b16e5d19\\mem-bot.exe"
+  }
+]

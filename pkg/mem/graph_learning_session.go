@@ -1,5 +1,7 @@
 package mem
 
+import "github.com/knaprus-14/mem-tool/internal/applog"
+
 import (
 	"database/sql"
 	"encoding/json"
@@ -229,7 +231,9 @@ type KnowledgeLearningHistory struct {
 	Items          []KnowledgeLearningHistoryItem `json:"items"`
 }
 
-func (s *Store) StartKnowledgeLearningSession(request KnowledgeLearningSessionStartRequest) (KnowledgeLearningSession, error) {
+func (s *Store) StartKnowledgeLearningSession(request KnowledgeLearningSessionStartRequest) (applogResult0 KnowledgeLearningSession, applogResult1 error) {
+	defer applog.Track("pkg.mem.Store.StartKnowledgeLearningSession")(&applogResult1)
+
 	return s.startKnowledgeLearningSessionAt(request, time.Now().UTC())
 }
 
@@ -401,7 +405,9 @@ func verifyKnowledgeLearningRouteRelationsTx(tx *sql.Tx, route KnowledgeLearning
 	return nil
 }
 
-func (s *Store) GradeKnowledgeLearningItem(request KnowledgeLearningGradeRequest) (KnowledgeLearningGradeResult, error) {
+func (s *Store) GradeKnowledgeLearningItem(request KnowledgeLearningGradeRequest) (applogResult0 KnowledgeLearningGradeResult, applogResult1 error) {
+	defer applog.Track("pkg.mem.Store.GradeKnowledgeLearningItem")(&applogResult1)
+
 	return s.gradeKnowledgeLearningItemAt(request, time.Now().UTC())
 }
 
@@ -543,7 +549,9 @@ last_attempt_id=excluded.last_attempt_id, updated=excluded.updated`, next.NodeID
 	return KnowledgeLearningGradeResult{Attempt: KnowledgeLearningAttempt{ID: attemptID, SessionID: request.SessionID, NodeID: request.NodeID, Ordinal: ordinal, Grade: request.Grade, ContentDigest: contentDigest, EvidenceDigest: evidenceDigest, PreviousState: previousPointer, NextState: next, Created: created}, Completed: completed, Total: total}, nil
 }
 
-func (s *Store) BuildKnowledgeLearningHistory(request KnowledgeLearningHistoryRequest) (KnowledgeLearningHistory, error) {
+func (s *Store) BuildKnowledgeLearningHistory(request KnowledgeLearningHistoryRequest) (applogResult0 KnowledgeLearningHistory, applogResult1 error) {
+	defer applog.Track("pkg.mem.Store.BuildKnowledgeLearningHistory")(&applogResult1)
+
 	return s.buildKnowledgeLearningHistoryAt(request, time.Now().UTC())
 }
 

@@ -1,0 +1,45 @@
+mem-tool v1.70.4
+(c) 2026 Кнап Руслан Юрьевич
+Векторная база знаний для работы с Claude
+mem-index v1.70.4
+(c) 2026 Кнап Руслан Юрьевич
+Векторная база знаний для работы с Claude
+mem-bot v1.70.4
+(c) 2026 Кнап Руслан Юрьевич
+Векторная база знаний для работы с Claude
+[deploy] mem.exe 5A0069388D68451C5B5681B3A20CEE63E6FDF7B542D88C4EBC8517C3BF7D1CCF
+[deploy] mem-index.exe 2E5ACE00045C201EEFCB7363EDC3212BDF55F0A6F62E929F31F0DE96B6818482
+[deploy] mem-bot.exe 091D8D4F64CAA9B18BED84D08D89155BEE0961E314A07D28C2FA52E2DF8243D9
+[deploy] Smoke tests...
+mem-tool v1.70.4
+(c) 2026 Кнап Руслан Юрьевич
+Векторная база знаний для работы с Claude
+mem-index v1.70.4
+(c) 2026 Кнап Руслан Юрьевич
+Векторная база знаний для работы с Claude
+mem-bot v1.70.4
+(c) 2026 Кнап Руслан Юрьевич
+Векторная база знаний для работы с Claude
+[deploy] Unified version: 1.70.4
+mem-tool v1.70.4
+(c) 2026 Кнап Руслан Юрьевич
+Векторная база знаний для работы с Claude
+mem-index v1.70.4
+(c) 2026 Кнап Руслан Юрьевич
+Векторная база знаний для работы с Claude
+mem-bot v1.70.4
+(c) 2026 Кнап Руслан Юрьевич
+Векторная база знаний для работы с Claude
+PASS: success; all three files verified; unrelated file preserved.
+mem-tool v1.70.4
+(c) 2026 Кнап Руслан Юрьевич
+Векторная база знаний для работы с Claude
+mem-index v1.70.4
+(c) 2026 Кнап Руслан Юрьевич
+Векторная база знаний для работы с Claude
+mem-bot v1.70.4
+(c) 2026 Кнап Руслан Юрьевич
+Векторная база знаний для работы с Claude
+[deploy] mem.exe 5A0069388D68451C5B5681B3A20CEE63E6FDF7B542D88C4EBC8517C3BF7D1CCF
+Deployment failed; restoring the previous binary set. The process cannot access the file 'C:\Users\ZMII\AppData\Local\Temp\mem-install-test-467e305508644e86aa6f2a2de95d0fe7\locked second destination\target with spaces [literal]\mem-index.exe' because it is being used by another process.
+PASS: locked second destination; all three files verified; unrelated file preserved.

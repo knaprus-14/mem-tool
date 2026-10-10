@@ -1,0 +1,62 @@
+package webapp
+
+import (
+	"context"
+	"encoding/json"
+	"os"
+	"path/filepath"
+	"testing"
+
+	"github.com/knaprus-14/mem-tool/internal/workspace"
+	"github.com/knaprus-14/mem-tool/pkg/mem"
+)
+
+func TestReviewGraphSessionsReleasedOnLogout(t *testing.T) {
+	a := testApp(t, true)
+	t.Cleanup(a.closeGraphs)
+	base, err := a.manager.Create(context.Background(), workspace.Actor{ID:"local"}, "test", "")
+	if err != nil { t.Fatal(err) }
+	c := &client{app:a}
+	for i := 1; i <= 9; i++ {
+		c.session(t)
+		w := c.call("GET", "/graph/"+base.ID+"/", nil)
+		if w.Code != 200 { t.Fatalf("session %d: graph returned %d; graph handles=%d, live sessions=%d: %s", i, w.Code, len(a.graphs.items), len(a.sessions), w.Body) }
+		if w = c.call("POST", "/api/v1/logout", map[string]any{}); w.Code != 200 { t.Fatal(w.Code,w.Body) }
+	}
+}
+
+func TestReviewMissingWorkspaceDoesNotBlockOtherWorkspace(t *testing.T) {
+	a := testApp(t, true)
+	actor := workspace.Actor{ID:"local"}
+	missing, err := a.manager.Create(context.Background(), actor, "external", "")
+	if err != nil { t.Fatal(err) }
+	healthy, err := a.manager.Create(context.Background(), actor, "healthy", "")
+	if err != nil { t.Fatal(err) }
+	// All paths belong to testApp's isolated t.TempDir; no user data is moved.
+	if err = os.Rename(missing.Root, missing.Root+".offline"); err != nil { t.Fatal(err) }
+	c := &client{app:a}; c.session(t)
+	path := "/api/v1/workspaces/"+healthy.ID
+	if w := c.call("GET", path+"/library", nil); w.Code != 200 { t.Fatal("healthy base read:", w.Code, w.Body) }
+	w := c.call("GET", path+"/storage", nil)
+	if w.Code != 200 { t.Fatalf("healthy base quota fails because another base disappeared: %d %s", w.Code,w.Body) }
+}
+
+func TestReviewEvidenceRemainsReadableAtStorageLimit(t *testing.T) {
+	a := testApp(t, true)
+	base, err := a.manager.Create(context.Background(), workspace.Actor{ID:"local"}, "evidence", "")
+	if err != nil { t.Fatal(err) }
+	s, err := mem.NewStore(filepath.Join(base.Root,".mem"))
+	if err != nil { t.Fatal(err) }; defer s.Close()
+	if _, err = s.Add("needle useful evidence", "note", nil, "legacy", []float32{1,0}, true); err != nil { t.Fatal(err) }
+	c := &client{app:a}; c.session(t)
+	path := "/api/v1/workspaces/"+base.ID+"/"
+	w := c.call("POST",path+"search",mem.QueryRequest{Query:"needle",Mode:"text"})
+	var result mem.QueryResult
+	if w.Code != 200 || json.Unmarshal(w.Body.Bytes(),&result) != nil || len(result.Hits)!=1 { t.Fatal(w.Code,w.Body) }
+	evidence := map[string]any{"id":result.Hits[0].ID,"pin":result.Hits[0].Pin}
+	if w = c.call("POST",path+"evidence",evidence); w.Code != 200 { t.Fatal(w.Code,w.Body) }
+	a.cfg.MaxWorkspaceBytes=1; a.cfg.MaxUserBytes=1
+	if w = c.call("POST",path+"search",mem.QueryRequest{Query:"needle",Mode:"text"}); w.Code != 200 { t.Fatal(w.Code,w.Body) }
+	w = c.call("POST",path+"evidence",evidence)
+	if w.Code != 200 { t.Fatalf("search still succeeds but opening its valid evidence fails at quota: %d %s",w.Code,w.Body) }
+}

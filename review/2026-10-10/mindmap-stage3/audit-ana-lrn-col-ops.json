@@ -1,0 +1,2385 @@
+{
+  "meta": {
+    "schema_version": 1,
+    "audit_date": "2026-10-10",
+    "scope": [
+      "ANA",
+      "LRN",
+      "COL",
+      "OPS"
+    ],
+    "baseline": "review/2026-10-09/mindmap-research/features.json",
+    "method": "Read-only аудит текущего working tree: чтение исходников, API/DTO, UI и существующих регрессионных тестов. В этом аудите Go/JS tests, benchmark, сервер, браузер и внешние модели не запускались.",
+    "status_definitions": {
+      "delivered": "Механизм, необходимый для acceptance, реализован в указанном слое; это оценка исходников, а не утверждение о выполненной сейчас функциональной приёмке.",
+      "partial": "Существенная основа реализована, но обнаружен конкретный незакрытый элемент acceptance или его требуемого измерения.",
+      "absent": "Целевого пользовательского сценария в исследованных моделях/API/UI не найдено; соседние возможности не засчитаны за него.",
+      "empirical": "Результат определяется исследованием с участниками/наблюдаемой приёмкой, а не наличием кода; подходящего законченного исследования не подтверждено."
+    },
+    "boundaries": [
+      "Исходный acceptance и назначенный milestone каждого пункта скопированы без изменения; старое state не определяет новый status.",
+      "Production, tests, docs, данные и настройки этим аудитом не изменены. Создан только этот JSON.",
+      "Ссылки на тесты означают прочитанные существующие проверки; свежего PASS для них этот файл не заявляет.",
+      "Предыдущие отчёты и browser smoke обозначены как ранее документированное наблюдение, не повторённое в этом аудите.",
+      "Dirty working tree общий с другими агентами. Хеши файлов фиксируют прочитанную версию на момент формирования реестра; номера строк могут сдвинуться в последующих изменениях.",
+      "Absence ограничено pkg/mem, internal/webapp, internal/workspace, cmd/mem и изученными локальными отчётами; это не поиск внешних веток или сервисов.",
+      "Рекомендуется постепенное объединение classic/graph через идентификаторы и adapters; переписывание моделей не требуется."
+    ],
+    "baseline_sha256": "f4b4b2827333406b224e6aac0b56695088d70842d6787e46ef81589da690f75e",
+    "evidence_files": {
+      "build/mindmap-alpha1/verification/browser-smoke.md": {
+        "sha256": "aa78059daa445af0de7486d245b980ce65608ac2cfce46b288fe6cb04870996d",
+        "lines": 36
+      },
+      "docs/GRAPH_QUALITY_STAGE2_RU.md": {
+        "sha256": "f645be3eff24966c489a2c5e8035f36e5e57ef20b3b4ad4d8f543e5c2d6fc6a3",
+        "lines": 137
+      },
+      "docs/MINDMAP_STAGE3_RU.md": {
+        "sha256": "2446324825d2c462cfa0256d04e321a0f850b3968cf6abff89c6056211a16c96",
+        "lines": 84
+      },
+      "internal/applog/http.go": {
+        "sha256": "0f7528065ab2b759be68a3632808a1e6d1fc2a9b938fb265068d07f99f0d6ac1",
+        "lines": 139
+      },
+      "internal/applog/log_test.go": {
+        "sha256": "7a5dc97e2c9b119a66ce35bcfbf2f49f14620d76167227eef98688c2b3289f4e",
+        "lines": 301
+      },
+      "internal/webapp/annotation_reanchor_test.cjs": {
+        "sha256": "ace64ee4a4fe7757d360bd0666e4b73b06c48ae325964a61b00fc5d3090ac97c",
+        "lines": 76
+      },
+      "internal/webapp/annotations_test.go": {
+        "sha256": "d74f32eb71b71379b51a97d97c0e98e3011a0afb31be26ad824b6fdee7e3d4c8",
+        "lines": 292
+      },
+      "internal/webapp/assets/map-workbench.js": {
+        "sha256": "19b12134e502f2c3447d726099de70c41e3b8e0e53ddf21fb23ced9bba115859",
+        "lines": 74
+      },
+      "internal/webapp/document_annotations_test.cjs": {
+        "sha256": "456b81dd4f1eb6eb97983504a731ae7b7784f9f64c8f94b0c3e4ecfeffbe811e",
+        "lines": 248
+      },
+      "internal/webapp/graph_documents_assets_test.go": {
+        "sha256": "784ca03f76f5022564ea8a0430ed09708fcbc119fb26716da7cc4c3d36b8b58a",
+        "lines": 32
+      },
+      "internal/webapp/graph_lifecycle_test.go": {
+        "sha256": "b53ffc2712721a9e10cd10cfbb7f71eb2c126b3e854f9790da667f02941a907f",
+        "lines": 179
+      },
+      "internal/webapp/graph.go": {
+        "sha256": "1c2a6316522f32b6209d3c71b8f667eb402d02cc685f5235df1979562a0e6ebc",
+        "lines": 183
+      },
+      "internal/webapp/jobs_test.go": {
+        "sha256": "58ac8c3ee9cf086070ae5e06a8f39d48d517ff42d7eacd989e924eafa6a51a80",
+        "lines": 223
+      },
+      "internal/webapp/maintenance.go": {
+        "sha256": "f3fb662f36c9abebd08fbcfad914cb8177e9319cb2d42d55e54a07e5d1af9d26",
+        "lines": 207
+      },
+      "internal/webapp/map_study_test.cjs": {
+        "sha256": "c718183b31529f8c627c3d466912c310a561274fabb7323df5a38681b4be7c1d",
+        "lines": 158
+      },
+      "internal/webapp/maps_snapshot_test.go": {
+        "sha256": "641757f6dfc7907e162734e503ed439c3e546e02d3fdea942a2ef1dde1607cec",
+        "lines": 101
+      },
+      "internal/webapp/maps_study_test.go": {
+        "sha256": "f1944861887e880f3580b96b02f24e63d5c0c812147f45f1a1649b4570a04c4b",
+        "lines": 77
+      },
+      "internal/webapp/server_test.go": {
+        "sha256": "6240aaac01183a54e5144cad37550e393d0a03741f11131974aa203f571c6deb",
+        "lines": 252
+      },
+      "internal/webapp/server.go": {
+        "sha256": "4108a3b0e5d9ace92536ff4daf8346f6b07097a6707f7c833592adcdca32a3b0",
+        "lines": 552
+      },
+      "internal/webapp/storage_access_test.go": {
+        "sha256": "2670b822a39cb11b15e98ce60322f54116e690a712f0a11156632d01f50ee89c",
+        "lines": 129
+      },
+      "internal/webapp/storage.go": {
+        "sha256": "d0bc874c4b9f0df55027a2beba70afe0463feace248c51dd1631148ba27921a3",
+        "lines": 89
+      },
+      "internal/workspace/manager_test.go": {
+        "sha256": "37a5374fa4896f0fe11267b5f6228e54e4bdce5325ffc2bef7e7a28709f94c7b",
+        "lines": 197
+      },
+      "internal/workspace/manager.go": {
+        "sha256": "906cb8ece8d48b9442c5d6b01b1dc73296f6f5c281dfb543132b6331b57496c2",
+        "lines": 275
+      },
+      "pkg/ingest/pdf_preview.go": {
+        "sha256": "6897f484f526cfe86a7844727c46adea90288cc2dd203225399b451a4dea3fb9",
+        "lines": 82
+      },
+      "pkg/mem/document_annotation_reanchor.go": {
+        "sha256": "0178c708aa0f91ab90f8c04e8f809912cbe088581ea27020debb6c7ff48a3fd4",
+        "lines": 450
+      },
+      "pkg/mem/document_annotations.go": {
+        "sha256": "6544ddf8bc435dd4759c9bdb33af3da82db5233cd34df0d39c137e34bc3ac2b8",
+        "lines": 724
+      },
+      "pkg/mem/graph_analyze_run_test.go": {
+        "sha256": "06793c29bf0ae8c97f1b9ce56b7b6e230bfd8c7cb6ff45c0c83855b5756b2129",
+        "lines": 296
+      },
+      "pkg/mem/graph_analyze_run.go": {
+        "sha256": "0229c56c3f6232a9ba872b1e6291038029d39b7d1e276db8e3134ac1807b76b6",
+        "lines": 641
+      },
+      "pkg/mem/graph_analyze_test.go": {
+        "sha256": "2bc798e32b47713afe449d750f0ba2d4bd43ffff4c436f1c90487079aaef9287",
+        "lines": 466
+      },
+      "pkg/mem/graph_analyze.go": {
+        "sha256": "1f3673c5475cc85ab54743a9c722d71b9c3453561bda2ac75d5175f10443f25a",
+        "lines": 457
+      },
+      "pkg/mem/graph_coverage_test.go": {
+        "sha256": "88f321b430f7d3e69c172c3f5ebac0b20b56f8499db46f6ee18c1d7ac56554e8",
+        "lines": 144
+      },
+      "pkg/mem/graph_coverage.go": {
+        "sha256": "e378543ee21593da092f3ae26fe8ca61688fc160a53f10320d5d33eeffabf6ed",
+        "lines": 633
+      },
+      "pkg/mem/graph_document_revision_test.go": {
+        "sha256": "c724685d9705dbc02c5f2c69314bd9a2fe482aa1435952848f3d775dc004068b",
+        "lines": 354
+      },
+      "pkg/mem/graph_edit_test.go": {
+        "sha256": "02ef6fa8590e6bda9058df3c264fbd0dbc570d26608d55c516bc54d7559848ec",
+        "lines": 287
+      },
+      "pkg/mem/graph_edit.go": {
+        "sha256": "b7d46f8045a65de6bcc3fa8fb2fce9f3a840206c053f654fc1777fc206d35523",
+        "lines": 614
+      },
+      "pkg/mem/graph_export_jobs.go": {
+        "sha256": "68fbe1c03a50631ee46d2a1f4a76822acdb379c1a693f9bc839d486ad75dce72",
+        "lines": 503
+      },
+      "pkg/mem/graph_labeled_eval_test.go": {
+        "sha256": "ad798d92b1aadc7d493a1437a8c07c1994a05dfd31e74971b66acb155791565f",
+        "lines": 194
+      },
+      "pkg/mem/graph_labeled_eval.go": {
+        "sha256": "37dce2ffe893c62765ebcdc62f20cd4d82b5204afde31e93b49e26ec87d89cc0",
+        "lines": 924
+      },
+      "pkg/mem/graph_labeled_qualifiers.go": {
+        "sha256": "ad1d7b1607bb608fb06d3cc4b05003883ab06fcf2a7787aee3fe48445383889d",
+        "lines": 74
+      },
+      "pkg/mem/graph_labeled_requirements_test.go": {
+        "sha256": "470367ad32949988a99ad3a6db3ef10403bd968385d8f49aea9c57c51c5eed98",
+        "lines": 110
+      },
+      "pkg/mem/graph_layout.go": {
+        "sha256": "933bb25683d89ab635fe67d214ae082dae8fd8070b99a4439c5fcb4270a0d908",
+        "lines": 478
+      },
+      "pkg/mem/graph_learning_evidence_test.go": {
+        "sha256": "1f53e761a19484e6607de74af40688e0ea678035a6b69081434608c0294cedc7",
+        "lines": 155
+      },
+      "pkg/mem/graph_learning_evidence.go": {
+        "sha256": "473ecff9b5284318111d668629b24791ed133b6e5dc89eb039b5b1f7b4e31f0d",
+        "lines": 57
+      },
+      "pkg/mem/graph_learning_route_test.go": {
+        "sha256": "c6f65fa6d6fe708d35ad270a354bc4e4b79467cfa44dedd966e6fd267acfb87b",
+        "lines": 147
+      },
+      "pkg/mem/graph_learning_route.go": {
+        "sha256": "96be2b85bfca4c5d47e1732e771e77b70cbb26c3d5bc0b43f6649c8b21d1c675",
+        "lines": 390
+      },
+      "pkg/mem/graph_learning_session_test.go": {
+        "sha256": "8d7db661fd7fb7ff751145fad77531a360edf9bfeb3c18868122a92f80232e1c",
+        "lines": 175
+      },
+      "pkg/mem/graph_learning_session.go": {
+        "sha256": "43ecf737c9a8c65752863e28f6b69f61114c4693b7a619911bc9dc35ac424b35",
+        "lines": 720
+      },
+      "pkg/mem/graph_learning_test.go": {
+        "sha256": "54886f444f6f0ff33642990ca9e4d808ec5bb67df588187e9c1c1ab1ae574b78",
+        "lines": 145
+      },
+      "pkg/mem/graph_learning.go": {
+        "sha256": "b7fdde5dab0ee933891d55cacc2279d2635fb16aea2d581bca68410868b80620",
+        "lines": 612
+      },
+      "pkg/mem/graph_live_benchmark_test.go": {
+        "sha256": "dedb793d56c3741647f2291ccd254f4372aec58b3d23aa122cc2866e430c0b62",
+        "lines": 167
+      },
+      "pkg/mem/graph_performance_test.go": {
+        "sha256": "9c0a28b5e37be24430cb83a2acde31be468a1c877b553a5ef88efe4065dde752",
+        "lines": 187
+      },
+      "pkg/mem/graph_portable_export_test.go": {
+        "sha256": "44b33d567d9825da73bf1074f47440325f9ea5374e579e53035b9de2be9a0d97",
+        "lines": 194
+      },
+      "pkg/mem/graph_portable_export.go": {
+        "sha256": "cf2a772965d7e6e9565de388a69d84a83f497e5a1be3e6e03ae9901c229b055d",
+        "lines": 734
+      },
+      "pkg/mem/graph_profile_test.go": {
+        "sha256": "38d0fcde79d83abdfb93fbc17966a09f0b09ca0f13211308e5d10198076f6f2f",
+        "lines": 113
+      },
+      "pkg/mem/graph_profile.go": {
+        "sha256": "d43cbbcea433a8f93bdf46b39336742fe8720940ed3b013b170dea26cfbd6da6",
+        "lines": 365
+      },
+      "pkg/mem/graph_quality_eval.go": {
+        "sha256": "7789c141c334b4e205964c8a7acb04ecb29e8913449edbf353eb4a768eef26fc",
+        "lines": 244
+      },
+      "pkg/mem/graph_requirement_test.go": {
+        "sha256": "19873d7cc0c0ead4b4d5e397337c11f24a02d5f49a2b1eef2539e734133f4e99",
+        "lines": 128
+      },
+      "pkg/mem/graph_requirement.go": {
+        "sha256": "4097e45dea85c67eed654f71d18686b71b3efd5baca3489587990f41cf378e61",
+        "lines": 115
+      },
+      "pkg/mem/graph_review_pin_test.go": {
+        "sha256": "4eea5b775a159e207ecdc708a00600155983eb2d4584b6cfffefc0cf3090dba9",
+        "lines": 340
+      },
+      "pkg/mem/graph_review_pin.go": {
+        "sha256": "73d6aac214a69d0842870a6f375c5cdd58412135acfcde8baaba8838e2205ced",
+        "lines": 78
+      },
+      "pkg/mem/graph_review.go": {
+        "sha256": "9048874dab60a10aa7d2d118799240c5d6dff2d54364289de92ebb6658c4720c",
+        "lines": 910
+      },
+      "pkg/mem/graph_selection_analysis_test.go": {
+        "sha256": "cf9d230502e6935c03ce76ccdf2654e67353856ad16b3033feebb747cb3ac837",
+        "lines": 95
+      },
+      "pkg/mem/graph_selection_analysis.go": {
+        "sha256": "d5018e0d8e9c542a5f04cedd40a7ae48f26ab61bb9ef2e1321b1a60057b50a46",
+        "lines": 645
+      },
+      "pkg/mem/graph_selection_export_test.go": {
+        "sha256": "64529ce1b5f4e1b77e3b24ec0f46e2f1387fec10120dcb8bcb57ef28076fb4b5",
+        "lines": 100
+      },
+      "pkg/mem/graph_selection_export.go": {
+        "sha256": "e854da6403dfd631962139f9fe601e71fcae9eb80b70ed2cb100c183817ec8f8",
+        "lines": 515
+      },
+      "pkg/mem/graph_source_preview_test.go": {
+        "sha256": "1412ab761677388f2745d1e0654b185194ee728c2f1c8d8f12119ae6c5481fb0",
+        "lines": 92
+      },
+      "pkg/mem/graph_source_preview.go": {
+        "sha256": "ffd484d0b14f4c21d8b81c2238daad5d50738858a8f595b0d2b9b7e1bf972857",
+        "lines": 44
+      },
+      "pkg/mem/graph_view_regression_test.go": {
+        "sha256": "03c88b363c177b8e9b9ec0f6ac92d37becaa221f40ad5e142dd0bbd74004a73f",
+        "lines": 179
+      },
+      "pkg/mem/graph_view_test.go": {
+        "sha256": "5334c915db5ff32a01baa8ebc23a228b7d611a860df6c683cd9a7cde5251ccf8",
+        "lines": 249
+      },
+      "pkg/mem/graph.go": {
+        "sha256": "164c78b2ab24e89114193d0becef8907fdd529f6155ec60c766f7a9823d7436c",
+        "lines": 1231
+      },
+      "pkg/mem/import_manifest_test.go": {
+        "sha256": "5fd1f454290408844065ae172745545a7ae91141a1299327ce7826c316b05d02",
+        "lines": 136
+      },
+      "pkg/mem/mind_map_workbench.go": {
+        "sha256": "fbabbe6832910577445a020607935371b95f2c8640df34117e50cf5542c63216",
+        "lines": 683
+      },
+      "pkg/mem/web_graph_lifecycle_test.go": {
+        "sha256": "b5f9af9685c02af0ebcc13edd06ff96a001fd89618e9e0428c73b98c5973d5a6",
+        "lines": 164
+      },
+      "pkg/mem/web_graph.go": {
+        "sha256": "ddb94ef3aa1935b6541c1b45373c4b7bbddd6f2dcd19c0f1050f8619a84d20d7",
+        "lines": 152
+      },
+      "pkg/mem/web_map_document_test.go": {
+        "sha256": "9640b2b347abe3cf648cb003c6318727ad8c1e31bd161132ca550a6fb1cacfef",
+        "lines": 168
+      },
+      "pkg/mem/web_map_edit_test.go": {
+        "sha256": "9d32edb40f26298df4ccadc6826f1e6ab8865058238c05b1163ecc854ad3ad18",
+        "lines": 202
+      },
+      "pkg/mem/web_map_edit.go": {
+        "sha256": "e3488ef3bc96d11fbe42139290156d2a7bb398850cc3ba6edb384f52f0287052",
+        "lines": 291
+      },
+      "pkg/mem/web_map_history.go": {
+        "sha256": "bd390eac6d28ddedfcc2ded45744f3135ac537eb98e82973ff8c0c2187914a9e",
+        "lines": 296
+      },
+      "pkg/mem/web_map_receipts_test.go": {
+        "sha256": "342d7cd8919b4530dd1e26947a63dfb685dd4629d5f186e48444a6c9af52f421",
+        "lines": 44
+      },
+      "pkg/mem/web_map_snapshot_restore.go": {
+        "sha256": "7c4e50cbefa643bc30fe05d2791701b0df2ab85fd77e8f2e0e93a37dacbe39a8",
+        "lines": 326
+      },
+      "pkg/mem/web_map_study_test.go": {
+        "sha256": "1b10d1aa35f9953ee7c9bb81e1a23a1480dd7f87a78266f2ff82b4a40501c33b",
+        "lines": 133
+      },
+      "pkg/mem/web_map_study.go": {
+        "sha256": "fe887b8ab589d48067769060a408b59a6e4670e9fcf6010e182135a2f5dc46c1",
+        "lines": 356
+      },
+      "pkg/mem/web_map_workbench.go": {
+        "sha256": "f5fdee6798f4de19f68d8783af4cf3d587ccf910de9c73506dfdf417ade1a931",
+        "lines": 223
+      },
+      "pkg/mem/web/knowledgeMapHTMLSuffix.html": {
+        "sha256": "d0ab7bd4ea618c83934e768788701430e0bd354dba18a8bcf85fea9821d174b8",
+        "lines": 409
+      },
+      "review/2026-10-10/mindmap-annotations/REPORT_RU.html": {
+        "sha256": "d97c895add0e91953a65bef7fc425b2d7c09f798555238c166339a72dc63d541",
+        "lines": 22
+      }
+    },
+    "recorded_at": "2026-10-10T01:53:31.970Z",
+    "scope_note": "Из выбранных 40 IDs исходный каталог содержит M0/M2/M3/M4/M5/M6; M1 в этих четырёх категориях отсутствует. Milestones не переназначались."
+  },
+  "features": [
+    {
+      "id": "ANA01",
+      "status": "delivered",
+      "current": "Корпусный анализ принимает текущие active claims, проверяет два разных документа и создаёт draft finding со связями. Durable run закрепляет prompt, настройки и evidence; review content pin не позволяет утвердить изменённый объект.",
+      "remaining": [
+        "Выполнить итоговый сценарий смены редакции между analysis/review в актуальном web; отдельно оценить смысловую точность противоречий на независимом корпусе. Статус относится к механизму, не к истинности модельного вывода."
+      ],
+      "evidence": [
+        {
+          "file": "pkg/mem/graph_analyze.go",
+          "line": 350,
+          "observation": "Валидация contradiction/gap, допустимых refs и двух различных документов; ниже создаются draft объекты."
+        },
+        {
+          "file": "pkg/mem/graph_analyze_run.go",
+          "line": 145,
+          "observation": "Resume отклоняется при изменении claims, evidence, focus или generation options."
+        },
+        {
+          "file": "pkg/mem/graph_review_pin.go",
+          "line": 46,
+          "observation": "Approval требует актуальный review digest."
+        }
+      ],
+      "tests": [
+        {
+          "file": "pkg/mem/graph_analyze_test.go",
+          "line": 286,
+          "observation": "Отрицательные случаи invented и single-document findings; далее changed evidence и demoted claim."
+        },
+        {
+          "file": "pkg/mem/graph_analyze_run_test.go",
+          "line": 57,
+          "observation": "Resume с изменённым claim/prompt; отдельный changed-evidence test на строке 102."
+        }
+      ],
+      "category": "ANA",
+      "label": "Анализ",
+      "title": "Междокументные противоречия",
+      "layer": "graph",
+      "priority": "P1",
+      "milestone": "M3",
+      "acceptance": "Противоречие из одного документа отклоняется; после смены редакции одного claim ready-результат не публикуется без нового review.",
+      "baseline_state": "есть",
+      "verification": {
+        "method": "static_source_and_existing_test_inspection",
+        "executed_now": false
+      }
+    },
+    {
+      "id": "ANA02",
+      "status": "partial",
+      "current": "Gap — отдельный тип graph node; анализ ограничен выбранными текущими claims, требует подтверждений как минимум из двух документов и связывает finding с ними. Есть pending/completed извлечения и coverage, но это отдельные данные.",
+      "remaining": [
+        "Различить в модели и UI явно заявленный автором пробел, отсутствие материала в выбранном scope и ещё не обработанный/неизвлечённый материал.",
+        "Сохранять scope поиска и причину отрицательного результата у каждого gap, показывать их рядом с evidence; добавить fixture, где pending chunk не превращается в научный пробел."
+      ],
+      "evidence": [
+        {
+          "file": "pkg/mem/graph_analyze.go",
+          "line": 363,
+          "observation": "Gap ограничен набором claim refs, а не полной моделью состояния исследования."
+        },
+        {
+          "file": "pkg/mem/graph_analyze.go",
+          "line": 404,
+          "observation": "Набираются документы из evidence claims; минимум два документа."
+        },
+        {
+          "file": "pkg/mem/graph_coverage.go",
+          "line": 423,
+          "observation": "Pending/completed извлечения вычисляются отдельно от узлов gap."
+        }
+      ],
+      "tests": [
+        {
+          "file": "pkg/mem/graph_analyze_test.go",
+          "line": 262,
+          "observation": "Построение gap и его связей; не проверка эпистемической типологии пробелов."
+        }
+      ],
+      "category": "ANA",
+      "label": "Анализ",
+      "title": "Пробелы знаний и неполнота",
+      "layer": "graph",
+      "priority": "P1",
+      "milestone": "M3",
+      "acceptance": "Для каждого gap показаны scope и подтверждения; отсутствие подходящего chunk не превращается в утверждение о научном пробеле.",
+      "baseline_state": "есть",
+      "verification": {
+        "method": "static_source_and_existing_test_inspection",
+        "executed_now": false
+      }
+    },
+    {
+      "id": "ANA03",
+      "status": "partial",
+      "current": "Comparison-matrix существует: строки строятся из comparison/compares, столбцы — из документов, содержательные ячейки открывают сохранённые объекты и evidence. Пустая ячейка явно не трактуется как доказанное отсутствие свойства.",
+      "remaining": [
+        "Добавить явный сохраняемый набор критериев и состояния ячейки unknown/not-found/contradicts с scope поиска и основаниями.",
+        "Выполнить acceptance 3 документа × 4 критерия; существующая матрица не подменяет этот трёхсоставный результат."
+      ],
+      "evidence": [
+        {
+          "file": "pkg/mem/web/knowledgeMapHTMLSuffix.html",
+          "line": 84,
+          "observation": "buildComparisonMatrix создаёт строки из comparison/compares и ячейки с evidence по документу."
+        },
+        {
+          "file": "pkg/mem/graph_layout.go",
+          "line": 369,
+          "observation": "comparison-matrix входит в поддерживаемые сохраняемые представления."
+        }
+      ],
+      "tests": [
+        {
+          "file": "pkg/mem/graph_view_test.go",
+          "line": 110,
+          "observation": "Проверяет наличие матрицы и UI payload, не 3×4 поведенческую приёмку."
+        }
+      ],
+      "category": "ANA",
+      "label": "Анализ",
+      "title": "Матрица сравнения документов",
+      "layer": "graph",
+      "priority": "P1",
+      "milestone": "M3",
+      "acceptance": "Матрица из трёх документов и четырёх критериев различает неизвестно/не найдено/противоречит; каждая содержательная ячейка имеет evidence.",
+      "baseline_state": "есть",
+      "verification": {
+        "method": "static_source_and_existing_test_inspection",
+        "executed_now": false
+      }
+    },
+    {
+      "id": "ANA04",
+      "status": "delivered",
+      "current": "Causal view использует только causes/mitigates/constrains/depends_on; обычный related не становится causal при переключении вида. Рёбра доступны для выбора, а общий inspector показывает evidence объекта.",
+      "remaining": [
+        "Проверить браузером fixture из пяти узлов с открытием основания каждого ребра, включая клавиатуру. Существующие HTML tests не равны полной интерактивной приёмке."
+      ],
+      "evidence": [
+        {
+          "file": "pkg/mem/web/knowledgeMapHTMLSuffix.html",
+          "line": 16,
+          "observation": "Явный causalRelationKinds не включает related."
+        },
+        {
+          "file": "pkg/mem/web/knowledgeMapHTMLSuffix.html",
+          "line": 72,
+          "observation": "buildCausalDiagram фильтрует уже сохранённые рёбра; не выводит новые отношения."
+        },
+        {
+          "file": "pkg/mem/web/knowledgeMapHTMLSuffix.html",
+          "line": 75,
+          "observation": "Интерактивные causal edge ведут в выбор объекта/inspector."
+        }
+      ],
+      "tests": [
+        {
+          "file": "pkg/mem/graph_view_test.go",
+          "line": 104,
+          "observation": "Существующие проверки HTML перечисляют causal relation kinds и UI."
+        }
+      ],
+      "category": "ANA",
+      "label": "Анализ",
+      "title": "Причинные и логические цепочки",
+      "layer": "graph",
+      "priority": "P2",
+      "milestone": "M3",
+      "acceptance": "В цепочке из пяти узлов каждое causal edge открывает основание; related не повышается до causes при смене представления.",
+      "baseline_state": "есть",
+      "verification": {
+        "method": "static_source_and_existing_test_inspection",
+        "executed_now": false
+      }
+    },
+    {
+      "id": "ANA05",
+      "status": "partial",
+      "current": "Procedure-sequence построен по precedes, показывает уровни, параллельные ветви и предупреждение о цикле. Plan/checklist экспорт использует только сохранённые отношения порядка; при отсутствии порядка или цикле явно объясняет детерминированную сортировку.",
+      "remaining": [
+        "Отображение развилки и цикла реализовано, но checklist сериализует топологический порядок плоским списком: независимые ветви/допустимые альтернативные порядки не представлены отдельными группами. Добавить явное пояснение частичного порядка и сохранить параллельные группы в экспорте.",
+        "Пройти единый acceptance fixture с развилкой и циклом в UI и export; не трактовать алфавитный остаток или очередность независимых checkbox как обязательную технологическую инструкцию."
+      ],
+      "evidence": [
+        {
+          "file": "pkg/mem/web/knowledgeMapHTMLSuffix.html",
+          "line": 79,
+          "observation": "Топологические уровни, ветвление и явная procedure-cycle warning."
+        },
+        {
+          "file": "pkg/mem/graph_selection_export.go",
+          "line": 249,
+          "observation": "Экспорт сообщает, из каких отношений получен порядок; отсутствие порядка и цикл отмечаются."
+        },
+        {
+          "file": "pkg/mem/graph_selection_export.go",
+          "line": 308,
+          "observation": "План учитывает prerequisite, depends_on, precedes, happens_before; прочие связи игнорирует."
+        }
+      ],
+      "tests": [
+        {
+          "file": "pkg/mem/graph_selection_export_test.go",
+          "line": 73,
+          "observation": "Существующий тест требует предупреждение о цикле в плане."
+        }
+      ],
+      "category": "ANA",
+      "label": "Анализ",
+      "title": "Процедуры и последовательности действий",
+      "layer": "graph",
+      "priority": "P1",
+      "milestone": "M3",
+      "acceptance": "Процедура с развилкой и циклом отображает оба свойства; checklist не линейризует неопределённый порядок как обязательный.",
+      "baseline_state": "есть",
+      "verification": {
+        "method": "static_source_and_existing_test_inspection",
+        "executed_now": false
+      }
+    },
+    {
+      "id": "ANA06",
+      "status": "partial",
+      "current": "Timeline существует и использует event/happens_before. События без связей показаны отдельно как не имеющие установленного порядка; даты импорта и номера страниц не используются как время события.",
+      "remaining": [
+        "Ввести датированные утверждения/интервалы с отдельными evidence и отображение альтернативных дат одного события.",
+        "Проверить непорядоченную пару и противоречивые даты; хранение дат только в label/body не даёт полного acceptance."
+      ],
+      "evidence": [
+        {
+          "file": "pkg/mem/web/knowledgeMapHTMLSuffix.html",
+          "line": 81,
+          "observation": "buildTimeline выделяет unordered события и циклы, опираясь на явные happens_before."
+        },
+        {
+          "file": "pkg/mem/graph.go",
+          "line": 119,
+          "observation": "Общий KnowledgeNode не имеет структурированных альтернативных дат/интервалов."
+        }
+      ],
+      "tests": [
+        {
+          "file": "pkg/mem/graph_view_test.go",
+          "line": 90,
+          "observation": "В payload проверяются event/happens_before; отдельная интерактивная приёмка альтернативных дат не найдена."
+        }
+      ],
+      "category": "ANA",
+      "label": "Анализ",
+      "title": "Хронология событий с доказательствами",
+      "layer": "graph",
+      "priority": "P2",
+      "milestone": "M3",
+      "acceptance": "Два события с неопределённым порядком остаются непорядоченными; альтернативные даты показаны отдельно и открывают источники.",
+      "baseline_state": "есть",
+      "verification": {
+        "method": "static_source_and_existing_test_inspection",
+        "executed_now": false
+      }
+    },
+    {
+      "id": "ANA07",
+      "status": "partial",
+      "current": "Есть claim/hypothesis/decision, supports/contradicts/based_on и явные review states. Из этих примитивов можно вручную построить аргумент; автоматического approval для такой реконструкции нет.",
+      "remaining": [
+        "Добавить сохраняемые роли premise/inference/conclusion/assumption и отдельное представление аргумента; не выводить эти роли только из позиции узла.",
+        "Сценарий двух посылок должен различать цитируемый факт и авторское допущение с основанием и review."
+      ],
+      "evidence": [
+        {
+          "file": "pkg/mem/graph.go",
+          "line": 17,
+          "observation": "Полный перечень node kinds: есть claim/hypothesis/decision, нет самостоятельной модели аргумента."
+        },
+        {
+          "file": "pkg/mem/graph.go",
+          "line": 53,
+          "observation": "Набор relation kinds содержит supports/contradicts/based_on."
+        },
+        {
+          "file": "pkg/mem/graph_layout.go",
+          "line": 369,
+          "observation": "В восьми представлениях нет argument map."
+        }
+      ],
+      "tests": [
+        {
+          "file": "pkg/mem/graph_review_pin_test.go",
+          "line": 12,
+          "observation": "Защита review относится к общим объектам, не к аргументной реконструкции."
+        }
+      ],
+      "category": "ANA",
+      "label": "Анализ",
+      "title": "Карта аргументов и оснований",
+      "layer": "graph",
+      "priority": "P2",
+      "milestone": "M3",
+      "acceptance": "Пользователь восстанавливает аргумент из двух посылок; неподтверждённое допущение отличается от цитируемого факта и не получает auto-approval.",
+      "baseline_state": "частично",
+      "verification": {
+        "method": "static_source_and_existing_test_inspection",
+        "executed_now": false
+      }
+    },
+    {
+      "id": "ANA08",
+      "status": "partial",
+      "current": "Извлечение требований сохраняет дословные условия, исключения и ограничения. Labeled evaluator защищает числовые/лексические qualifiers, распознаёт токены единиц; это не вычислительная проверка размерностей или эквивалентности bar/MPa.",
+      "remaining": [
+        "Добавить ограниченный валидатор нормализованных величин, строгих/нестрогих границ и условий; неизвестные формулы явно помечать unchecked.",
+        "Сделать независимые fixtures bar/MPa, boundary и exception; не повышать lexical matching до математического доказательства."
+      ],
+      "evidence": [
+        {
+          "file": "pkg/mem/graph_requirement.go",
+          "line": 22,
+          "observation": "Структурированные requirement quotes для conditions/exceptions/limits."
+        },
+        {
+          "file": "pkg/mem/graph_labeled_qualifiers.go",
+          "line": 52,
+          "observation": "Токенизация отделяет числа и единицы для проверки qualifiers."
+        },
+        {
+          "file": "pkg/mem/graph_labeled_qualifiers.go",
+          "line": 58,
+          "observation": "Список единиц — лексический, не таблица преобразований."
+        }
+      ],
+      "tests": [
+        {
+          "file": "pkg/mem/graph_requirement_test.go",
+          "line": 95,
+          "observation": "Защита от meaning-changing совпадений."
+        },
+        {
+          "file": "pkg/mem/graph_labeled_requirements_test.go",
+          "line": 67,
+          "observation": "Условия после 4096 символов участвуют в оценке."
+        }
+      ],
+      "category": "ANA",
+      "label": "Анализ",
+      "title": "Проверка чисел, единиц и условий",
+      "layer": "graph",
+      "priority": "P2",
+      "milestone": "M3",
+      "acceptance": "Fixtures для bar/MPa, строгой границы и исключения дают ожидаемые результаты; неподдерживаемая формула получает «не проверено».",
+      "baseline_state": "нет",
+      "verification": {
+        "method": "static_source_and_existing_test_inspection",
+        "executed_now": false
+      }
+    },
+    {
+      "id": "ANA09",
+      "status": "partial",
+      "current": "Есть comparison, decision, risk, constraint и связи compares/resolves/based_on. Findings board может открывать связанные решения; происхождение объектов сохраняется.",
+      "remaining": [
+        "Добавить явные alternatives/criteria/weights и отдельный авторский decision record с объяснением, не меняющий цитаты.",
+        "Проверить три варианта, изменение веса, сохранение rationale/author и независимость evidence от расчётного представления."
+      ],
+      "evidence": [
+        {
+          "file": "pkg/mem/graph.go",
+          "line": 26,
+          "observation": "Примитивы comparison/decision и далее risk/constraint."
+        },
+        {
+          "file": "pkg/mem/web/knowledgeMapHTMLSuffix.html",
+          "line": 88,
+          "observation": "Findings board показывает связанные решения."
+        },
+        {
+          "file": "pkg/mem/graph_selection_analysis.go",
+          "line": 216,
+          "observation": "Анализ выделения классифицирует comparison/finding, но не взвешенную модель выбора."
+        }
+      ],
+      "tests": [
+        {
+          "file": "pkg/mem/graph_selection_analysis_test.go",
+          "line": 9,
+          "observation": "Детерминированные явные facts; weighted alternatives не покрыты."
+        }
+      ],
+      "category": "ANA",
+      "label": "Анализ",
+      "title": "Альтернативы, критерии и решения",
+      "layer": "graph",
+      "priority": "P2",
+      "milestone": "M3",
+      "acceptance": "Для трёх вариантов видно происхождение каждого критерия; изменение веса не меняет цитаты, итог имеет авторство и сохранённое обоснование.",
+      "baseline_state": "частично",
+      "verification": {
+        "method": "static_source_and_existing_test_inspection",
+        "executed_now": false
+      }
+    },
+    {
+      "id": "ANA10",
+      "status": "partial",
+      "current": "Сохраняемый анализ выделения реализован: selection manifest, analysis digest, note/report node, evidence и append-only audit. Внешние boundary relations явно отделяются от выбранных объектов; save отвергает изменённые pins.",
+      "remaining": [
+        "У ListKnowledgeSelectionReports добавить вычисляемый текущий статус stale/changed относительно сохранённых pins; сейчас audit DTO исторический и не содержит такого поля, хотя node inspector умеет показывать устаревшее evidence.",
+        "Добавить acceptance fixture 10+1: внешний объект не входит в основной scope, boundary подписан отдельно; после смены evidence сохранённый отчёт остаётся и получает явную пометку."
+      ],
+      "evidence": [
+        {
+          "file": "pkg/mem/graph_selection_analysis.go",
+          "line": 138,
+          "observation": "Анализ ограничивается manifest выбора и выделяет boundary отдельно."
+        },
+        {
+          "file": "pkg/mem/graph_selection_analysis.go",
+          "line": 380,
+          "observation": "Сохранение проверяет readiness/analysis digest и закрепляет anchors."
+        },
+        {
+          "file": "pkg/mem/graph_selection_analysis.go",
+          "line": 611,
+          "observation": "Список возвращает сохранённый KnowledgeSelectionReportRecord без live stale resolution."
+        }
+      ],
+      "tests": [
+        {
+          "file": "pkg/mem/graph_selection_analysis_test.go",
+          "line": 9,
+          "observation": "Outside node виден только как boundary, не selected."
+        },
+        {
+          "file": "pkg/mem/graph_selection_analysis_test.go",
+          "line": 53,
+          "observation": "Atomic save, pin rejection и append-only audit."
+        }
+      ],
+      "category": "ANA",
+      "label": "Анализ",
+      "title": "Сохраняемый анализ выделения",
+      "layer": "graph",
+      "priority": "P1",
+      "milestone": "M3",
+      "acceptance": "Отчёт по 10 узлам не включает одиннадцатый вне scope; после изменения evidence прежний отчёт остаётся историческим и помечается stale.",
+      "baseline_state": "есть",
+      "verification": {
+        "method": "static_source_and_existing_test_inspection",
+        "executed_now": false
+      }
+    },
+    {
+      "id": "LRN01",
+      "status": "partial",
+      "current": "Graph learning генерирует grounded draft карточки/вопросы, сохраняет evidence и применяет общий review. Маршрут допускает active объекты с current evidence. Есть проверки точных excerpt anchors и отказа при смене selection.",
+      "remaining": [
+        "Проверить целиком reject неподдержанного ответа и stale/missing approval в учебном HTTP/UI сценарии, а не только смежными unit tests.",
+        "Добавить независимую размеченную оценку смысловой точности учебных пар. Grounding/JSON-validation не заменяют эту часть acceptance."
+      ],
+      "evidence": [
+        {
+          "file": "pkg/mem/graph_learning.go",
+          "line": 452,
+          "observation": "SaveKnowledgeLearningCandidates сохраняет выбранные проверенные proposals как draft objects."
+        },
+        {
+          "file": "pkg/mem/graph_learning_route.go",
+          "line": 362,
+          "observation": "Не active и non-current учебные объекты исключаются с объяснением."
+        },
+        {
+          "file": "pkg/mem/graph_learning_evidence.go",
+          "line": 7,
+          "observation": "Точное закрепление evidence учебных предложений."
+        }
+      ],
+      "tests": [
+        {
+          "file": "pkg/mem/graph_learning_test.go",
+          "line": 10,
+          "observation": "Validated draft proposals; далее reject unknown citation и changed selection."
+        },
+        {
+          "file": "pkg/mem/graph_learning_evidence_test.go",
+          "line": 11,
+          "observation": "Отдельные excerpts одного chunk не смешиваются."
+        }
+      ],
+      "category": "LRN",
+      "label": "Обучение",
+      "title": "Генерация проверяемых учебных карточек",
+      "layer": "graph",
+      "priority": "P1",
+      "milestone": "M4",
+      "acceptance": "Карточки создаются draft; без явного review не становятся active; отклонённый проверяющим неподдержанный ответ остаётся rejected; stale/missing citations блокируют принятие. Смысловая точность проверяется отдельно на размеченных примерах.",
+      "baseline_state": "есть",
+      "verification": {
+        "method": "static_source_and_existing_test_inspection",
+        "executed_now": false
+      }
+    },
+    {
+      "id": "LRN02",
+      "status": "partial",
+      "current": "Classic study больше не только transient: per-actor map/node state и append-only attempts хранятся в SQLite, есть idempotency, history, response/confidence/hint и current evidence pins. Планировщик переиспользует функцию graph.",
+      "remaining": [
+        "Связать одну логическую учебную карточку classic и graph через adapter/shared learning reference, сохранив существующие histories; сейчас это разные таблицы и идентичности.",
+        "Добавить переход classic→graph одной карточки без второй истории и без потери actor isolation. Не мигрировать автоматически произвольные nodes в approved graph cards."
+      ],
+      "evidence": [
+        {
+          "file": "pkg/mem/web_map_study.go",
+          "line": 15,
+          "observation": "Явный контракт: тот же scheduling policy, собственная identity и per-actor progress."
+        },
+        {
+          "file": "pkg/mem/web_map_study.go",
+          "line": 20,
+          "observation": "Classic state keyed actor,map_id,node_id."
+        },
+        {
+          "file": "pkg/mem/graph_learning_session.go",
+          "line": 533,
+          "observation": "Graph state keyed node_id, а не shared classic reference."
+        }
+      ],
+      "tests": [
+        {
+          "file": "pkg/mem/web_map_study_test.go",
+          "line": 11,
+          "observation": "Persistence, actor isolation и invalidation."
+        },
+        {
+          "file": "internal/webapp/maps_study_test.go",
+          "line": 13,
+          "observation": "HTTP workflow и изоляция."
+        }
+      ],
+      "prior_reports": [
+        {
+          "file": "build/mindmap-alpha1/verification/browser-smoke.md",
+          "line": 29,
+          "observation": "Ранее документирована сохранность расписания после перезапуска; сейчас не повторялась."
+        }
+      ],
+      "category": "LRN",
+      "label": "Обучение",
+      "title": "Долговременное обучение из classic",
+      "layer": "shared",
+      "priority": "P1",
+      "milestone": "M4",
+      "acceptance": "Оценка карточки classic переживает закрытие окна и перезапуск; та же карточка из graph показывает одну историю, а не дубликат.",
+      "baseline_state": "нет",
+      "verification": {
+        "method": "static_source_and_existing_test_inspection",
+        "executed_now": false
+      }
+    },
+    {
+      "id": "LRN03",
+      "status": "delivered",
+      "current": "Маршрут строится по явным prerequisite/depends_on, допускает reviewed active current-evidence карточки и вопросы. Циклы, отсутствие порядка и исключённые объекты отражаются в route warnings/exclusions.",
+      "remaining": [
+        "Повторить UI acceptance на актуальной сборке; это не доказательство оптимального педагогического порядка."
+      ],
+      "evidence": [
+        {
+          "file": "pkg/mem/graph_learning_route.go",
+          "line": 85,
+          "observation": "BuildKnowledgeLearningRoute строит детерминированный маршрут выбора."
+        },
+        {
+          "file": "pkg/mem/graph_learning_route.go",
+          "line": 362,
+          "observation": "Понятная причина исключения при отсутствии review/current evidence."
+        }
+      ],
+      "tests": [
+        {
+          "file": "pkg/mem/graph_learning_route_test.go",
+          "line": 49,
+          "observation": "depends_on учитывается в правильном направлении; draft игнорируется."
+        },
+        {
+          "file": "pkg/mem/graph_learning_route_test.go",
+          "line": 110,
+          "observation": "Cycle и stale manifest имеют отдельную regression."
+        }
+      ],
+      "category": "LRN",
+      "label": "Обучение",
+      "title": "Маршруты по prerequisite и depends_on",
+      "layer": "graph",
+      "priority": "P1",
+      "milestone": "M4",
+      "acceptance": "Циклический fixture не выдаёт ложный линейный порядок; карточка без current evidence исключена с объяснением.",
+      "baseline_state": "есть",
+      "verification": {
+        "method": "static_source_and_existing_test_inspection",
+        "executed_now": false
+      }
+    },
+    {
+      "id": "LRN04",
+      "status": "partial",
+      "current": "Graph SRS version 1, due selection, четыре grades и append-only attempts реализованы. Повторное grade одного session item отклоняется; после изменения content/evidence прежнее расписание не применяется, history выдаёт ScheduleReset.",
+      "remaining": [
+        "Сохранить отдельное неизменяемое событие reset с причиной content/evidence и прежними/новыми pins; сейчас ScheduleReset вычисляется при чтении, а не является самостоятельной записью причины.",
+        "Добавить test reset по evidence наряду с content и проверить видимость причины пользователю; не называть алгоритм эмпирически оптимальным."
+      ],
+      "evidence": [
+        {
+          "file": "pkg/mem/graph_learning_session.go",
+          "line": 408,
+          "observation": "Grade проверяет session item и current pins, затем пишет attempt."
+        },
+        {
+          "file": "pkg/mem/graph_learning_session.go",
+          "line": 588,
+          "observation": "ScheduleReset вычисляется из несовпадения сохранённых и текущих content/evidence digests."
+        },
+        {
+          "file": "pkg/mem/graph_learning_session.go",
+          "line": 658,
+          "observation": "Общий детерминированный scheduler again/hard/good/easy."
+        }
+      ],
+      "tests": [
+        {
+          "file": "pkg/mem/graph_learning_session_test.go",
+          "line": 9,
+          "observation": "Due selection и duplicate grade rejection."
+        },
+        {
+          "file": "pkg/mem/graph_learning_session_test.go",
+          "line": 81,
+          "observation": "Append-only attempts."
+        },
+        {
+          "file": "pkg/mem/graph_learning_session_test.go",
+          "line": 104,
+          "observation": "Reset расписания после изменения body."
+        }
+      ],
+      "category": "LRN",
+      "label": "Обучение",
+      "title": "Интервальное повторение и история",
+      "layer": "graph",
+      "priority": "P1",
+      "milestone": "M4",
+      "acceptance": "Повторная оценка элемента одной сессии отклонена; изменение content/evidence сбрасывает старое расписание с записью причины.",
+      "baseline_state": "есть",
+      "verification": {
+        "method": "static_source_and_existing_test_inspection",
+        "executed_now": false
+      }
+    },
+    {
+      "id": "LRN05",
+      "status": "absent",
+      "current": "В текущем учебном UI есть prompt/answer карточки и навигация по исходной карте. Режима отдельной скрытой попытки восстановить набор узлов/связей с последующим diff в проверенной области не найдено.",
+      "remaining": [
+        "Создать attempt snapshot с целевыми объектами, скрытой опорной картой, ответом пользователя и commit-before-reveal.",
+        "После commit показать missing/extra/changed с evidence и возможностью ручной проверки; не выдавать structural similarity за учебный эффект."
+      ],
+      "evidence": [
+        {
+          "file": "pkg/mem/mind_map_workbench.go",
+          "line": 256,
+          "observation": "Classic study card — prompt/answer/source DTO, не реконструкция графа."
+        },
+        {
+          "file": "internal/webapp/assets/map-workbench.js",
+          "line": 47,
+          "observation": "Текущий учебный цикл — раскрытие ответа и последующая оценка."
+        }
+      ],
+      "tests": [
+        {
+          "file": "internal/webapp/map_study_test.cjs",
+          "line": 60,
+          "observation": "Существующие tests учебных карточек; отдельного reconstruction workflow не найдено."
+        }
+      ],
+      "category": "LRN",
+      "label": "Обучение",
+      "title": "Восстановление карты по памяти",
+      "layer": "shared",
+      "priority": "P2",
+      "milestone": "M4",
+      "acceptance": "Во время попытки ответы скрыты; после завершения показаны пропущенные/лишние элементы без автоматического объявления педагогического эффекта.",
+      "baseline_state": "нет",
+      "verification": {
+        "method": "static_source_and_existing_test_inspection",
+        "executed_now": false
+      }
+    },
+    {
+      "id": "LRN06",
+      "status": "partial",
+      "current": "Classic UI позволяет написать собственный ответ; текст/confidence/hint попадает в долговременную историю grade. Это полезная база самообъяснения, но отдельного explanation attempt и model feedback нет.",
+      "remaining": [
+        "Серверно фиксировать explanation до доступа к раскрытию/источнику; отмена/перезагрузка после submit не должны терять попытку.",
+        "Добавить необязательный отделённый feedback artifact с model/config/evidence pins и явным пользовательским disagreement; исходную попытку не переписывать."
+      ],
+      "evidence": [
+        {
+          "file": "internal/webapp/assets/map-workbench.js",
+          "line": 47,
+          "observation": "Первый reveal только фиксирует поля в объекте UI, без HTTP записи."
+        },
+        {
+          "file": "pkg/mem/web_map_study.go",
+          "line": 240,
+          "observation": "Response сохраняется в INSERT attempt при grade."
+        },
+        {
+          "file": "pkg/mem/web_map_study.go",
+          "line": 260,
+          "observation": "History включает ответ пользователя, но не отдельный explanation feedback."
+        }
+      ],
+      "tests": [
+        {
+          "file": "pkg/mem/web_map_study_test.go",
+          "line": 11,
+          "observation": "Persisted review с response; не commit-before-reveal."
+        }
+      ],
+      "category": "LRN",
+      "label": "Обучение",
+      "title": "Самообъяснение своими словами",
+      "layer": "shared",
+      "priority": "P2",
+      "milestone": "M4",
+      "acceptance": "Попытка фиксируется до открытия источника; модельный отзыв отделён от исходного текста и может быть оспорен пользователем.",
+      "baseline_state": "нет",
+      "verification": {
+        "method": "static_source_and_existing_test_inspection",
+        "executed_now": false
+      }
+    },
+    {
+      "id": "LRN07",
+      "status": "partial",
+      "current": "Classic UI блокирует answer/confidence после первого reveal и сохраняет used_hint; сервер получает эти данные только вместе с grade. Graph GradeRequest пока содержит session_id/node_id/grade без свободного ответа и confidence.",
+      "remaining": [
+        "Ввести общий durable pre-reveal attempt API и server transition submitted→revealed→graded; при retry сохранять request ID и точный payload.",
+        "Отдельно хранить initial confidence, факт/момент hint/reveal и post-reveal revision ответа; graph подключить adapter, не считать classic UI-lock исполнением graph acceptance."
+      ],
+      "evidence": [
+        {
+          "file": "internal/webapp/assets/map-workbench.js",
+          "line": 47,
+          "observation": "Reveal локальный; HTTP POST происходит позже в grade handler."
+        },
+        {
+          "file": "pkg/mem/web_map_study.go",
+          "line": 240,
+          "observation": "Durable попытка создаётся при grading."
+        },
+        {
+          "file": "pkg/mem/graph_learning_session.go",
+          "line": 181,
+          "observation": "Graph grade DTO не содержит response/confidence."
+        }
+      ],
+      "tests": [
+        {
+          "file": "internal/webapp/map_study_test.cjs",
+          "line": 60,
+          "observation": "Существующие UI tests reveal и grading не доказывают серверный pre-reveal protocol."
+        }
+      ],
+      "category": "LRN",
+      "label": "Обучение",
+      "title": "Ответ до подсказки и калибровка самопроверки",
+      "layer": "graph",
+      "priority": "P1",
+      "milestone": "M4",
+      "acceptance": "Ответ и confidence записаны до reveal; изменение их после просмотра помечается; сравнение уверенности и результата сохраняется отдельно.",
+      "baseline_state": "частично",
+      "verification": {
+        "method": "static_source_and_existing_test_inspection",
+        "executed_now": false
+      }
+    },
+    {
+      "id": "LRN08",
+      "status": "partial",
+      "current": "Карточки знают источники, graph inspector умеет evidence, classic показывает source status и кнопку перехода к узлу. В classic переход к узлу закрывает учебный диалог; отдельного remediation flow после again нет.",
+      "remaining": [
+        "Добавить после again необязательное открытие точной закреплённой цитаты в reader без утраты session/attempt/navigation.",
+        "Возврат должен восстанавливать ту же попытку, не выставлять success и показывать stale/missing, если исходник сменился."
+      ],
+      "evidence": [
+        {
+          "file": "internal/webapp/assets/map-workbench.js",
+          "line": 39,
+          "observation": "В учебной карточке source rows — метаданные и status."
+        },
+        {
+          "file": "internal/webapp/assets/map-workbench.js",
+          "line": 57,
+          "observation": "Переход к узлу вызывает close() учебного dialog."
+        },
+        {
+          "file": "pkg/mem/web_map_study.go",
+          "line": 260,
+          "observation": "Attempt history уже может быть основой стабильного возврата."
+        }
+      ],
+      "tests": [
+        {
+          "file": "pkg/mem/web_map_study_test.go",
+          "line": 95,
+          "observation": "Stale evidence/manifest blocks grading; acceptance remediation не покрыт отдельным workflow."
+        }
+      ],
+      "category": "LRN",
+      "label": "Обучение",
+      "title": "Возврат к источнику после ошибки",
+      "layer": "shared",
+      "priority": "P1",
+      "milestone": "M4",
+      "acceptance": "Оценка again открывает точную цитату по желанию; возвращение в сессию сохраняет попытку и не выставляет success автоматически.",
+      "baseline_state": "частично",
+      "verification": {
+        "method": "static_source_and_existing_test_inspection",
+        "executed_now": false
+      }
+    },
+    {
+      "id": "LRN09",
+      "status": "partial",
+      "current": "Graph history уже выдаёт due/new/scheduled/next_due, число attempts и ScheduleReset по объекту. Classic показывает due count/filter, следующий срок и историю ответов с matches_current.",
+      "remaining": [
+        "Сделать отдельную панель прогресса с явным агрегатом revision/reset, не скрывающим прежние attempts; сначала на существующих scheduler data.",
+        "Связать общую идентичность обучения без двойного счёта classic/graph и сверить агрегаты с fixtures; отличать grade, confidence и фактическую правильность."
+      ],
+      "evidence": [
+        {
+          "file": "pkg/mem/graph_learning_session.go",
+          "line": 223,
+          "observation": "History summary содержит due/new/scheduled, а item — attempts и ScheduleReset."
+        },
+        {
+          "file": "pkg/mem/web_map_study.go",
+          "line": 44,
+          "observation": "Classic view содержит Progress и DueCount."
+        },
+        {
+          "file": "pkg/mem/web_map_study.go",
+          "line": 345,
+          "observation": "MatchesCurrent отделяет исторические попытки от текущего материала."
+        }
+      ],
+      "tests": [
+        {
+          "file": "pkg/mem/graph_learning_session_test.go",
+          "line": 104,
+          "observation": "Старая attempt сохраняется при reset."
+        },
+        {
+          "file": "pkg/mem/web_map_study_test.go",
+          "line": 11,
+          "observation": "Per-actor persistence/invalidation."
+        }
+      ],
+      "category": "LRN",
+      "label": "Обучение",
+      "title": "Панель учебного прогресса",
+      "layer": "graph",
+      "priority": "P2",
+      "milestone": "M4",
+      "acceptance": "Числа панели сверяются с sessions/attempts fixtures; новая редакция увеличивает отдельный счётчик пересмотра, не скрывая старые результаты.",
+      "baseline_state": "частично",
+      "verification": {
+        "method": "static_source_and_existing_test_inspection",
+        "executed_now": false
+      }
+    },
+    {
+      "id": "LRN10",
+      "status": "empirical",
+      "current": "Есть реализованные учебные карточки, deterministic SRS и технические smoke/unit tests. Они не являются исследованием учебной пользы; завершённого заранее зарегистрированного пилота с отложенной проверкой в изученных материалах не найдено.",
+      "remaining": [
+        "До эксперимента зафиксировать материал, условия сравнения, группы/распределение, время работы, delayed retention interval, критерии результата и план анализа.",
+        "Опубликовать n, исходные результаты, отказы/выбывание и ограничения; не делать обещаний эффекта до данных."
+      ],
+      "evidence": [
+        {
+          "file": "pkg/mem/graph_learning_session.go",
+          "line": 658,
+          "observation": "Код алгоритма расписания не измеряет педагогический результат."
+        },
+        {
+          "file": "build/mindmap-alpha1/verification/browser-smoke.md",
+          "line": 34,
+          "observation": "Документированный smoke прямо ограничен техническим сценарием."
+        },
+        {
+          "file": "docs/MINDMAP_STAGE3_RU.md",
+          "line": 76,
+          "observation": "Документация отдельно указывает необходимость учебного пилота M4."
+        }
+      ],
+      "tests": [],
+      "category": "LRN",
+      "label": "Обучение",
+      "title": "Проверка пользы учебных режимов",
+      "layer": "shared",
+      "priority": "P1",
+      "milestone": "M4",
+      "acceptance": "Протокол заранее задаёт материал, группы, время и отложенный срок; публикуются размер выборки, исходные результаты и ограничения без обещанного эффекта.",
+      "baseline_state": "нет",
+      "verification": {
+        "method": "static_source_and_existing_test_inspection",
+        "executed_now": false
+      }
+    },
+    {
+      "id": "COL01",
+      "status": "partial",
+      "current": "Рабочие базы разделены по owner_id. Серверная ownership-проверка действует на HTTP; Actor содержит ID, но модели membership и Reader/Editor/Reviewer для общей базы нет.",
+      "remaining": [
+        "Добавить membership/role и централизованную проверку разрешения на каждое действие, включая export scope, review, jobs/results и source reads.",
+        "Проверить прямыми HTTP все deny-сценарии и запрет self-promotion; существующую owner isolation сохранить как default."
+      ],
+      "evidence": [
+        {
+          "file": "internal/workspace/manager.go",
+          "line": 32,
+          "observation": "Actor содержит только ID."
+        },
+        {
+          "file": "internal/workspace/manager.go",
+          "line": 139,
+          "observation": "Resolve выбирает workspace по id и owner_id."
+        },
+        {
+          "file": "internal/webapp/maintenance.go",
+          "line": 15,
+          "observation": "Review/operations получают доступ через owner-based Resolve, отдельной роли нет."
+        }
+      ],
+      "tests": [
+        {
+          "file": "internal/workspace/manager_test.go",
+          "line": 16,
+          "observation": "Ownership/persistence и запреты чужой базы."
+        },
+        {
+          "file": "internal/webapp/server_test.go",
+          "line": 117,
+          "observation": "HTTP user isolation; shared role matrix не реализована."
+        }
+      ],
+      "category": "COL",
+      "label": "Совместная работа",
+      "title": "Права доступа к общему рабочему пространству",
+      "layer": "shared",
+      "priority": "P2",
+      "milestone": "M6",
+      "acceptance": "Reader не может mutate/review/export закрытый scope; Editor не выдаёт себе Reviewer; deny проверен прямым HTTP запросом, не только скрытой кнопкой.",
+      "baseline_state": "частично",
+      "verification": {
+        "method": "static_source_and_existing_test_inspection",
+        "executed_now": false
+      }
+    },
+    {
+      "id": "COL02",
+      "status": "delivered",
+      "current": "Classic mutations используют expected map revision и idempotency receipts; graph edit использует content/evidence/status pins, review — отдельный digest. Конкурирующая запись не должна молча затирать первую.",
+      "remaining": [
+        "Повторить совмещённый web сценарий двух вкладок с text и source changes на актуальной сборке; это не автоматический merge."
+      ],
+      "evidence": [
+        {
+          "file": "pkg/mem/web_map_edit.go",
+          "line": 125,
+          "observation": "Несовпадение expected map revision даёт conflict до mutation."
+        },
+        {
+          "file": "pkg/mem/graph_edit.go",
+          "line": 144,
+          "observation": "Проверка expected status/content и далее evidence/edit pins."
+        },
+        {
+          "file": "pkg/mem/graph_review_pin.go",
+          "line": 46,
+          "observation": "Review защищён от изменённой формулировки."
+        }
+      ],
+      "tests": [
+        {
+          "file": "pkg/mem/web_map_edit_test.go",
+          "line": 139,
+          "observation": "Два concurrent writers: одна запись, один conflict."
+        },
+        {
+          "file": "pkg/mem/web_map_edit_test.go",
+          "line": 176,
+          "observation": "Edit сохраняет sources и generated metadata."
+        },
+        {
+          "file": "pkg/mem/graph_edit_test.go",
+          "line": 10,
+          "observation": "Pinned lifecycle и append-only edit history."
+        }
+      ],
+      "category": "COL",
+      "label": "Совместная работа",
+      "title": "Конфликты конкурирующих правок",
+      "layer": "shared",
+      "priority": "P1",
+      "milestone": "M0",
+      "acceptance": "Два клиента редактируют одну ревизию: второй получает conflict; ни текст, ни источники первого не перезаписаны молча.",
+      "baseline_state": "есть",
+      "verification": {
+        "method": "static_source_and_existing_test_inspection",
+        "executed_now": false
+      }
+    },
+    {
+      "id": "COL03",
+      "status": "partial",
+      "current": "Постоянные текстовые аннотации уже содержат note, author, immutable quote/revision anchor, версии и историю; есть архив и явная reanchor lineage. Это персональный комментарий к источнику внутри доступной базы, не тред обсуждения участников.",
+      "remaining": [
+        "Добавить thread/reply/resolve/reopen с actor, исходной привязкой и append-only событиями; resolve не должен удалять сообщения.",
+        "Подключать двух участников только после shared permissions; показывать старую цитату при новой редакции и не выдавать archive за resolve."
+      ],
+      "evidence": [
+        {
+          "file": "pkg/mem/document_annotations.go",
+          "line": 37,
+          "observation": "Annotation содержит quote/note/author и document_revision."
+        },
+        {
+          "file": "pkg/mem/document_annotations.go",
+          "line": 101,
+          "observation": "History сохраняет actor/action и редакцию annotation."
+        },
+        {
+          "file": "pkg/mem/document_annotation_reanchor.go",
+          "line": 63,
+          "observation": "Immutable lineage связывает прежнюю и новую привязки."
+        }
+      ],
+      "tests": [
+        {
+          "file": "internal/webapp/document_annotations_test.cjs",
+          "line": 99,
+          "observation": "List/history/edit/archive/restore."
+        },
+        {
+          "file": "internal/webapp/annotations_test.go",
+          "line": 85,
+          "observation": "HTTP edits и isolation; discussion participants отсутствуют."
+        }
+      ],
+      "category": "COL",
+      "label": "Совместная работа",
+      "title": "Комментарии к объектам и источникам",
+      "layer": "shared",
+      "priority": "P2",
+      "milestone": "M6",
+      "acceptance": "Два участника обсуждают один passage; resolve не удаляет обсуждение, новая редакция показывает, к какому тексту относился комментарий.",
+      "baseline_state": "нет",
+      "verification": {
+        "method": "static_source_and_existing_test_inspection",
+        "executed_now": false
+      }
+    },
+    {
+      "id": "COL04",
+      "status": "partial",
+      "current": "Есть review status/report/history и content-pinned approve/reject/resolve; можно просматривать draft и stale объекты. Назначение reviewer, срок и отдельная task queue не найдены.",
+      "remaining": [
+        "Создать review task с assignee, scope, review/evidence pins, состояниями open/done/invalidated; assignment не должен менять status знания.",
+        "Добавить фильтр моей очереди и конкурентный claim/close; stale assignment требует повторного просмотра, решение остаётся отдельной review mutation."
+      ],
+      "evidence": [
+        {
+          "file": "internal/webapp/maintenance.go",
+          "line": 156,
+          "observation": "HTTP reviews report уже доступен."
+        },
+        {
+          "file": "pkg/mem/graph_review.go",
+          "line": 78,
+          "observation": "Reviewer — поле записи решения, не назначение задачи."
+        },
+        {
+          "file": "pkg/mem/graph_review_pin.go",
+          "line": 46,
+          "observation": "Основа stale-decision отказа уже есть."
+        }
+      ],
+      "tests": [
+        {
+          "file": "pkg/mem/graph_review_pin_test.go",
+          "line": 297,
+          "observation": "Изменённый content блокирует review decisions; assignment workflow не покрывается."
+        }
+      ],
+      "category": "COL",
+      "label": "Совместная работа",
+      "title": "Назначение и очередь проверки",
+      "layer": "graph",
+      "priority": "P2",
+      "milestone": "M6",
+      "acceptance": "Назначенный reviewer видит очередь; параллельное решение по устаревшему pin отклонено, assignment не означает approval.",
+      "baseline_state": "нет",
+      "verification": {
+        "method": "static_source_and_existing_test_inspection",
+        "executed_now": false
+      }
+    },
+    {
+      "id": "COL05",
+      "status": "partial",
+      "current": "Classic study progress/attempts разделены actor; для него оценка одного пользователя не меняет другого. В graph расписание keyed node_id, а saved views keyed name без actor. Веб-доступ сейчас owner-only.",
+      "remaining": [
+        "Добавить actor scope graph scheduler и personal/shared visibility saved views с миграцией legacy records, не теряя историю.",
+        "Проверить общую базу A/B после COL01: изменение общего claim видно обоим, grades/private views остаются личными."
+      ],
+      "evidence": [
+        {
+          "file": "pkg/mem/web_map_study.go",
+          "line": 20,
+          "observation": "PRIMARY KEY(actor,map_id,node_id)."
+        },
+        {
+          "file": "pkg/mem/graph_learning_session.go",
+          "line": 533,
+          "observation": "Graph learning state upsert конфликтует по node_id."
+        },
+        {
+          "file": "pkg/mem/graph_layout.go",
+          "line": 218,
+          "observation": "Saved view upsert по name/layout_json без владельца."
+        }
+      ],
+      "tests": [
+        {
+          "file": "pkg/mem/web_map_study_test.go",
+          "line": 11,
+          "observation": "Classic actor isolation уже проверяется существующим тестом."
+        }
+      ],
+      "category": "COL",
+      "label": "Совместная работа",
+      "title": "Личные виды и учебная история в общей базе",
+      "layer": "shared",
+      "priority": "P2",
+      "milestone": "M6",
+      "acceptance": "Оценка пользователя A не меняет due пользователя B; общий claim обновляется обоим, private view не появляется у другого без разрешения.",
+      "baseline_state": "частично",
+      "verification": {
+        "method": "static_source_and_existing_test_inspection",
+        "executed_now": false
+      }
+    },
+    {
+      "id": "COL06",
+      "status": "absent",
+      "current": "Редакторы и saved views есть, но presence/cursor transport, expiry и модель временных выделений участников в исследованных API/UI не найдены.",
+      "remaining": [
+        "После permissions добавить ephemeral presence канал с timeout, scope authorization и отдельной от content revisions моделью.",
+        "Проверить disconnect, revoke access и отсутствие утечки object IDs; не сохранять движение курсоров в history."
+      ],
+      "evidence": [
+        {
+          "file": "internal/workspace/manager.go",
+          "line": 139,
+          "observation": "Текущий доступ owner-only, не membership/presence."
+        },
+        {
+          "file": "pkg/mem/graph_layout.go",
+          "line": 218,
+          "observation": "Persisted layout/view — существующий механизм, но не live presence."
+        }
+      ],
+      "tests": [],
+      "category": "COL",
+      "label": "Совместная работа",
+      "title": "Присутствие участников и совместное выделение",
+      "layer": "shared",
+      "priority": "P3",
+      "milestone": "M6",
+      "acceptance": "Разрыв соединения убирает presence по timeout; курсоры не создают ревизии и не раскрывают недоступные объекты.",
+      "baseline_state": "нет",
+      "verification": {
+        "method": "static_source_and_existing_test_inspection",
+        "executed_now": false
+      }
+    },
+    {
+      "id": "COL07",
+      "status": "absent",
+      "current": "Есть optimistic conflict, snapshots, undo и append-only edit history. Трёхсторонний field-level merge title/body и preview обеих альтернатив в исследованных mutations/UI не найден.",
+      "remaining": [
+        "Сохранять base/ours/theirs, автоматически предлагать только независимые поля, а одинаковое поле требовать выбрать явно.",
+        "Применять merge новой pinned mutation с actor/обеими версиями в audit; конфликт source/evidence требует ручного решения."
+      ],
+      "evidence": [
+        {
+          "file": "pkg/mem/graph_edit.go",
+          "line": 151,
+          "observation": "Content mismatch возвращает conflict, не merge."
+        },
+        {
+          "file": "pkg/mem/web_map_edit.go",
+          "line": 125,
+          "observation": "Classic stale revision отклоняется."
+        },
+        {
+          "file": "pkg/mem/web_map_history.go",
+          "line": 134,
+          "observation": "Undo/redo восстанавливают историю, но не объединяют параллельные изменения."
+        }
+      ],
+      "tests": [
+        {
+          "file": "pkg/mem/web_map_edit_test.go",
+          "line": 139,
+          "observation": "Concurrent writers test подтверждает rejection, а не merge."
+        }
+      ],
+      "category": "COL",
+      "label": "Совместная работа",
+      "title": "Осмысленное слияние параллельных изменений",
+      "layer": "shared",
+      "priority": "P3",
+      "milestone": "M6",
+      "acceptance": "Независимые изменения title/body можно применить с preview; конфликт одного поля требует выбора и сохраняет обе версии в audit.",
+      "baseline_state": "нет",
+      "verification": {
+        "method": "static_source_and_existing_test_inspection",
+        "executed_now": false
+      }
+    },
+    {
+      "id": "COL08",
+      "status": "partial",
+      "current": "Review/edit/annotation histories сохраняют авторство и действия, annotation reanchor — lineage actor; mutation receipts связывают request IDs с результатом. HTTP log содержит обезличенный request ID/route/status.",
+      "remaining": [
+        "Определить единый event envelope и audit export для permission/assignment/review/edit с request correlation; role/assignment events появятся вместе с этими моделями.",
+        "Явно представлять legacy unknown actor, не подставлять текущего пользователя; проверить export redaction и срок хранения отдельно от debug log."
+      ],
+      "evidence": [
+        {
+          "file": "pkg/mem/graph_review.go",
+          "line": 821,
+          "observation": "Append review history включает reviewer/comment/evidence."
+        },
+        {
+          "file": "pkg/mem/document_annotations.go",
+          "line": 135,
+          "observation": "Annotation history содержит action/actor и immutable payload."
+        },
+        {
+          "file": "internal/applog/http.go",
+          "line": 43,
+          "observation": "Технический HTTP request ID и allowlisted route, без query/body."
+        }
+      ],
+      "tests": [
+        {
+          "file": "internal/applog/log_test.go",
+          "line": 168,
+          "observation": "HTTP privacy test."
+        },
+        {
+          "file": "pkg/mem/graph_review_pin_test.go",
+          "line": 241,
+          "observation": "Missing pin/legacy review audit проверяется отдельно."
+        }
+      ],
+      "category": "COL",
+      "label": "Совместная работа",
+      "title": "Аудит действий участников",
+      "layer": "shared",
+      "priority": "P1",
+      "milestone": "M6",
+      "acceptance": "Изменение роли и review связываются с actor и запросом; экспорт audit не содержит секретов, legacy unknown actor отмечен явно.",
+      "baseline_state": "есть",
+      "verification": {
+        "method": "static_source_and_existing_test_inspection",
+        "executed_now": false
+      }
+    },
+    {
+      "id": "COL09",
+      "status": "partial",
+      "current": "Есть pinned graph/classic exports и classic snapshots, которые дают фиксированный артефакт. Hosted read APIs редактируют пути в projections. Это не hosted share link с lifecycle/revocation.",
+      "remaining": [
+        "Добавить immutable publication record и отдельный read-only scope/token; публикация не должна ссылаться на текущий mutable map.",
+        "Определить публичную redacted projection для выбранного формата, проверить путь/secret leakage и revoke; обычный CLI export не считать безопасной публикацией автоматически."
+      ],
+      "evidence": [
+        {
+          "file": "pkg/mem/graph_portable_export.go",
+          "line": 146,
+          "observation": "Экспорт закрепляется expected content/state digest."
+        },
+        {
+          "file": "pkg/mem/web_map_snapshot_restore.go",
+          "line": 27,
+          "observation": "Preview snapshot — redacted projection с digest исходного документа."
+        },
+        {
+          "file": "pkg/mem/web_map_workbench.go",
+          "line": 113,
+          "observation": "Web source redaction отличается от общего export модели."
+        }
+      ],
+      "tests": [
+        {
+          "file": "pkg/mem/graph_portable_export_test.go",
+          "line": 102,
+          "observation": "Graph/evidence change blocks pinned export."
+        },
+        {
+          "file": "internal/webapp/maps_snapshot_test.go",
+          "line": 14,
+          "observation": "Snapshot preview/restore/isolation; publication revoke не реализован."
+        }
+      ],
+      "category": "COL",
+      "label": "Совместная работа",
+      "title": "Публикация неизменяемого read-only результата",
+      "layer": "shared",
+      "priority": "P2",
+      "milestone": "M6",
+      "acceptance": "Опубликованный snapshot не меняется после edit; закрытые локальные пути отсутствуют, отозванная ссылка перестаёт отдавать содержимое.",
+      "baseline_state": "частично",
+      "verification": {
+        "method": "static_source_and_existing_test_inspection",
+        "executed_now": false
+      }
+    },
+    {
+      "id": "COL10",
+      "status": "absent",
+      "current": "Есть восемь graph views, сохранённые layout/focus и обычный выбор объектов. Сохраняемой последовательности narrative steps с собственным snapshot/export контрактом в исследованном коде не найдено.",
+      "remaining": [
+        "Добавить presentation object с упорядоченными step references, camera/focus и evidence pins; редактирование steps не меняет knowledge objects.",
+        "Сделать read-only проигрыватель и экспорт pinned snapshot; проверить пять шагов и смену исходной карты."
+      ],
+      "evidence": [
+        {
+          "file": "pkg/mem/graph_layout.go",
+          "line": 369,
+          "observation": "Набор представлений не содержит narrative sequence."
+        },
+        {
+          "file": "pkg/mem/web/knowledgeMapHTMLSuffix.html",
+          "line": 91,
+          "observation": "Переключение representation не является storyboard."
+        }
+      ],
+      "tests": [
+        {
+          "file": "pkg/mem/graph_view_test.go",
+          "line": 13,
+          "observation": "Интерактивный graph export, но нет последовательности presentation steps."
+        }
+      ],
+      "category": "COL",
+      "label": "Совместная работа",
+      "title": "Повествовательный показ карты",
+      "layer": "shared",
+      "priority": "P3",
+      "milestone": "M6",
+      "acceptance": "Презентация из пяти шагов открывает заданные объекты и evidence; её редактирование не меняет знания и экспортируемый snapshot воспроизводим.",
+      "baseline_state": "нет",
+      "verification": {
+        "method": "static_source_and_existing_test_inspection",
+        "executed_now": false
+      }
+    },
+    {
+      "id": "OPS01",
+      "status": "delivered",
+      "current": "Накопительная квота 1000 снята: общий предел web map mutation receipts теперь 100000 и отдельно 16 MiB; 64 MiB history остаётся отдельным бюджетом. Старые idempotency keys не удаляются для освобождения места.",
+      "remaining": [
+        "Для буквальной нагрузочной приёмки выполнить более 1000 последовательных реальных mutations. Существующий regression быстро создаёт 1000 receipt rows и затем проверяет 1001-ю edit+retry; это тест границы, не длинный нагрузочный прогон."
+      ],
+      "evidence": [
+        {
+          "file": "pkg/mem/web_map_edit.go",
+          "line": 22,
+          "observation": "MaxWebMapMutationReceipts=100000 и byte budget 16 MiB."
+        },
+        {
+          "file": "pkg/mem/web_map_edit.go",
+          "line": 268,
+          "observation": "Общий helper измеряет накопленные receipt bytes."
+        }
+      ],
+      "tests": [
+        {
+          "file": "pkg/mem/web_map_receipts_test.go",
+          "line": 9,
+          "observation": "Beyond1000: новая edit, повтор старого request ID и count=1001."
+        },
+        {
+          "file": "pkg/mem/web_map_receipts_test.go",
+          "line": 30,
+          "observation": "Byte budget даёт rollback без роста map revision."
+        }
+      ],
+      "category": "OPS",
+      "label": "Эксплуатация и качество",
+      "title": "Долговременная квота web receipts",
+      "layer": "classic",
+      "priority": "P1",
+      "milestone": "M0",
+      "acceptance": "После более 1000 последовательных допустимых правок новая правка работает по утверждённой политике; retry старого ID не повторяет уже выполненную операцию.",
+      "baseline_state": "риск",
+      "verification": {
+        "method": "static_source_and_existing_test_inspection",
+        "executed_now": false
+      }
+    },
+    {
+      "id": "OPS02",
+      "status": "partial",
+      "current": "Есть model-free quality gates и labeled precision/recall/F1 с manifest/graph/evidence digests. Alpha29 сохранил ограниченный model benchmark на СП485 и четыре контрольных требования; эти артефакты существуют локально. Это не полный независимый отложенный baseline.",
+      "remaining": [
+        "Версионировать воспроизводимый corpus/gold manifest и run envelope с corpus hash, точным model/config/prompt, ошибками и результатами каждого запуска.",
+        "Разделить train/tune/held-out и провести независимую полную разметку выбранного scope; прежние 4/4 не экстраполировать на все claims/relations."
+      ],
+      "evidence": [
+        {
+          "file": "pkg/mem/graph_labeled_eval.go",
+          "line": 139,
+          "observation": "Report содержит manifest/graph/evidence digests и метрики/ошибочные совпадения."
+        },
+        {
+          "file": "pkg/mem/graph_quality_eval.go",
+          "line": 60,
+          "observation": "Coverage quality gate — самостоятельный report, не semantic P/R."
+        },
+        {
+          "file": "pkg/mem/graph_live_benchmark_test.go",
+          "line": 96,
+          "observation": "Replay прямо ограничен четырьмя независимо составленными контрольными требованиями."
+        }
+      ],
+      "tests": [
+        {
+          "file": "pkg/mem/graph_labeled_eval_test.go",
+          "line": 11,
+          "observation": "Детерминированное измерение claims/contradictions."
+        }
+      ],
+      "prior_reports": [
+        {
+          "file": "docs/GRAPH_QUALITY_STAGE2_RU.md",
+          "line": 73,
+          "observation": "Ранее сообщены 4/4 среди 30 подходящих nodes и явно ограниченная полнота; в этом аудите не повторялось."
+        }
+      ],
+      "category": "OPS",
+      "label": "Эксплуатация и качество",
+      "title": "Оценка качества и размеченный baseline",
+      "layer": "graph",
+      "priority": "P1",
+      "milestone": "M0",
+      "acceptance": "Для каждого запуска сохранены corpus hash, model/config, gold manifest, metrics и ошибки; обработанное coverage отделено от semantic precision/recall.",
+      "baseline_state": "частично",
+      "verification": {
+        "method": "static_source_and_existing_test_inspection",
+        "executed_now": false
+      }
+    },
+    {
+      "id": "OPS03",
+      "status": "partial",
+      "current": "Найденный сценарий 5→9 bar теперь permanent regression: смена текста сохраняет старые узлы/anchors, снимает semantic-completed checkpoint и требует новый extraction/review. Отдельно проверяется физическая редакция с тем же текстом и learning invalidation.",
+      "remaining": [
+        "Собрать одну acceptance цепочку import→extract→review→annotation/map→learn→reimport→stale/review→snapshot/export/restore с проверкой каждого перехода.",
+        "Не считать набор отдельных package tests единой сквозной проверкой; добавить restart/failed-window continuation в тот же fixture."
+      ],
+      "evidence": [
+        {
+          "file": "pkg/mem/graph_document_revision_test.go",
+          "line": 11,
+          "observation": "Постоянная regression для reimport 5→9 bar с сохранением истории/evidence и повторным checkpoint."
+        },
+        {
+          "file": "pkg/mem/graph_document_revision_test.go",
+          "line": 135,
+          "observation": "Physical revision при неизменном извлечённом тексте."
+        },
+        {
+          "file": "pkg/mem/web_map_study.go",
+          "line": 133,
+          "observation": "Current content/evidence pins сбрасывают применение старого classic schedule."
+        }
+      ],
+      "tests": [
+        {
+          "file": "pkg/mem/graph_document_revision_test.go",
+          "line": 11,
+          "observation": "Тест присутствует и прочитан; не запускался этим аудитом."
+        },
+        {
+          "file": "pkg/mem/web_map_study_test.go",
+          "line": 95,
+          "observation": "Отдельная stale evidence/manifest regression."
+        }
+      ],
+      "category": "OPS",
+      "label": "Эксплуатация и качество",
+      "title": "Сквозная регрессия жизненного цикла документа",
+      "layer": "graph",
+      "priority": "P1",
+      "milestone": "M0",
+      "acceptance": "Каждый переход проверяет current/stale, pending/completed, review и learning invalidation; найденный сценарий 5→9 bar проходит без потери истории.",
+      "baseline_state": "риск",
+      "verification": {
+        "method": "static_source_and_existing_test_inspection",
+        "executed_now": false
+      }
+    },
+    {
+      "id": "OPS04",
+      "status": "delivered",
+      "current": "Import coverage, text chunks/pages, processed, knowledge-covered, semantic completed/pending и stale/missing objects представлены раздельными полями. Покрытие current evidence не включает изменённые anchors; пустые/failed physical pages видны через import manifest.",
+      "remaining": [
+        "Добавить/выполнить буквальный acceptance fixture 10 chunks, 2 pending, 1 stale и проверить подписи UI. Существующие меньшие fixtures и revision regression проверяют разделение, но полный указанный набор не найден."
+      ],
+      "evidence": [
+        {
+          "file": "pkg/mem/graph_coverage.go",
+          "line": 30,
+          "observation": "Summary имеет отдельные semantic/import/text/knowledge/status counters."
+        },
+        {
+          "file": "pkg/mem/graph_coverage.go",
+          "line": 420,
+          "observation": "Проценты покрытий рассчитываются отдельно; semantic pending берётся из ExtractionIssues."
+        },
+        {
+          "file": "pkg/mem/graph_coverage.go",
+          "line": 431,
+          "observation": "Import manifest учитывает physical pages, включая пустые/ошибочные."
+        }
+      ],
+      "tests": [
+        {
+          "file": "pkg/mem/graph_coverage_test.go",
+          "line": 9,
+          "observation": "Разные знаменатели chunk/page, processed/covered и OCR quality."
+        },
+        {
+          "file": "pkg/mem/graph_coverage_test.go",
+          "line": 82,
+          "observation": "Changed evidence не считается покрытым."
+        },
+        {
+          "file": "pkg/mem/import_manifest_test.go",
+          "line": 81,
+          "observation": "Страницы без chunks учитываются отдельно."
+        }
+      ],
+      "category": "OPS",
+      "label": "Эксплуатация и качество",
+      "title": "Честные показатели покрытия",
+      "layer": "graph",
+      "priority": "P1",
+      "milestone": "M0",
+      "acceptance": "Fixture с 10 chunks, 2 pending и 1 stale показывает все состояния раздельно; 100% текстового покрытия не подписано «все знания извлечены».",
+      "baseline_state": "риск",
+      "verification": {
+        "method": "static_source_and_existing_test_inspection",
+        "executed_now": false
+      }
+    },
+    {
+      "id": "OPS05",
+      "status": "partial",
+      "current": "Есть измерение storage по workspace/user, HTTP endpoint usage, предсказуемый отказ записи по лимиту и resource bounds отдельных подсистем. Недоступная несвязанная local база не блокирует остальные; hosted quota fail-closed. Read-only evidence сохранено при quota.",
+      "remaining": [
+        "Свести в UI и API расход важных component quotas: history, receipts, annotations/regions, jobs/artifacts, graph/map size; сейчас общий storage endpoint не объясняет все внутренние лимиты.",
+        "Проверить границы каждого бюджета единым набором, показать remediation без автоматического удаления истории."
+      ],
+      "evidence": [
+        {
+          "file": "internal/webapp/storage.go",
+          "line": 12,
+          "observation": "Общий workspace/user storage usage и явная local/hosted offline policy."
+        },
+        {
+          "file": "internal/webapp/storage.go",
+          "line": 54,
+          "observation": "GET storage отдаёт usage и user/workspace limits."
+        },
+        {
+          "file": "internal/webapp/storage.go",
+          "line": 66,
+          "observation": "Read requests и ограниченные preview/report операции отделены от write quota."
+        }
+      ],
+      "tests": [
+        {
+          "file": "internal/webapp/storage_access_test.go",
+          "line": 15,
+          "observation": "Local recovery и hosted fail-closed."
+        },
+        {
+          "file": "internal/webapp/storage_access_test.go",
+          "line": 94,
+          "observation": "Read-only source/evidence на границе storage."
+        }
+      ],
+      "category": "OPS",
+      "label": "Эксплуатация и качество",
+      "title": "Управляемые квоты и рост библиотеки",
+      "layer": "shared",
+      "priority": "P1",
+      "milestone": "M5",
+      "acceptance": "Набор на каждом пороге даёт предсказуемый ответ и показатели расхода; read-only источники доступны при исчерпанной write quota.",
+      "baseline_state": "частично",
+      "verification": {
+        "method": "static_source_and_existing_test_inspection",
+        "executed_now": false
+      }
+    },
+    {
+      "id": "OPS06",
+      "status": "partial",
+      "current": "mem map profile уже измеряет host stages: samples, median/p95, размеры DB/HTML, nodes/edges/evidence и environment. Есть 1000-node Go benchmarks и bounded-query regressions. Peak memory, браузерный render и фиксированный 100/1000/max отчёт не подтверждены.",
+      "remaining": [
+        "Добавить измерение peak RSS/heap и browser render/interaction с единым hardware/software manifest.",
+        "Сохранить повторяемый 100/1000/maximum набор и baseline/thresholds до увеличения лимитов; текущие microbenchmarks не равны acceptance."
+      ],
+      "evidence": [
+        {
+          "file": "pkg/mem/graph_profile.go",
+          "line": 35,
+          "observation": "Environment/DB metadata отчёта."
+        },
+        {
+          "file": "pkg/mem/graph_profile.go",
+          "line": 70,
+          "observation": "Samples/median/p95 stages, без peak-memory поля."
+        },
+        {
+          "file": "pkg/mem/graph_performance_test.go",
+          "line": 69,
+          "observation": "1000-node Load/Profile benchmarks существуют."
+        }
+      ],
+      "tests": [
+        {
+          "file": "pkg/mem/graph_profile_test.go",
+          "line": 82,
+          "observation": "Формула median/p95 проверяется."
+        },
+        {
+          "file": "pkg/mem/graph_performance_test.go",
+          "line": 21,
+          "observation": "Bounded graph queries; не browser latency."
+        }
+      ],
+      "category": "OPS",
+      "label": "Эксплуатация и качество",
+      "title": "Измерение скорости и памяти",
+      "layer": "shared",
+      "priority": "P1",
+      "milestone": "M5",
+      "acceptance": "Отчёт содержит p50/p95, peak memory и размеры 100/1000/предельный набор; пороги регрессии согласованы до увеличения лимитов.",
+      "baseline_state": "частично",
+      "verification": {
+        "method": "static_source_and_existing_test_inspection",
+        "executed_now": false
+      }
+    },
+    {
+      "id": "OPS07",
+      "status": "partial",
+      "current": "HTTP refs, async handler retirement, job draining и LRU protection действуют. Export artifact byte eviction даёт явный expired. Однако timed retention удаляет job целиком, а не оставляет ограниченный expired tombstone.",
+      "remaining": [
+        "После retention сохранить ограниченную метку expired для известного job/download либо другой явный контракт истечения, не бесконечную историю.",
+        "Унифицировать policy для transient results и durable user artifacts, проверить polling/download на expiry, logout и рестарт; durable map/history автоматически не очищать."
+      ],
+      "evidence": [
+        {
+          "file": "internal/webapp/graph.go",
+          "line": 53,
+          "observation": "Store закрывается только после active refs и handler.Close/drain."
+        },
+        {
+          "file": "pkg/mem/web_graph.go",
+          "line": 58,
+          "observation": "Close отменяет фоновые задачи и дожидается их Store accesses."
+        },
+        {
+          "file": "pkg/mem/graph_export_jobs.go",
+          "line": 399,
+          "observation": "Retention удаляет job через removeLocked."
+        },
+        {
+          "file": "pkg/mem/graph_export_jobs.go",
+          "line": 437,
+          "observation": "Отдельная byte eviction помечает artifact expired."
+        }
+      ],
+      "tests": [
+        {
+          "file": "pkg/mem/web_graph_lifecycle_test.go",
+          "line": 11,
+          "observation": "Close drains export и fences late runner."
+        },
+        {
+          "file": "pkg/mem/web_graph_lifecycle_test.go",
+          "line": 138,
+          "observation": "Обычный LRU не теряет completed export."
+        },
+        {
+          "file": "internal/webapp/graph_lifecycle_test.go",
+          "line": 72,
+          "observation": "Logout drains active request и rejects stale session."
+        }
+      ],
+      "category": "OPS",
+      "label": "Эксплуатация и качество",
+      "title": "Очистка результатов без потери работы",
+      "layer": "shared",
+      "priority": "P1",
+      "milestone": "M5",
+      "acceptance": "Истечение retention удаляет только разрешённый cache; active job завершает доступ к Store безопасно, утраченный download получает явный expired.",
+      "baseline_state": "частично",
+      "verification": {
+        "method": "static_source_and_existing_test_inspection",
+        "executed_now": false
+      }
+    },
+    {
+      "id": "OPS08",
+      "status": "empirical",
+      "current": "Есть реальные ограниченные smoke отчёты alpha1/alpha2, DOM regressions, keyboard handlers, labels/focus handling и async stale guards. Полной сквозной keyboard/screen-reader/browser-version матрицы для всей программы в изученных протоколах нет.",
+      "remaining": [
+        "Выполнить текущую browser acceptance по библиотеке, reader, карте, review, study, import/export с мышью и клавиатурой; зафиксировать версии браузера/ОС.",
+        "Проверить focus return/trap, accessible name и error announcements средствами accessibility tree и screen reader; записать выявленные дефекты и повторную проверку, не подменять её node tests."
+      ],
+      "evidence": [
+        {
+          "file": "internal/webapp/document_annotations_test.cjs",
+          "line": 157,
+          "observation": "DOM regression для keyboard открытия overlapping highlights."
+        },
+        {
+          "file": "pkg/mem/graph_view_regression_test.go",
+          "line": 107,
+          "observation": "Regression focus return в graph dialog."
+        }
+      ],
+      "tests": [
+        {
+          "file": "internal/webapp/document_annotations_test.cjs",
+          "line": 132,
+          "observation": "Whole-fragment keyboard action."
+        },
+        {
+          "file": "internal/webapp/annotation_reanchor_test.cjs",
+          "line": 54,
+          "observation": "Late preview/cancellation; не screen-reader приёмка."
+        }
+      ],
+      "prior_reports": [
+        {
+          "file": "build/mindmap-alpha1/verification/browser-smoke.md",
+          "line": 1,
+          "observation": "Ранее описан Codex in-app browser smoke 1280×720, с явными ограничениями."
+        },
+        {
+          "file": "review/2026-10-10/mindmap-annotations/REPORT_RU.html",
+          "line": 1,
+          "observation": "Alpha2 сообщает mouse/annotation/navigation smoke; этот аудит его не повторяет."
+        }
+      ],
+      "category": "OPS",
+      "label": "Эксплуатация и качество",
+      "title": "Сквозная UI и accessibility приёмка",
+      "layer": "shared",
+      "priority": "P1",
+      "milestone": "M2",
+      "acceptance": "Сценарии выполняются мышью и клавиатурой; focus/labels/error announcements проверены, результаты включают версии браузеров и замечания.",
+      "baseline_state": "частично",
+      "verification": {
+        "method": "static_source_and_existing_test_inspection",
+        "executed_now": false
+      }
+    },
+    {
+      "id": "OPS09",
+      "status": "delivered",
+      "current": "Локальные read/edit/evidence paths не требуют вызова модели; model operations отделены и возвращают понятную ошибку отсутствующей конфигурации. PDF preview пробует доступные renderer tools; при отсутствии/ошибке возвращает actionable error, текстовая цитата остаётся самостоятельным reader.",
+      "remaining": [
+        "Повторить целиком offline smoke с недоступным настроенным provider и без renderer в актуальной среде. Не обещать визуальный PDF preview без внешнего инструмента."
+      ],
+      "evidence": [
+        {
+          "file": "pkg/mem/web_map_edit.go",
+          "line": 43,
+          "observation": "Edit выполняется локально в SQLite, без provider."
+        },
+        {
+          "file": "pkg/ingest/pdf_preview.go",
+          "line": 37,
+          "observation": "Выбор pdftoppm/mutool/Python; далее явная ошибка отсутствия renderer."
+        },
+        {
+          "file": "pkg/mem/graph_source_preview.go",
+          "line": 33,
+          "observation": "Preview failure даёт HTTP 422 и действие/пояснение, не фиктивную картинку."
+        }
+      ],
+      "tests": [
+        {
+          "file": "pkg/mem/graph_source_preview_test.go",
+          "line": 67,
+          "observation": "Renderer failure не зависает и не возвращает success."
+        },
+        {
+          "file": "internal/webapp/graph_documents_assets_test.go",
+          "line": 24,
+          "observation": "Missing model configuration gives actionable bad request."
+        },
+        {
+          "file": "internal/webapp/storage_access_test.go",
+          "line": 94,
+          "observation": "Read-only evidence не заблокировано лимитом записи."
+        }
+      ],
+      "category": "OPS",
+      "label": "Эксплуатация и качество",
+      "title": "Офлайн-работа и доступность зависимостей",
+      "layer": "shared",
+      "priority": "P1",
+      "milestone": "M0",
+      "acceptance": "При недоступной модели доступны read/edit/evidence; отсутствие PDF renderer даёт действие и текстовую цитату, не фиктивный успешный preview.",
+      "baseline_state": "частично",
+      "verification": {
+        "method": "static_source_and_existing_test_inspection",
+        "executed_now": false
+      }
+    },
+    {
+      "id": "OPS10",
+      "status": "delivered",
+      "current": "Owner/session isolation, same-origin/CSRF/host checks, job ownership, hosted path scope и redacted web projections реализованы. HTTP logging коррелирует request/response и не включает body/query/headers; динамические пути хешируются.",
+      "remaining": [
+        "Выполнить текущую end-to-end threat matrix со всеми новыми endpoints; после добавления shared permissions этот acceptance нужно повторно открыть. Этот static аудит не является penetration test."
+      ],
+      "evidence": [
+        {
+          "file": "internal/workspace/manager.go",
+          "line": 139,
+          "observation": "Owner-scoped workspace resolve."
+        },
+        {
+          "file": "internal/webapp/server.go",
+          "line": 105,
+          "observation": "Sec-Fetch-Site/Origin и unsafe method protections."
+        },
+        {
+          "file": "internal/applog/http.go",
+          "line": 41,
+          "observation": "Документированный и реализованный запрет логирования body/query/headers; request_id на строке 51."
+        }
+      ],
+      "tests": [
+        {
+          "file": "internal/webapp/server_test.go",
+          "line": 117,
+          "observation": "Изоляция users/documents/settings/local paths."
+        },
+        {
+          "file": "internal/webapp/jobs_test.go",
+          "line": 178,
+          "observation": "Cross-owner/anonymous jobs запрещены."
+        },
+        {
+          "file": "pkg/mem/web_map_document_test.go",
+          "line": 139,
+          "observation": "Hosted source escape отклонён."
+        },
+        {
+          "file": "internal/applog/log_test.go",
+          "line": 168,
+          "observation": "HTTP status/privacy regression."
+        }
+      ],
+      "category": "OPS",
+      "label": "Эксплуатация и качество",
+      "title": "Изоляция доступа и диагностируемые ошибки",
+      "layer": "shared",
+      "priority": "P1",
+      "milestone": "M0",
+      "acceptance": "Чужая workspace/session не читает excerpt/result; path escape отклонён; журнал связывает отказ с запросом и не содержит токенов/полного приватного текста.",
+      "baseline_state": "частично",
+      "verification": {
+        "method": "static_source_and_existing_test_inspection",
+        "executed_now": false
+      }
+    }
+  ],
+  "next_slices": [
+    {
+      "id": "NEXT-LRN-ATTEMPT",
+      "title": "Долговременная попытка до раскрытия и объяснимый прогресс",
+      "feature_ids": [
+        "LRN02",
+        "LRN06",
+        "LRN07",
+        "LRN08",
+        "LRN09"
+      ],
+      "why": "Самый короткий путь превратить уже существующие response/confidence/history в законченный учебный workflow. Не требует модели; создаёт основу для последующего LRN05 и измеримого LRN10.",
+      "scope": [
+        "Новая append-only attempt identity с actor и typed object reference; adapters classic map/node и graph node, без переписывания существующих graph/classic моделей.",
+        "API submit(response/confidence/hint,pins,request_id) фиксирует попытку до reveal; отдельные reveal/grade события, retry и reload-resume.",
+        "Пользователь видит свой неизменённый первоначальный ответ, срок и причину reset; после again может открыть закреплённую цитату и вернуться.",
+        "Небольшой progress summary считает due/attempts/revision-reset из сохранённых событий, не делает выводов об учебном эффекте."
+      ],
+      "acceptance": [
+        "Сеть пропала после submit: retry прежнего ID возвращает ровно ту же попытку; закрытие и повторное открытие сохраняют ответ до reveal.",
+        "Смена evidence между submit/reveal/grade блокирует применение к новой карточке, но не удаляет старую попытку; причина reset видна отдельно.",
+        "A и B имеют независимые попытки; повторный вход в ту же mapped карточку через adapter не создаёт новую логическую историю.",
+        "Again→точная цитата→возврат сохраняет попытку и не ставит success автоматически."
+      ],
+      "exclusions": [
+        "Никакого обещания педагогической эффективности; реальный пилот отдельный.",
+        "Модельная оценка и полная reconstruction UI не нужны в первой поставке."
+      ],
+      "dependencies": [
+        "COL02",
+        "LRN02",
+        "LRN04"
+      ],
+      "caution": "Не выдавать прежнее UI-disable при reveal за server commit-before-reveal. Старые graph histories имеют node_id scope: миграция actor/shared reference должна быть явной."
+    },
+    {
+      "id": "NEXT-COL-REVIEW",
+      "title": "Минимальная общая проверка источника с ролями и очередью",
+      "feature_ids": [
+        "COL01",
+        "COL03",
+        "COL04",
+        "COL05",
+        "COL08"
+      ],
+      "why": "Закрывает реальный путь два участника→обсуждение цитаты→пинованное решение, опираясь на annotations/history и существующий review, а не только на декоративную очередь.",
+      "scope": [
+        "Один workspace membership policy с Owner/Reader/Editor/Reviewer и общей серверной authorization-функцией; существующие owner-only базы остаются закрыты по умолчанию.",
+        "Один review task на graph object/annotation reference: assignee, pinned content/evidence, open/done/invalidated. Назначение не меняет knowledge status.",
+        "Ограниченный thread с replies и resolve/reopen на одной immutable citation; actor/request audit. При source revision смене обсуждение остаётся у исходной цитаты.",
+        "Простая «моя очередь»; shared/private learning/views остаются закрыты до корректного actor scope."
+      ],
+      "acceptance": [
+        "Прямые HTTP deny tests: Reader не редактирует/утверждает, Editor не выдаёт себе Reviewer, revoked member не читает source/export/job results.",
+        "Два пользователя читают один тред; resolve сохраняет сообщения и quote; assignment отдельно от approval.",
+        "После изменения reviewed text/evidence старое task decision отклоняется и задача становится invalidated; повтор требует нового просмотра.",
+        "Любое доступное действие имеет policy, включая старые graph mount и portable export routes; неизвестная capability fail-closed."
+      ],
+      "exclusions": [
+        "Presence, совместные курсоры, автоматический merge и публичные ссылки остаются вне первого slice.",
+        "Не открывать общую базу раньше покрытия всех HTTP capability gates; очередь без этого остаётся персональной и не закрывает COL01."
+      ],
+      "dependencies": [
+        "COL02",
+        "COL08",
+        "TRU03"
+      ],
+      "caution": "Это ограниченный вертикальный сценарий, но безопасность нельзя свести к скрытым кнопкам. Перед включением membership составить матрицу всех маршрутов; если объём велик, сначала поставлять только закрытый policy layer и deny tests."
+    }
+  ],
+  "summary": {
+    "total": 40,
+    "by_status": {
+      "delivered": 8,
+      "partial": 26,
+      "absent": 4,
+      "empirical": 2
+    },
+    "by_category": {
+      "ANA": 10,
+      "LRN": 10,
+      "COL": 10,
+      "OPS": 10
+    },
+    "by_milestone": {
+      "M3": 10,
+      "M4": 10,
+      "M6": 9,
+      "M0": 7,
+      "M5": 3,
+      "M2": 1
+    }
+  }
+}

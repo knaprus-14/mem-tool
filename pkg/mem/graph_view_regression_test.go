@@ -96,7 +96,7 @@ func TestKnowledgeMapHTMLStopsHeavyLayoutAfterSettling(t *testing.T) {
 		"if(!document.hidden&&(renderDirty||moved)){render()",
 		"performance.now()-simulationStartedAt>=4000",
 		"role:'button','aria-label':edgeName",
-		"role:'button','aria-label':(n.label||n.id)",
+		"role:'button','aria-label':knowledgeLabel(n)",
 	} {
 		if !strings.Contains(html, want) {
 			t.Fatalf("rendered map is missing layout/accessibility guard %q", want)

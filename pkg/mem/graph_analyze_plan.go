@@ -1,5 +1,7 @@
 package mem
 
+import "github.com/knaprus-14/mem-tool/internal/applog"
+
 import (
 	"crypto/sha256"
 	"encoding/hex"
@@ -16,7 +18,9 @@ import (
 // context-bounded batches. Every runnable batch contains at least two claims
 // whose evidence covers at least two documents. A previously covered claim may
 // be reused as a bridge so that a final claim from one document is not stranded.
-func (s *Store) BuildCorpusAnalysisPlan(focus string, contextBudget, maxBatches int) (CorpusAnalysisPlan, error) {
+func (s *Store) BuildCorpusAnalysisPlan(focus string, contextBudget, maxBatches int) (applogResult0 CorpusAnalysisPlan, applogResult1 error) {
+	defer applog.Track("pkg.mem.Store.BuildCorpusAnalysisPlan")(&applogResult1)
+
 	focus = strings.TrimSpace(focus)
 	if focus == "" {
 		return CorpusAnalysisPlan{}, errors.New("corpus analysis focus is empty")
@@ -387,7 +391,9 @@ func stableCorpusAnalysisBatchID(focus string, claims []CorpusAnalysisClaim) str
 
 // MergeCorpusAnalysisGraphs combines independently validated batches without
 // allowing conflicting objects with the same host-derived ID.
-func MergeCorpusAnalysisGraphs(graphs ...KnowledgeGraph) (KnowledgeGraph, error) {
+func MergeCorpusAnalysisGraphs(graphs ...KnowledgeGraph) (applogResult0 KnowledgeGraph, applogResult1 error) {
+	defer applog.Track("pkg.mem.MergeCorpusAnalysisGraphs")(&applogResult1)
+
 	nodes := make(map[string]KnowledgeNode)
 	edges := make(map[string]KnowledgeEdge)
 	for batchIndex, graph := range graphs {

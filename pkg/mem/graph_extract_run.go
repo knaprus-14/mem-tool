@@ -1,5 +1,7 @@
 package mem
 
+import "github.com/knaprus-14/mem-tool/internal/applog"
+
 import (
 	"crypto/sha256"
 	"database/sql"
@@ -157,7 +159,9 @@ type knowledgeExtractionPlanManifest struct {
 	Batches          []knowledgeExtractionBatchManifest `json:"batches"`
 }
 
-func (s *Store) PrepareKnowledgeExtractionRun(plan KnowledgeExtractionJobPlan, focus string, contextChars, maxBatches int, answer AnswerConfig, resumeID string) (KnowledgeExtractionRun, error) {
+func (s *Store) PrepareKnowledgeExtractionRun(plan KnowledgeExtractionJobPlan, focus string, contextChars, maxBatches int, answer AnswerConfig, resumeID string) (applogResult0 KnowledgeExtractionRun, applogResult1 error) {
+	defer applog.Track("pkg.mem.Store.PrepareKnowledgeExtractionRun")(&applogResult1)
+
 	manifest, planDigest, runID, err := buildKnowledgeExtractionRunIdentity(plan, focus, contextChars, maxBatches, answer)
 	if err != nil {
 		return KnowledgeExtractionRun{}, err
@@ -312,7 +316,9 @@ func validateKnowledgeExtractionRunManifest(run KnowledgeExtractionRun, manifest
 	return nil
 }
 
-func (s *Store) LoadKnowledgeExtractionRun(runID string) (KnowledgeExtractionRun, error) {
+func (s *Store) LoadKnowledgeExtractionRun(runID string) (applogResult0 KnowledgeExtractionRun, applogResult1 error) {
+	defer applog.Track("pkg.mem.Store.LoadKnowledgeExtractionRun")(&applogResult1)
+
 	runID = strings.TrimSpace(runID)
 	if runID == "" {
 		return KnowledgeExtractionRun{}, errors.New("extraction run ID is empty")
@@ -325,7 +331,9 @@ func (s *Store) LoadKnowledgeExtractionRun(runID string) (KnowledgeExtractionRun
 // RebuildKnowledgeExtractionRunPlan reconstructs the exact immutable evidence
 // batches stored for a run. It is used by -resume so a graph upsert from an
 // interrupted finalization cannot make its own chunks disappear from the plan.
-func (s *Store) RebuildKnowledgeExtractionRunPlan(runID, focus string) (KnowledgeExtractionJobPlan, error) {
+func (s *Store) RebuildKnowledgeExtractionRunPlan(runID, focus string) (applogResult0 KnowledgeExtractionJobPlan, applogResult1 error) {
+	defer applog.Track("pkg.mem.Store.RebuildKnowledgeExtractionRunPlan")(&applogResult1)
+
 	run, err := s.LoadKnowledgeExtractionRun(runID)
 	if err != nil {
 		return KnowledgeExtractionJobPlan{}, err
@@ -495,7 +503,9 @@ func validateKnowledgeExtractionFragment(graph KnowledgeGraph) error {
 	return ValidateKnowledgeGraph(graph)
 }
 
-func (s *Store) SaveKnowledgeExtractionBatchGraph(runID, batchID string, graph KnowledgeGraph) error {
+func (s *Store) SaveKnowledgeExtractionBatchGraph(runID, batchID string, graph KnowledgeGraph) (applogResult0 error) {
+	defer applog.Track("pkg.mem.Store.SaveKnowledgeExtractionBatchGraph")(&applogResult0)
+
 	graph = normalizeKnowledgeGraph(graph)
 	if err := validateKnowledgeExtractionFragment(graph); err != nil {
 		return err
@@ -507,7 +517,9 @@ func (s *Store) SaveKnowledgeExtractionBatchGraph(runID, batchID string, graph K
 	return s.saveKnowledgeExtractionBatch(runID, batchID, KnowledgeExtractionBatchCompleted, string(encoded), digestCorpusAnalysisBytes(encoded), "")
 }
 
-func (s *Store) SaveKnowledgeExtractionBatchInsufficient(runID, batchID, reason string) error {
+func (s *Store) SaveKnowledgeExtractionBatchInsufficient(runID, batchID, reason string) (applogResult0 error) {
+	defer applog.Track("pkg.mem.Store.SaveKnowledgeExtractionBatchInsufficient")(&applogResult0)
+
 	reason = strings.TrimSpace(reason)
 	if reason == "" {
 		reason = "Недостаточно подтверждённых данных для извлечения объектов."
@@ -515,7 +527,9 @@ func (s *Store) SaveKnowledgeExtractionBatchInsufficient(runID, batchID, reason 
 	return s.saveKnowledgeExtractionBatch(runID, batchID, KnowledgeExtractionBatchInsufficient, "", "", reason)
 }
 
-func (s *Store) SaveKnowledgeExtractionBatchFailure(runID, batchID string, cause error) error {
+func (s *Store) SaveKnowledgeExtractionBatchFailure(runID, batchID string, cause error) (applogResult0 error) {
+	defer applog.Track("pkg.mem.Store.SaveKnowledgeExtractionBatchFailure")(&applogResult0)
+
 	reason := "extraction batch failed"
 	if cause != nil && strings.TrimSpace(cause.Error()) != "" {
 		reason = strings.TrimSpace(cause.Error())
@@ -562,7 +576,9 @@ func (s *Store) saveKnowledgeExtractionBatch(runID, batchID string, status Knowl
 // FinalizeKnowledgeExtractionRun is idempotent. The graph is upserted only
 // after every batch has a validated terminal checkpoint. If the later ledger
 // transaction fails, repeating the command safely replays the same stable graph.
-func (s *Store) FinalizeKnowledgeExtractionRun(runID string, plan KnowledgeExtractionJobPlan) (KnowledgeGraph, error) {
+func (s *Store) FinalizeKnowledgeExtractionRun(runID string, plan KnowledgeExtractionJobPlan) (applogResult0 KnowledgeGraph, applogResult1 error) {
+	defer applog.Track("pkg.mem.Store.FinalizeKnowledgeExtractionRun")(&applogResult1)
+
 	run, err := s.LoadKnowledgeExtractionRun(runID)
 	if err != nil {
 		return KnowledgeGraph{}, err
@@ -669,7 +685,9 @@ func (s *Store) FinalizeKnowledgeExtractionRun(runID string, plan KnowledgeExtra
 	return merged, nil
 }
 
-func MergeKnowledgeExtractionGraphs(graphs ...KnowledgeGraph) (KnowledgeGraph, error) {
+func MergeKnowledgeExtractionGraphs(graphs ...KnowledgeGraph) (applogResult0 KnowledgeGraph, applogResult1 error) {
+	defer applog.Track("pkg.mem.MergeKnowledgeExtractionGraphs")(&applogResult1)
+
 	nodes, edges := make(map[string]KnowledgeNode), make(map[string]KnowledgeEdge)
 	for index, graph := range graphs {
 		if err := validateKnowledgeExtractionFragment(graph); err != nil {
@@ -746,7 +764,9 @@ func (s *Store) currentKnowledgeExtractionProcessedCitations(entries []Entry) (m
 	return result, rows.Err()
 }
 
-func (s *Store) ListKnowledgeExtractionRuns(limit int) ([]KnowledgeExtractionRunSummary, error) {
+func (s *Store) ListKnowledgeExtractionRuns(limit int) (applogResult0 []KnowledgeExtractionRunSummary, applogResult1 error) {
+	defer applog.Track("pkg.mem.Store.ListKnowledgeExtractionRuns")(&applogResult1)
+
 	if limit < 1 || limit > 1000 {
 		return nil, errors.New("extraction run limit must be between 1 and 1000")
 	}

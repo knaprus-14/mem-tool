@@ -1,5 +1,7 @@
 package mem
 
+import "github.com/knaprus-14/mem-tool/internal/applog"
+
 import (
 	"context"
 	"crypto/sha256"
@@ -17,6 +19,8 @@ import (
 	"strings"
 	"time"
 	"unicode/utf8"
+
+	"github.com/knaprus-14/mem-tool/internal/sqliteutil"
 )
 
 const (
@@ -69,6 +73,7 @@ type ClassicMindMapKnowledgeCandidate struct {
 }
 
 type ClassicMindMapResolvedFile struct {
+	Evidence  *EvidenceAnchor
 	Path      string
 	Title     string
 	MediaType string
@@ -77,7 +82,7 @@ type ClassicMindMapResolvedFile struct {
 }
 
 func (s *Store) resolveClassicMindMapSourceStates(doc ClassicMindMapDocument) (ClassicMindMapDocument, error) {
-	tx, err := s.db.Begin()
+	tx, err := sqliteutil.BeginRead(s.db)
 	if err != nil {
 		return ClassicMindMapDocument{}, fmt.Errorf("begin classic mind map source resolution: %w", err)
 	}
@@ -342,7 +347,9 @@ func (s *Store) ListClassicMindMapSourceDocuments() []ClassicMindMapSourceDocume
 
 // SearchClassicMindMapEvidence performs a local lexical search and document/
 // page browsing without contacting an embedding or answer model.
-func (s *Store) SearchClassicMindMapEvidence(options ClassicMindMapEvidenceSearchOptions) ([]ClassicMindMapEvidenceCandidate, error) {
+func (s *Store) SearchClassicMindMapEvidence(options ClassicMindMapEvidenceSearchOptions) (applogResult0 []ClassicMindMapEvidenceCandidate, applogResult1 error) {
+	defer applog.Track("pkg.mem.Store.SearchClassicMindMapEvidence")(&applogResult1)
+
 	query := strings.TrimSpace(options.Query)
 	document := strings.TrimSpace(options.Document)
 	limit := options.Limit
@@ -451,7 +458,9 @@ func classicMindMapPreview(value string, maxRunes int) string {
 	return strings.TrimSpace(string(runes[:maxRunes])) + "…"
 }
 
-func (s *Store) SearchClassicMindMapKnowledgeNodes(query string, limit int) ([]ClassicMindMapKnowledgeCandidate, error) {
+func (s *Store) SearchClassicMindMapKnowledgeNodes(query string, limit int) (applogResult0 []ClassicMindMapKnowledgeCandidate, applogResult1 error) {
+	defer applog.Track("pkg.mem.Store.SearchClassicMindMapKnowledgeNodes")(&applogResult1)
+
 	query = strings.TrimSpace(query)
 	if limit <= 0 {
 		limit = 30
@@ -496,7 +505,9 @@ func (s *Store) SearchClassicMindMapKnowledgeNodes(query string, limit int) ([]C
 	return result, nil
 }
 
-func (s *Store) AttachClassicMindMapSource(mapRef, nodeRef string, source ClassicMindMapSource, expectedRevision int64, actor, comment string) (ClassicMindMapDocument, ClassicMindMapSource, error) {
+func (s *Store) AttachClassicMindMapSource(mapRef, nodeRef string, source ClassicMindMapSource, expectedRevision int64, actor, comment string) (applogResult0 ClassicMindMapDocument, applogResult1 ClassicMindMapSource, applogResult2 error) {
+	defer applog.Track("pkg.mem.Store.AttachClassicMindMapSource")(&applogResult2)
+
 	if source.Kind == ClassicMindMapSourceEvidence {
 		return ClassicMindMapDocument{}, ClassicMindMapSource{}, fmt.Errorf("evidence source должен добавляться через AttachClassicMindMapEvidence")
 	}
@@ -506,56 +517,7 @@ func (s *Store) AttachClassicMindMapSource(mapRef, nodeRef string, source Classi
 	}
 	var attached ClassicMindMapSource
 	doc, _, err := s.mutateClassicMindMap(mapRef, expectedRevision, actor, comment, "attach_source:"+string(normalized.Kind), func(tx *sql.Tx, item ClassicMindMap) (string, error) {
-		node, err := resolveClassicMindMapNodeRef(tx, item.ID, nodeRef)
-		if err != nil {
-			return "", err
-		}
-		if node.Locked {
-			return "", fmt.Errorf("%w: %q", ErrClassicMindMapLocked, node.Label)
-		}
-		if normalized.Kind == ClassicMindMapSourceKnowledgeNode {
-			var label string
-			var kind KnowledgeNodeKind
-			var status KnowledgeStatus
-			if err := tx.QueryRow(`SELECT label, kind, status FROM knowledge_nodes WHERE id=?`, normalized.KnowledgeNodeID).Scan(&label, &kind, &status); err != nil {
-				if errors.Is(err, sql.ErrNoRows) {
-					return "", fmt.Errorf("knowledge node %q не найден", normalized.KnowledgeNodeID)
-				}
-				return "", err
-			}
-			normalized.Title = label
-			normalized.Locator = fmt.Sprintf("%s · %s", kind, status)
-		}
-		column, value := "locator", normalized.Locator
-		switch normalized.Kind {
-		case ClassicMindMapSourceURL:
-			column, value = "url", normalized.URL
-		case ClassicMindMapSourceKnowledgeNode:
-			column, value = "knowledge_node_id", normalized.KnowledgeNodeID
-		}
-		var duplicate int
-		query := fmt.Sprintf(`SELECT COUNT(*) FROM mind_map_node_sources WHERE map_id=? AND node_id=? AND deleted_at='' AND kind=? AND %s=?`, column)
-		if err := tx.QueryRow(query, item.ID, node.ID, normalized.Kind, value).Scan(&duplicate); err != nil {
-			return "", err
-		}
-		if duplicate != 0 {
-			return "", fmt.Errorf("этот источник уже привязан к узлу %q", node.Label)
-		}
-		var position int
-		if err := tx.QueryRow(`SELECT COUNT(*) FROM mind_map_node_sources WHERE map_id=? AND node_id=? AND deleted_at=''`, item.ID, node.ID).Scan(&position); err != nil {
-			return "", err
-		}
-		now := time.Now().UTC().Format(time.RFC3339Nano)
-		attached = normalized
-		attached.ID, err = newClassicMindMapID("mms-")
-		if err != nil {
-			return "", err
-		}
-		attached.MapID, attached.NodeID, attached.Position, attached.Created = item.ID, node.ID, position, now
-		if err := insertClassicMindMapSource(tx, item.ID, node.ID, position, attached, now); err != nil {
-			return "", err
-		}
-		return node.ID, nil
+		return attachClassicMindMapSourceTx(tx, item, nodeRef, normalized, &attached)
 	})
 	if err == nil {
 		for _, node := range doc.Nodes {
@@ -567,6 +529,59 @@ func (s *Store) AttachClassicMindMapSource(mapRef, nodeRef string, source Classi
 		}
 	}
 	return doc, attached, err
+}
+
+func attachClassicMindMapSourceTx(tx *sql.Tx, item ClassicMindMap, nodeRef string, normalized ClassicMindMapSource, attached *ClassicMindMapSource) (string, error) {
+	node, err := resolveClassicMindMapNodeRef(tx, item.ID, nodeRef)
+	if err != nil {
+		return "", err
+	}
+	if node.Locked {
+		return "", fmt.Errorf("%w: %q", ErrClassicMindMapLocked, node.Label)
+	}
+	if normalized.Kind == ClassicMindMapSourceKnowledgeNode {
+		var label string
+		var kind KnowledgeNodeKind
+		var status KnowledgeStatus
+		if err := tx.QueryRow(`SELECT label, kind, status FROM knowledge_nodes WHERE id=?`, normalized.KnowledgeNodeID).Scan(&label, &kind, &status); err != nil {
+			if errors.Is(err, sql.ErrNoRows) {
+				return "", fmt.Errorf("knowledge node %q не найден", normalized.KnowledgeNodeID)
+			}
+			return "", err
+		}
+		normalized.Title = label
+		normalized.Locator = fmt.Sprintf("%s · %s", kind, status)
+	}
+	column, value := "locator", normalized.Locator
+	switch normalized.Kind {
+	case ClassicMindMapSourceURL:
+		column, value = "url", normalized.URL
+	case ClassicMindMapSourceKnowledgeNode:
+		column, value = "knowledge_node_id", normalized.KnowledgeNodeID
+	}
+	var duplicate int
+	query := fmt.Sprintf(`SELECT COUNT(*) FROM mind_map_node_sources WHERE map_id=? AND node_id=? AND deleted_at='' AND kind=? AND %s=?`, column)
+	if err := tx.QueryRow(query, item.ID, node.ID, normalized.Kind, value).Scan(&duplicate); err != nil {
+		return "", err
+	}
+	if duplicate != 0 {
+		return "", fmt.Errorf("этот источник уже привязан к узлу %q", node.Label)
+	}
+	var position int
+	if err := tx.QueryRow(`SELECT COUNT(*) FROM mind_map_node_sources WHERE map_id=? AND node_id=? AND deleted_at=''`, item.ID, node.ID).Scan(&position); err != nil {
+		return "", err
+	}
+	now := time.Now().UTC().Format(time.RFC3339Nano)
+	*attached = normalized
+	attached.ID, err = newClassicMindMapID("mms-")
+	if err != nil {
+		return "", err
+	}
+	attached.MapID, attached.NodeID, attached.Position, attached.Created = item.ID, node.ID, position, now
+	if err := insertClassicMindMapSource(tx, item.ID, node.ID, position, *attached, now); err != nil {
+		return "", err
+	}
+	return node.ID, nil
 }
 
 func (s *Store) normalizeClassicMindMapSource(source ClassicMindMapSource) (ClassicMindMapSource, error) {
@@ -635,84 +650,96 @@ func validateClassicMindMapHTTPURL(raw string) (*url.URL, error) {
 	return parsed, nil
 }
 
-func (s *Store) DetachClassicMindMapSource(mapRef, nodeRef, sourceID string, expectedRevision int64, actor, comment string) (ClassicMindMapDocument, error) {
+func (s *Store) DetachClassicMindMapSource(mapRef, nodeRef, sourceID string, expectedRevision int64, actor, comment string) (applogResult0 ClassicMindMapDocument, applogResult1 error) {
+	defer applog.Track("pkg.mem.Store.DetachClassicMindMapSource")(&applogResult1)
+
 	sourceID = strings.TrimSpace(sourceID)
 	if sourceID == "" {
 		return ClassicMindMapDocument{}, fmt.Errorf("source ID пуст")
 	}
 	doc, _, err := s.mutateClassicMindMap(mapRef, expectedRevision, actor, comment, "detach_source", func(tx *sql.Tx, item ClassicMindMap) (string, error) {
-		node, err := resolveClassicMindMapNodeRef(tx, item.ID, nodeRef)
-		if err != nil {
-			return "", err
-		}
-		if node.Locked {
-			return "", fmt.Errorf("%w: %q", ErrClassicMindMapLocked, node.Label)
-		}
-		now := time.Now().UTC().Format(time.RFC3339Nano)
-		result, err := tx.Exec(`UPDATE mind_map_node_sources SET deleted_at=? WHERE id=? AND map_id=? AND node_id=? AND deleted_at=''`, now, sourceID, item.ID, node.ID)
-		if err != nil {
-			return "", err
-		}
-		affected, err := result.RowsAffected()
-		if err != nil || affected != 1 {
-			return "", fmt.Errorf("источник узла не найден")
-		}
-		if err := normalizeClassicMindMapSourcePositions(tx, item.ID, node.ID); err != nil {
-			return "", err
-		}
-		return node.ID, nil
+		return detachClassicMindMapSourceTx(tx, item, nodeRef, sourceID)
 	})
 	return doc, err
 }
 
-func (s *Store) MoveClassicMindMapSource(mapRef, nodeRef, sourceID string, position int, expectedRevision int64, actor, comment string) (ClassicMindMapDocument, error) {
+func detachClassicMindMapSourceTx(tx *sql.Tx, item ClassicMindMap, nodeRef, sourceID string) (string, error) {
+	node, err := resolveClassicMindMapNodeRef(tx, item.ID, nodeRef)
+	if err != nil {
+		return "", err
+	}
+	if node.Locked {
+		return "", fmt.Errorf("%w: %q", ErrClassicMindMapLocked, node.Label)
+	}
+	now := time.Now().UTC().Format(time.RFC3339Nano)
+	result, err := tx.Exec(`UPDATE mind_map_node_sources SET deleted_at=? WHERE id=? AND map_id=? AND node_id=? AND deleted_at=''`, now, sourceID, item.ID, node.ID)
+	if err != nil {
+		return "", err
+	}
+	affected, err := result.RowsAffected()
+	if err != nil || affected != 1 {
+		return "", fmt.Errorf("источник узла не найден")
+	}
+	if err := normalizeClassicMindMapSourcePositions(tx, item.ID, node.ID); err != nil {
+		return "", err
+	}
+	return node.ID, nil
+}
+
+func (s *Store) MoveClassicMindMapSource(mapRef, nodeRef, sourceID string, position int, expectedRevision int64, actor, comment string) (applogResult0 ClassicMindMapDocument, applogResult1 error) {
+	defer applog.Track("pkg.mem.Store.MoveClassicMindMapSource")(&applogResult1)
+
 	doc, _, err := s.mutateClassicMindMap(mapRef, expectedRevision, actor, comment, "move_source", func(tx *sql.Tx, item ClassicMindMap) (string, error) {
-		node, err := resolveClassicMindMapNodeRef(tx, item.ID, nodeRef)
-		if err != nil {
-			return "", err
-		}
-		if node.Locked {
-			return "", fmt.Errorf("%w: %q", ErrClassicMindMapLocked, node.Label)
-		}
-		rows, err := tx.Query(`SELECT id FROM mind_map_node_sources WHERE map_id=? AND node_id=? AND deleted_at='' ORDER BY position, id`, item.ID, node.ID)
-		if err != nil {
-			return "", err
-		}
-		var ids []string
-		for rows.Next() {
-			var id string
-			if err := rows.Scan(&id); err != nil {
-				rows.Close()
-				return "", err
-			}
-			ids = append(ids, id)
-		}
-		if err := rows.Close(); err != nil {
-			return "", err
-		}
-		old := -1
-		for i, id := range ids {
-			if id == sourceID {
-				old = i
-				break
-			}
-		}
-		if old < 0 {
-			return "", fmt.Errorf("источник узла не найден")
-		}
-		ids = append(ids[:old], ids[old+1:]...)
-		position = clampClassicMindMapPosition(position, len(ids))
-		ids = append(ids, "")
-		copy(ids[position+1:], ids[position:])
-		ids[position] = sourceID
-		for i, id := range ids {
-			if _, err := tx.Exec(`UPDATE mind_map_node_sources SET position=? WHERE id=?`, i, id); err != nil {
-				return "", err
-			}
-		}
-		return node.ID, nil
+		return moveClassicMindMapSourceTx(tx, item, nodeRef, sourceID, position)
 	})
 	return doc, err
+}
+
+func moveClassicMindMapSourceTx(tx *sql.Tx, item ClassicMindMap, nodeRef, sourceID string, position int) (string, error) {
+	node, err := resolveClassicMindMapNodeRef(tx, item.ID, nodeRef)
+	if err != nil {
+		return "", err
+	}
+	if node.Locked {
+		return "", fmt.Errorf("%w: %q", ErrClassicMindMapLocked, node.Label)
+	}
+	rows, err := tx.Query(`SELECT id FROM mind_map_node_sources WHERE map_id=? AND node_id=? AND deleted_at='' ORDER BY position, id`, item.ID, node.ID)
+	if err != nil {
+		return "", err
+	}
+	var ids []string
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			rows.Close()
+			return "", err
+		}
+		ids = append(ids, id)
+	}
+	if err := rows.Close(); err != nil {
+		return "", err
+	}
+	old := -1
+	for i, id := range ids {
+		if id == sourceID {
+			old = i
+			break
+		}
+	}
+	if old < 0 {
+		return "", fmt.Errorf("источник узла не найден")
+	}
+	ids = append(ids[:old], ids[old+1:]...)
+	position = clampClassicMindMapPosition(position, len(ids))
+	ids = append(ids, "")
+	copy(ids[position+1:], ids[position:])
+	ids[position] = sourceID
+	for i, id := range ids {
+		if _, err := tx.Exec(`UPDATE mind_map_node_sources SET position=? WHERE id=?`, i, id); err != nil {
+			return "", err
+		}
+	}
+	return node.ID, nil
 }
 
 func normalizeClassicMindMapSourcePositions(tx *sql.Tx, mapID, nodeID string) error {
@@ -742,7 +769,9 @@ func normalizeClassicMindMapSourcePositions(tx *sql.Tx, mapID, nodeID string) er
 
 // ImportClassicMindMapAttachment copies a browser-selected file beside the
 // active store. It never overwrites an existing attachment.
-func (s *Store) ImportClassicMindMapAttachment(filename string, reader io.Reader) (string, string, error) {
+func (s *Store) ImportClassicMindMapAttachment(filename string, reader io.Reader) (applogResult0 string, applogResult1 string, applogResult2 error) {
+	defer applog.Track("pkg.mem.Store.ImportClassicMindMapAttachment")(&applogResult2)
+
 	filename = filepath.Base(strings.TrimSpace(filename))
 	if filename == "" || filename == "." || filename == string(filepath.Separator) {
 		return "", "", fmt.Errorf("имя файла пусто")
@@ -776,7 +805,9 @@ func (s *Store) ImportClassicMindMapAttachment(filename string, reader io.Reader
 	return path, "sha256:" + hex.EncodeToString(hash.Sum(nil)), nil
 }
 
-func (s *Store) ResolveClassicMindMapFileSource(mapRef, sourceID string) (ClassicMindMapResolvedFile, error) {
+func (s *Store) ResolveClassicMindMapFileSource(mapRef, sourceID string) (applogResult0 ClassicMindMapResolvedFile, applogResult1 error) {
+	defer applog.Track("pkg.mem.Store.ResolveClassicMindMapFileSource")(&applogResult1)
+
 	doc, err := s.LoadClassicMindMap(mapRef)
 	if err != nil {
 		return ClassicMindMapResolvedFile{}, err
@@ -793,6 +824,13 @@ func (s *Store) ResolveClassicMindMapFileSource(mapRef, sourceID string) (Classi
 					return resolved, fmt.Errorf("источник не является current")
 				}
 				resolved.Path, resolved.Page = source.Evidence.SourcePath, source.Evidence.Page
+				located, _, err := sourceLocation(context.Background(), s.db, filepath.Dir(s.Path()), *source.Evidence)
+				if err != nil {
+					return resolved, err
+				}
+				resolved.Path = located
+				anchor := *source.Evidence
+				resolved.Evidence = &anchor
 			case ClassicMindMapSourceExternalFile:
 				resolved.Path = source.Locator
 			default:

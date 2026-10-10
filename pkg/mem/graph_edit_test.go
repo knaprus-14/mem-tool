@@ -138,6 +138,7 @@ func TestKnowledgeEditRejectedObjectReturnsToReviewAndUndoRestoresRejection(t *t
 	if _, err := store.RejectKnowledgeObject(KnowledgeReviewMutationRequest{
 		ObjectType: KnowledgeObjectNode, ID: "edit-rejected", Reviewer: "Руслан", Comment: "Нужно исправить",
 		ExpectedEvidenceDigest: item.EvidenceDigest,
+		ExpectedReviewDigest:   knowledgeReviewItemByID(t, store, KnowledgeObjectNode, "edit-rejected").ReviewDigest,
 	}); err != nil {
 		t.Fatal(err)
 	}

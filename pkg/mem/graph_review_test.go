@@ -237,6 +237,7 @@ func TestKnowledgeApprovalRecordsAuditAndFailedApprovalDoesNot(t *testing.T) {
 	approved, err := store.ApproveKnowledgeObjectWithReview(KnowledgeApprovalRequest{
 		ObjectType: KnowledgeObjectNode, ID: "audit-ok", Reviewer: "Руслан",
 		Comment: "Проверено", ExpectedEvidenceDigest: digest,
+		ExpectedReviewDigest: knowledgeReviewItemByID(t, store, KnowledgeObjectNode, "audit-ok").ReviewDigest,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -247,6 +248,7 @@ func TestKnowledgeApprovalRecordsAuditAndFailedApprovalDoesNot(t *testing.T) {
 	if _, err := store.ApproveKnowledgeObjectWithReview(KnowledgeApprovalRequest{
 		ObjectType: KnowledgeObjectNode, ID: "audit-fail", Reviewer: "Руслан",
 		ExpectedEvidenceDigest: "sha256:" + strings.Repeat("0", 64),
+		ExpectedReviewDigest:   knowledgeReviewItemByID(t, store, KnowledgeObjectNode, "audit-fail").ReviewDigest,
 	}); !errors.Is(err, ErrKnowledgeEvidenceChanged) {
 		t.Fatalf("wrong digest did not fail closed: %v", err)
 	}
@@ -277,9 +279,15 @@ func TestKnowledgeBatchApprovalIsAtomicAndAllowsEndpointNodesInSameBatch(t *test
 		t.Fatal(err)
 	}
 	result, err := store.ApproveKnowledgeObjects([]KnowledgeApprovalRequest{
-		{ObjectType: KnowledgeObjectEdge, ID: "batch-edge", Reviewer: "reviewer", ExpectedEvidenceDigest: digest},
-		{ObjectType: KnowledgeObjectNode, ID: "batch-b", Reviewer: "reviewer", ExpectedEvidenceDigest: digest},
-		{ObjectType: KnowledgeObjectNode, ID: "batch-a", Reviewer: "reviewer", ExpectedEvidenceDigest: digest},
+		{ObjectType: KnowledgeObjectEdge, ID: "batch-edge", Reviewer: "reviewer", ExpectedEvidenceDigest: digest,
+			ExpectedReviewDigest: knowledgeReviewItemByID(t, store, KnowledgeObjectEdge, "batch-edge").ReviewDigest,
+		},
+		{ObjectType: KnowledgeObjectNode, ID: "batch-b", Reviewer: "reviewer", ExpectedEvidenceDigest: digest,
+			ExpectedReviewDigest: knowledgeReviewItemByID(t, store, KnowledgeObjectNode, "batch-b").ReviewDigest,
+		},
+		{ObjectType: KnowledgeObjectNode, ID: "batch-a", Reviewer: "reviewer", ExpectedEvidenceDigest: digest,
+			ExpectedReviewDigest: knowledgeReviewItemByID(t, store, KnowledgeObjectNode, "batch-a").ReviewDigest,
+		},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -319,8 +327,12 @@ func TestKnowledgeBatchApprovalRollsBackEveryStatusAndReview(t *testing.T) {
 		t.Fatal(err)
 	}
 	_, err = store.ApproveKnowledgeObjects([]KnowledgeApprovalRequest{
-		{ObjectType: KnowledgeObjectNode, ID: "rollback-a", Reviewer: "reviewer", ExpectedEvidenceDigest: digest},
-		{ObjectType: KnowledgeObjectNode, ID: "rollback-b", Reviewer: "reviewer", ExpectedEvidenceDigest: "sha256:" + strings.Repeat("f", 64)},
+		{ObjectType: KnowledgeObjectNode, ID: "rollback-a", Reviewer: "reviewer", ExpectedEvidenceDigest: digest,
+			ExpectedReviewDigest: knowledgeReviewItemByID(t, store, KnowledgeObjectNode, "rollback-a").ReviewDigest,
+		},
+		{ObjectType: KnowledgeObjectNode, ID: "rollback-b", Reviewer: "reviewer", ExpectedEvidenceDigest: "sha256:" + strings.Repeat("f", 64),
+			ExpectedReviewDigest: knowledgeReviewItemByID(t, store, KnowledgeObjectNode, "rollback-b").ReviewDigest,
+		},
 	})
 	if !errors.Is(err, ErrKnowledgeEvidenceChanged) {
 		t.Fatalf("batch with changed evidence was accepted: %v", err)
@@ -351,7 +363,8 @@ func TestKnowledgeReviewHistorySurvivesReExtractionAndIsAppendOnly(t *testing.T)
 		t.Fatal(err)
 	}
 	if _, err := store.ApproveKnowledgeObjectWithReview(KnowledgeApprovalRequest{
-		ObjectType: KnowledgeObjectNode, ID: "history-node", Reviewer: "reviewer",
+		ObjectType: KnowledgeObjectNode, ID: "history-node", Reviewer: "reviewer", ExpectedEvidenceDigest: knowledgeReviewItemByID(t, store, KnowledgeObjectNode, "history-node").EvidenceDigest,
+		ExpectedReviewDigest: knowledgeReviewItemByID(t, store, KnowledgeObjectNode, "history-node").ReviewDigest,
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -381,8 +394,12 @@ func TestKnowledgeApprovalValidatesReviewerCommentAndBatchDigest(t *testing.T) {
 	}
 	for name, request := range map[string]KnowledgeApprovalRequest{
 		"empty reviewer": {ObjectType: KnowledgeObjectNode, ID: "validation-node"},
-		"long reviewer":  {ObjectType: KnowledgeObjectNode, ID: "validation-node", Reviewer: strings.Repeat("я", MaxKnowledgeReviewerRunes+1)},
-		"long comment":   {ObjectType: KnowledgeObjectNode, ID: "validation-node", Reviewer: "r", Comment: strings.Repeat("я", MaxKnowledgeCommentRunes+1)},
+		"long reviewer": {ObjectType: KnowledgeObjectNode, ID: "validation-node", Reviewer: strings.Repeat("я", MaxKnowledgeReviewerRunes+1),
+			ExpectedReviewDigest: knowledgeReviewItemByID(t, store, KnowledgeObjectNode, "validation-node").ReviewDigest,
+		},
+		"long comment": {ObjectType: KnowledgeObjectNode, ID: "validation-node", Reviewer: "r", Comment: strings.Repeat("я", MaxKnowledgeCommentRunes+1),
+			ExpectedReviewDigest: knowledgeReviewItemByID(t, store, KnowledgeObjectNode, "validation-node").ReviewDigest,
+		},
 	} {
 		t.Run(name, func(t *testing.T) {
 			if _, err := store.ApproveKnowledgeObjectWithReview(request); err == nil {
@@ -392,6 +409,7 @@ func TestKnowledgeApprovalValidatesReviewerCommentAndBatchDigest(t *testing.T) {
 	}
 	if _, err := store.ApproveKnowledgeObjects([]KnowledgeApprovalRequest{{
 		ObjectType: KnowledgeObjectNode, ID: "validation-node", Reviewer: "r",
+		ExpectedReviewDigest: knowledgeReviewItemByID(t, store, KnowledgeObjectNode, "validation-node").ReviewDigest,
 	}}); err == nil || !strings.Contains(err.Error(), "expected_evidence_digest") {
 		t.Fatalf("unpinned batch was accepted: %v", err)
 	}
@@ -414,6 +432,7 @@ func TestKnowledgeRejectReopenAndUndoArePinnedAndAppendOnly(t *testing.T) {
 	base := KnowledgeReviewMutationRequest{
 		ObjectType: KnowledgeObjectNode, ID: "review-lifecycle", Reviewer: "Руслан",
 		ExpectedEvidenceDigest: digest,
+		ExpectedReviewDigest:   knowledgeReviewItemByID(t, store, KnowledgeObjectNode, "review-lifecycle").ReviewDigest,
 	}
 	if _, err := store.RejectKnowledgeObject(base); err == nil || !strings.Contains(err.Error(), "comment") {
 		t.Fatalf("rejection without a reason was accepted: %v", err)
@@ -496,6 +515,7 @@ func TestKnowledgeApprovalUndoRequiresIncidentRelationsFirst(t *testing.T) {
 	for _, id := range []string{"undo-a", "undo-b"} {
 		result, err := store.ApproveKnowledgeObjectWithReview(KnowledgeApprovalRequest{
 			ObjectType: KnowledgeObjectNode, ID: id, Reviewer: "reviewer", ExpectedEvidenceDigest: digest,
+			ExpectedReviewDigest: knowledgeReviewItemByID(t, store, KnowledgeObjectNode, id).ReviewDigest,
 		})
 		if err != nil {
 			t.Fatal(err)
@@ -504,6 +524,7 @@ func TestKnowledgeApprovalUndoRequiresIncidentRelationsFirst(t *testing.T) {
 	}
 	edgeApproval, err := store.ApproveKnowledgeObjectWithReview(KnowledgeApprovalRequest{
 		ObjectType: KnowledgeObjectEdge, ID: "undo-edge", Reviewer: "reviewer", ExpectedEvidenceDigest: digest,
+		ExpectedReviewDigest: knowledgeReviewItemByID(t, store, KnowledgeObjectEdge, "undo-edge").ReviewDigest,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -511,6 +532,7 @@ func TestKnowledgeApprovalUndoRequiresIncidentRelationsFirst(t *testing.T) {
 	undoA := KnowledgeReviewMutationRequest{
 		ObjectType: KnowledgeObjectNode, ID: "undo-a", Reviewer: "reviewer",
 		ExpectedEvidenceDigest: digest, ExpectedReviewID: approvals["undo-a"].Review.ID,
+		ExpectedReviewDigest: knowledgeReviewItemByID(t, store, KnowledgeObjectNode, "undo-a").ReviewDigest,
 	}
 	if _, err := store.UndoKnowledgeReview(undoA); !errors.Is(err, ErrKnowledgeActiveRelations) {
 		t.Fatalf("active incident relation did not block node undo: %v", err)
@@ -518,6 +540,7 @@ func TestKnowledgeApprovalUndoRequiresIncidentRelationsFirst(t *testing.T) {
 	if _, err := store.UndoKnowledgeReview(KnowledgeReviewMutationRequest{
 		ObjectType: KnowledgeObjectEdge, ID: "undo-edge", Reviewer: "reviewer",
 		ExpectedEvidenceDigest: digest, ExpectedReviewID: edgeApproval.Review.ID,
+		ExpectedReviewDigest: knowledgeReviewItemByID(t, store, KnowledgeObjectEdge, "undo-edge").ReviewDigest,
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -549,6 +572,7 @@ func TestKnowledgeRejectionFailsClosedOnChangedEvidenceDigest(t *testing.T) {
 	_, err := store.RejectKnowledgeObject(KnowledgeReviewMutationRequest{
 		ObjectType: KnowledgeObjectNode, ID: "reject-pinned", Reviewer: "reviewer", Comment: "reason",
 		ExpectedEvidenceDigest: "sha256:" + strings.Repeat("0", 64),
+		ExpectedReviewDigest:   knowledgeReviewItemByID(t, store, KnowledgeObjectNode, "reject-pinned").ReviewDigest,
 	})
 	if !errors.Is(err, ErrKnowledgeEvidenceChanged) {
 		t.Fatalf("changed evidence digest did not block rejection: %v", err)

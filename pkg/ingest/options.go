@@ -1,5 +1,7 @@
 package ingest
 
+import "github.com/knaprus-14/mem-tool/internal/applog"
+
 import (
 	"bytes"
 	"context"
@@ -137,12 +139,15 @@ func (e *engine) progress(stage string, page, total int, message string) {
 }
 
 func (e *engine) progressAt(stage string, page, current, total int, message string) {
+	applog.Event("DEBUG", "ingest.progress", applog.Fields{"stage": stage, "page": page, "current": current, "total": total})
 	if e.options.Progress != nil {
 		e.options.Progress(ProgressEvent{Stage: stage, Page: page, Current: current, Total: total, Message: message})
 	}
 }
 
-func (e *engine) runTool(ctx context.Context, tool string, args ...string) (commandOutput, error) {
+func (e *engine) runTool(ctx context.Context, tool string, args ...string) (applogResult0 commandOutput, applogResult1 error) {
+	defer applog.Track("pkg.ingest.engine.runTool")(&applogResult1)
+
 	runCtx, cancel := context.WithTimeout(ctx, e.options.ToolTimeout)
 	defer cancel()
 	out, err := e.run(runCtx, tool, args...)

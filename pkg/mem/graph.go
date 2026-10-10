@@ -1,5 +1,7 @@
 package mem
 
+import "github.com/knaprus-14/mem-tool/internal/applog"
+
 import (
 	"database/sql"
 	"fmt"
@@ -424,7 +426,8 @@ BEGIN
 END;
 `
 
-func EvidenceAnchorForEntry(entry Entry, excerpt string) (EvidenceAnchor, error) {
+func EvidenceAnchorForEntry(entry Entry, excerpt string) (applogResult0 EvidenceAnchor, applogResult1 error) {
+
 	if excerpt == "" {
 		excerpt = entry.Text
 	}
@@ -454,7 +457,8 @@ func EvidenceAnchorForEntry(entry Entry, excerpt string) (EvidenceAnchor, error)
 	return anchor, nil
 }
 
-func ValidateKnowledgeGraph(graph KnowledgeGraph) error {
+func ValidateKnowledgeGraph(graph KnowledgeGraph) (applogResult0 error) {
+
 	nodeIDs := make(map[string]bool, len(graph.Nodes))
 	for i := range graph.Nodes {
 		if err := validateKnowledgeNode(graph.Nodes[i]); err != nil {
@@ -699,20 +703,26 @@ func validateKnowledgeTimes(created, updated string) error {
 // UpsertKnowledgeGraph atomically upserts a graph fragment and replaces the
 // evidence lists only for the supplied nodes and edges. Other graph branches
 // are left intact.
-func (s *Store) UpsertKnowledgeGraph(graph KnowledgeGraph) error {
+func (s *Store) UpsertKnowledgeGraph(graph KnowledgeGraph) (applogResult0 error) {
+	defer applog.Track("pkg.mem.Store.UpsertKnowledgeGraph")(&applogResult0)
+
 	return s.upsertKnowledgeGraph(graph, false, false)
 }
 
 // UpsertCurrentKnowledgeGraph additionally verifies every supplied anchor
 // against the current entry snapshot while holding the same write lock used by
 // persistence. It closes the evidence-change window during model generation.
-func (s *Store) UpsertCurrentKnowledgeGraph(graph KnowledgeGraph) error {
+func (s *Store) UpsertCurrentKnowledgeGraph(graph KnowledgeGraph) (applogResult0 error) {
+	defer applog.Track("pkg.mem.Store.UpsertCurrentKnowledgeGraph")(&applogResult0)
+
 	return s.upsertKnowledgeGraph(graph, true, false)
 }
 
 // UpsertCorpusAnalysisGraph additionally requires every endpoint not created by
 // this fragment to remain an active claim with fully current stored evidence.
-func (s *Store) UpsertCorpusAnalysisGraph(graph KnowledgeGraph) error {
+func (s *Store) UpsertCorpusAnalysisGraph(graph KnowledgeGraph) (applogResult0 error) {
+	defer applog.Track("pkg.mem.Store.UpsertCorpusAnalysisGraph")(&applogResult0)
+
 	if err := validateCorpusAnalysisFragment(graph); err != nil {
 		return err
 	}
@@ -867,16 +877,17 @@ func (s *Store) upsertKnowledgeGraph(graph KnowledgeGraph, requireCurrentEvidenc
 	}
 
 	for _, node := range graph.Nodes {
-		status, err := knowledgeStatusForUpsert(tx, "knowledge_nodes", "knowledge_node_evidence", "node_id", node.ID, node.Status, node.Origin, node.Evidence)
-		if err != nil {
-			return rollback(fmt.Errorf("preserve knowledge node review %q: %w", node.ID, err))
-		}
 		label, body := node.Label, node.Body
 		if node.Origin == KnowledgeOriginGenerated {
 			label, body, err = knowledgeContentForUpsert(tx, KnowledgeObjectNode, node.ID, label, body)
 			if err != nil {
 				return rollback(fmt.Errorf("preserve knowledge node edit %q: %w", node.ID, err))
 			}
+		}
+		reviewDigest := knowledgeReviewDigest(knowledgeReviewContent{Type: KnowledgeObjectNode, ID: node.ID, Kind: string(node.Kind), Label: label, Body: body, Origin: node.Origin})
+		status, err := knowledgeStatusForUpsert(tx, KnowledgeObjectNode, node.ID, node.Status, node.Origin, node.Evidence, reviewDigest)
+		if err != nil {
+			return rollback(fmt.Errorf("preserve knowledge node review %q: %w", node.ID, err))
 		}
 		if _, err := tx.Exec(`INSERT INTO knowledge_nodes
 (id, kind, label, body, status, origin, confidence, created, updated)
@@ -897,16 +908,17 @@ status=excluded.status, origin=excluded.origin, confidence=excluded.confidence, 
 		}
 	}
 	for _, edge := range graph.Edges {
-		status, err := knowledgeStatusForUpsert(tx, "knowledge_edges", "knowledge_edge_evidence", "edge_id", edge.ID, edge.Status, edge.Origin, edge.Evidence)
-		if err != nil {
-			return rollback(fmt.Errorf("preserve knowledge edge review %q: %w", edge.ID, err))
-		}
 		label := edge.Label
 		if edge.Origin == KnowledgeOriginGenerated {
 			label, _, err = knowledgeContentForUpsert(tx, KnowledgeObjectEdge, edge.ID, label, "")
 			if err != nil {
 				return rollback(fmt.Errorf("preserve knowledge edge edit %q: %w", edge.ID, err))
 			}
+		}
+		reviewDigest := knowledgeReviewDigest(knowledgeReviewContent{Type: KnowledgeObjectEdge, ID: edge.ID, Kind: string(edge.Kind), Label: label, From: edge.From, To: edge.To, Origin: edge.Origin})
+		status, err := knowledgeStatusForUpsert(tx, KnowledgeObjectEdge, edge.ID, edge.Status, edge.Origin, edge.Evidence, reviewDigest)
+		if err != nil {
+			return rollback(fmt.Errorf("preserve knowledge edge review %q: %w", edge.ID, err))
 		}
 		if _, err := tx.Exec(`INSERT INTO knowledge_edges
 (id, from_node, to_node, kind, label, status, origin, confidence, created, updated)
@@ -955,9 +967,16 @@ func requireCurrentKnowledgeEvidence(anchors []EvidenceAnchor, entries []Entry) 
 	return nil
 }
 
-func knowledgeStatusForUpsert(tx *sql.Tx, objectTable, evidenceTable, ownerColumn, id string, incoming KnowledgeStatus, origin KnowledgeOrigin, evidence []EvidenceAnchor) (KnowledgeStatus, error) {
+// A repeated generation retains a decision only for the exact effective
+// content (after manual overrides) and evidence currently stored. Do not infer
+// a historic audit pin for old databases; compare the objects in this transaction.
+func knowledgeStatusForUpsert(tx *sql.Tx, objectType KnowledgeObjectType, id string, incoming KnowledgeStatus, origin KnowledgeOrigin, evidence []EvidenceAnchor, reviewDigest string) (KnowledgeStatus, error) {
 	if incoming != KnowledgeStatusDraft || origin != KnowledgeOriginGenerated {
 		return incoming, nil
+	}
+	objectTable, evidenceTable, ownerColumn, err := knowledgeObjectTables(objectType)
+	if err != nil {
+		return "", err
 	}
 	var existing KnowledgeStatus
 	var existingOrigin KnowledgeOrigin
@@ -975,7 +994,14 @@ func knowledgeStatusForUpsert(tx *sql.Tx, objectTable, evidenceTable, ownerColum
 	if err != nil {
 		return "", err
 	}
-	if equalEvidenceAnchors(stored, evidence) {
+	if !equalEvidenceAnchors(stored, evidence) {
+		return incoming, nil
+	}
+	storedDigest, err := loadKnowledgeReviewDigest(tx, objectType, id)
+	if err != nil {
+		return "", err
+	}
+	if storedDigest == reviewDigest {
 		return existing, nil
 	}
 	return incoming, nil
@@ -1045,7 +1071,9 @@ VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, table, ownerColumn)
 	return nil
 }
 
-func (s *Store) LoadKnowledgeGraph() (KnowledgeGraph, error) {
+func (s *Store) LoadKnowledgeGraph() (applogResult0 KnowledgeGraph, applogResult1 error) {
+	defer applog.Track("pkg.mem.Store.LoadKnowledgeGraph")(&applogResult1)
+
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	return loadKnowledgeGraphFromQuerier(s.db)

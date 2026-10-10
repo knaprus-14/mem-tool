@@ -1,0 +1,15 @@
+/* Scoped preview styles; source editor values and PDF evidence remain separate. */
+.mem-markdown{font:15px/1.65 system-ui,sans-serif;white-space:normal;overflow-wrap:anywhere;min-width:0}
+.mem-markdown p,.mem-markdown blockquote,.mem-markdown li{white-space:pre-wrap}
+.mem-markdown>:first-child{margin-top:0}.mem-markdown>:last-child{margin-bottom:0}
+.mem-markdown p{margin:.7em 0}.mem-markdown h1,.mem-markdown h2,.mem-markdown h3,.mem-markdown h4,.mem-markdown h5,.mem-markdown h6{margin:1em 0 .4em;line-height:1.3;letter-spacing:normal;white-space:pre-wrap}
+.mem-markdown h1{font-size:1.5em}.mem-markdown h2{font-size:1.35em}.mem-markdown h3{font-size:1.2em}.mem-markdown h4,.mem-markdown h5,.mem-markdown h6{font-size:1em}
+.mem-markdown ul,.mem-markdown ol{padding-inline-start:1.8em;margin:.7em 0}.mem-markdown li{padding-inline-start:.15em;margin:.2em 0}
+.mem-markdown blockquote{border-inline-start:3px solid var(--line,#cad8d1);padding-inline-start:1em;margin:.7em 0;color:var(--muted,#52675b)}
+.mem-markdown code{font: .92em/1.6 ui-monospace,Consolas,monospace;background:var(--soft,#edf3ef);border-radius:3px;padding:.1em .25em;white-space:pre-wrap}
+.mem-markdown pre{font: .92em/1.6 ui-monospace,Consolas,monospace;white-space:pre-wrap;overflow-wrap:anywhere;background:var(--soft,#edf3ef);padding:.8em;border-radius:6px;margin:.8em 0;max-width:100%;overflow:auto}
+.mem-markdown pre code{font:inherit;padding:0;background:transparent}
+.mem-markdown a,.mem-markdown .mem-markdown-object{color:var(--accent,#245d42);text-decoration:underline;text-underline-offset:.15em}
+.mem-markdown .mem-markdown-object{display:inline;padding:0;border:0;border-radius:0;background:none;font:inherit;line-height:inherit;white-space:inherit;text-align:inherit;cursor:pointer}
+.mem-markdown a:focus-visible,.mem-markdown .mem-markdown-object:focus-visible{outline:3px solid var(--accent,#245d42);outline-offset:3px}
+.mem-markdown .mem-markdown-notice{font-size:13px;color:var(--muted,#52675b);border-top:1px solid var(--line,#cad8d1);padding-top:.5em}

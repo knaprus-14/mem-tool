@@ -1,0 +1,3 @@
+Deployment failed; restoring the previous binary set. Injected deployment failure
+Recovery artifacts preserved for manual restoration: C:\Users\ZMII\AppData\Local\Temp\mem-deploy-recovery-test-a486162d37444a3abf07b0f6fa23a02c\stage
+PASS: incomplete rollback retains backups; unaffected binaries restore; cleanup preserves unrelated data.

@@ -1,0 +1,7 @@
+error acquiring upload token: creating token file: open C:\Users\ZMII\AppData\Roaming\go\telemetry\local\upload.token: Access is denied.
+=== RUN   TestReviewProbeApprovalRejectsChangedContent
+    maps_review_probe_test.go:25: stale review approved changed content: status=active content_changed=true evidence_unchanged=true approvals=1
+--- FAIL: TestReviewProbeApprovalRejectsChangedContent (0.95s)
+FAIL
+FAIL	github.com/knaprus-14/mem-tool/pkg/mem	8.738s
+FAIL

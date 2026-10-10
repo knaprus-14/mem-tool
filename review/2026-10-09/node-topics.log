@@ -1,0 +1,18 @@
+✔ a common source cannot swallow independent semantic topics (122.8715ms)
+✔ identical topic labels share a presentation group but conflicting claims stay intact (2.3645ms)
+✔ links between topics keep real edge identities, without inferring new relations (6.9736ms)
+✔ all source-only, disconnected, and empty graphs remain navigable (1.2031ms)
+✔ focus layout wraps rows and keeps coordinates finite for large groups and narrow screens (8.6791ms)
+﹣ private corpus replay assigns each node exactly once without changing evidence (0.3515ms) # SKIP
+✔ four empty mentions become one subject, while definition and claims remain distinct (13.1777ms)
+✔ abbreviations are scoped to source/revision and ambiguous meanings are not collapsed (3.2492ms)
+✔ content-bearing topics, different statuses and normative nodes never collapse by title (3.0079ms)
+﹣ real VPV cluster has five informative objects and four original topic mentions (0.5805ms) # SKIP
+ℹ tests 10
+ℹ suites 0
+ℹ pass 8
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 2
+ℹ todo 0
+ℹ duration_ms 191.4342

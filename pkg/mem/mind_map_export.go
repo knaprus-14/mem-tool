@@ -1,5 +1,7 @@
 package mem
 
+import "github.com/knaprus-14/mem-tool/internal/applog"
+
 import (
 	"bytes"
 	"crypto/sha256"
@@ -99,7 +101,9 @@ const (
 
 // ExportClassicMindMap renders the complete current tree, regardless of any
 // browser-only collapsed state. It never writes files or mutates the map.
-func (s *Store) ExportClassicMindMap(request ClassicMindMapExportRequest) (ClassicMindMapExportArtifact, error) {
+func (s *Store) ExportClassicMindMap(request ClassicMindMapExportRequest) (applogResult0 ClassicMindMapExportArtifact, applogResult1 error) {
+	defer applog.Track("pkg.mem.Store.ExportClassicMindMap")(&applogResult1)
+
 	request.MapRef = strings.TrimSpace(request.MapRef)
 	request.ExpectedDigest = strings.TrimSpace(request.ExpectedDigest)
 	request.ExpectedStateDigest = strings.TrimSpace(request.ExpectedStateDigest)
@@ -125,13 +129,17 @@ func (s *Store) ExportClassicMindMap(request ClassicMindMapExportRequest) (Class
 	if request.ExpectedStateDigest != "" && doc.StateDigest != request.ExpectedStateDigest {
 		return ClassicMindMapExportArtifact{}, fmt.Errorf("%w: expected state digest %s, current %s", ErrClassicMindMapExportChanged, request.ExpectedStateDigest, doc.StateDigest)
 	}
-	model, err := buildClassicMindMapExportModel(doc, string(request.Format))
+	return renderClassicMindMapArtifact(doc, request.Format)
+}
+
+func renderClassicMindMapArtifact(doc ClassicMindMapDocument, format ClassicMindMapExportFormat) (ClassicMindMapExportArtifact, error) {
+	model, err := buildClassicMindMapExportModel(doc, string(format))
 	if err != nil {
 		return ClassicMindMapExportArtifact{}, err
 	}
 	var data []byte
 	var mediaType string
-	switch request.Format {
+	switch format {
 	case ClassicMindMapExportHTML:
 		data, err = renderClassicMindMapHTML(model)
 		mediaType = "text/html; charset=utf-8"
@@ -161,10 +169,10 @@ func (s *Store) ExportClassicMindMap(request ClassicMindMapExportRequest) (Class
 		return ClassicMindMapExportArtifact{}, err
 	}
 	if len(data) == 0 || len(data) > MaxClassicMindMapExportBytes {
-		return ClassicMindMapExportArtifact{}, fmt.Errorf("classic mind map %s export size must be 1..%d bytes, got %d", request.Format, MaxClassicMindMapExportBytes, len(data))
+		return ClassicMindMapExportArtifact{}, fmt.Errorf("classic mind map %s export size must be 1..%d bytes, got %d", format, MaxClassicMindMapExportBytes, len(data))
 	}
 	return ClassicMindMapExportArtifact{
-		Format: request.Format, Filename: classicMindMapExportFilename(doc.Map.Title, request.Format),
+		Format: format, Filename: classicMindMapExportFilename(doc.Map.Title, format),
 		MediaType: mediaType, Data: data, MapID: doc.Map.ID, Revision: doc.Map.Revision,
 		Digest: doc.Digest, StateDigest: doc.StateDigest, NodeCount: len(doc.Nodes), SourceCount: model.Portable.SourceCount,
 	}, nil

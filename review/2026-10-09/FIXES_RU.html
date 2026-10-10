@@ -1,0 +1,68 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>mem-tool — исправления код-ревью · alpha.37</title>
+<style>
+:root{color-scheme:light;--ink:#172a3b;--muted:#536373;--line:#d9e2e8;--blue:#125c82}*{box-sizing:border-box}body{margin:0;background:#f1f5f7;color:var(--ink);font:16px/1.6 system-ui,"Segoe UI",sans-serif}main{max-width:1050px;margin:auto;padding:36px 26px 64px}header{background:#142b3c;color:white;padding:30px;border-radius:14px}h1{font-size:34px;line-height:1.2;margin:10px 0 20px}header p{color:#d5e3eb;margin-bottom:0}.eyebrow{font-size:12px;letter-spacing:.12em;text-transform:uppercase}section{background:white;border:1px solid var(--line);border-radius:10px;padding:26px;margin:20px 0}h2{font-size:23px;line-height:1.3;margin:0 0 18px}p{margin:12px 0}a{color:var(--blue);text-underline-offset:3px}code,pre{font-family:Consolas,monospace;font-size:.9em}code{overflow-wrap:anywhere}pre{white-space:pre-wrap;overflow-wrap:anywhere;background:#edf2f6;padding:16px;border-radius:6px}.notice{border-left:5px solid #b57b20;background:#fff8ea}.table-wrap{overflow:auto}table{border-collapse:collapse;width:100%;font-size:15px}th,td{text-align:left;vertical-align:top;padding:12px;border:1px solid var(--line)}th{background:#edf3f6}.ok{color:#21604b;font-weight:650}li{margin:8px 0}.muted{font-size:14px;color:var(--muted)}@media(max-width:640px){main{padding:18px 12px}header,section{padding:20px}h1{font-size:28px}th,td{padding:9px}}@media print{body{background:white}main{padding:0}header{background:white;color:var(--ink);padding:0}header p{color:var(--ink)}section{border:0;padding:18px 0}.notice{background:white;padding-left:18px}tr{break-inside:avoid}h2{break-after:avoid}}
+</style>
+</head>
+<body><main>
+<header>
+<div class="eyebrow">Результат исправлений · 09.10.2026 · Руслан</div>
+<h1>Семь ошибок исправлены.<br>Сборка alpha.37 проверена.</h1>
+<p>Исправлены все подтверждённые дефекты R1–R7 из код-ревью. Дополнительно закрыт обход подтверждения при повторной генерации графа. Полные Go-тесты, vet и проверки форм JavaScript проходят.</p>
+</header>
+
+<section class="notice">
+<h2>Установка остаётся незавершённой</h2>
+<p>Три EXE версии <strong>1.71.0-alpha.37</strong> собраны в <a href="../../build/web-alpha/alpha37/bin/">каталоге staging</a>. Штатный <code>deploy/windows.ps1</code> остановился на отказе записи в <code>C:\Users\ZMII\bin</code>. Повторная проверка версий и хешей подтвердила: там остаётся <strong>alpha.35</strong>.</p>
+<p>Это ограничение доступа текущего сеанса. Работающий <code>mem.exe</code> не останавливался; подготовленная сборка не объявляется установленной.</p>
+</section>
+
+<section>
+<h2>Результат по каждому дефекту</h2>
+<div class="table-wrap"><table>
+<thead><tr><th>Пункт</th><th>Исправление</th><th>Проверка</th></tr></thead><tbody>
+<tr><td>R1 · P1<br>Источник цитаты</td><td>Физическая ревизия закрепляет байты и логический путь оригинала. Старый fingerprint нельзя перезаписать. Новый PDF с тем же текстом получает другую ревизию; проверено восстановление прежнего файла.</td><td class="ok">PASS</td></tr>
+<tr><td>R2 · P1<br>Устаревшее подтверждение</td><td>Веб и batch сверяют просмотренное содержимое и структуру через review digest. Несовпадение отклоняет решение. Повторная генерация с изменениями возвращает объект в черновик, учитывая ручные правки.</td><td class="ok">PASS</td></tr>
+<tr><td>R3 · P2<br>Отмена задания</td><td>Worker атомарно захватывает только задание в очереди. Завершённая отмена больше не заменяется состоянием «выполняется».</td><td class="ok">PASS</td></tr>
+<tr><td>R4 · P2<br>Кеш графов</td><td>Выход и истечение сессии освобождают обработчики. Закрытие БД ждёт активные запросы и фоновые задачи. LRU сохраняет задания и результаты действующих сеансов.</td><td class="ok">PASS</td></tr>
+<tr><td>R5 · P2<br>Недоступная база</td><td>Недоступный локальный каталог не блокирует остальные базы. Интерфейс сообщает об ошибке и позволяет повторить проверку. Сервер продолжает запрещать запись при ошибке учёта квоты.</td><td class="ok">PASS</td></tr>
+<tr><td>R6 · P2<br>Evidence при квоте</td><td>Просмотр доказательств считается чтением и работает при заполненном хранилище. Ограничение новых записей сохраняется.</td><td class="ok">PASS</td></tr>
+<tr><td>R7 · P2<br>Идентичность документа</td><td>Legacy-индексация сохраняет managed web ID. Подмена ID и повторная индексация устаревшего сохранённого оригинала отклоняются.</td><td class="ok">PASS</td></tr>
+</tbody></table></div>
+<p class="muted">Все сценарии проверены на изолированных временных данных. Старый отчёт и его воспроизведения сохранены как снимок состояния alpha.36.</p>
+</section>
+
+<section>
+<h2>Проверки</h2>
+<ul>
+<li><code>go test ./... -count=1 -timeout=300s</code>: 13 пакетов прошли, ещё 2 без тестов. <code>go vet ./...</code>: ошибок нет.</li>
+<li>После последней правки HTML отдельно прошли целевые workspace/approval/view tests.</li>
+<li>JavaScript: 12 тестов прошли; 2 проверки частного корпуса пропущены. Проверен синтаксис изменённых скриптов.</li>
+<li>Три Windows/amd64 EXE собраны; команды <code>version</code> вернули alpha.37. SHA-256 сохранены.</li>
+<li>Формат Go и <code>git diff --check</code> проверены.</li>
+</ul>
+<p>Race detector, новый полный browser E2E, VDS и внешние LLM/OCR-сервисы не проверялись. Реальные базы пользователя не изменялись; коммит и push не выполнялись.</p>
+</section>
+
+<section>
+<h2>Что учитывать после обновления</h2>
+<p>Перезагрузите страницы графа. Старые batch-планы без <code>expected_review_digest</code> нужно пересоздать. CLI без <code>--review-digest</code> подтверждает текущую редакцию по ID; для ранее просмотренной редакции передавайте её digest.</p>
+<p>Исторические записи и anchors не переписываются. Новый выпуск не восстанавливает утраченную привязку старого оригинала. После явного реимпорта legacy-документа старые ссылки могут потребовать повторной сверки.</p>
+<p>Выход из аккаунта или истечение сессии отменяют её фоновые задания. Обычное вытеснение из кеша не удаляет действующие задания и сохранённые результаты.</p>
+<p>Закройте программы mem-tool и запустите установку из обычного PowerShell с доступом к каталогу назначения:</p>
+<pre>&amp; 'C:\Users\ZMII\Documents\ChatGPT\mem-tool\deploy\windows.ps1'
+mem version
+mem-index version
+mem-bot version</pre>
+</section>
+
+<section>
+<h2>Материалы</h2>
+<p><a href="../../docs/WEB_ALPHA37_VERIFICATION_RU.md">Подробная техническая проверка, названия тестов, ограничения и SHA-256</a> · <a href="../../build/web-alpha/alpha37/go-test.log">Go test</a> · <a href="../../build/web-alpha/alpha37/deploy-attempt.log">Отказ установки</a> · <a href="fixes-summary.json">Машиночитаемый итог</a> · <a href="REPORT_RU.html">Исходное код-ревью</a>.</p>
+<p class="muted">Функциональное развитие и паритет CLI/web из первоначального отчёта остаются отдельными задачами. Этот выпуск закрывает семь дефектов и связанную регрессию подтверждений.</p>
+</section>
+</main></body></html>

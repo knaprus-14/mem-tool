@@ -1,5 +1,7 @@
 package mem
 
+import "github.com/knaprus-14/mem-tool/internal/applog"
+
 import (
 	"bytes"
 	"encoding/csv"
@@ -57,7 +59,9 @@ type knowledgeSelectionExportData struct {
 // one exact pinned selection. It never invokes a model and never mutates the
 // graph. Stale/missing evidence remains visible in the export instead of being
 // silently discarded.
-func (s *Store) ExportKnowledgeSelection(request KnowledgeSelectionExportRequest) (KnowledgeSelectionExport, error) {
+func (s *Store) ExportKnowledgeSelection(request KnowledgeSelectionExportRequest) (applogResult0 KnowledgeSelectionExport, applogResult1 error) {
+	defer applog.Track("pkg.mem.Store.ExportKnowledgeSelection")(&applogResult1)
+
 	request.Format = strings.ToLower(strings.TrimSpace(request.Format))
 	request.Title = strings.TrimSpace(request.Title)
 	if request.Title == "" {

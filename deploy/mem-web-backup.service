@@ -1,0 +1,9 @@
+[Unit]
+Description=Verified offline backup of mem-tool web data
+
+[Service]
+Type=oneshot
+User=root
+UMask=0077
+ExecStart=/bin/bash /opt/mem-tool/tools/web-backup.sh
+TimeoutStartSec=2h

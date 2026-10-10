@@ -1,10 +1,18 @@
 package mem
 
+import "github.com/knaprus-14/mem-tool/internal/applog"
+
 import (
+	"crypto/sha256"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
+	"reflect"
+	"strings"
+
+	"github.com/knaprus-14/mem-tool/internal/filelock"
 )
 
 type OllamaConfig struct {
@@ -54,12 +62,15 @@ type IngestConfig struct {
 }
 
 type Config struct {
-	Backend  string       `json:"backend"` // "ollama" or "polza"
-	Ollama   OllamaConfig `json:"ollama"`
-	Answer   AnswerConfig `json:"answer,omitempty"`
-	Polza    PolzaConfig  `json:"polza"`
-	Chunking ChunkConfig  `json:"chunking"`
-	Ingest   IngestConfig `json:"ingest,omitempty"`
+	revision   string
+	loadedPath string
+	raw        map[string]json.RawMessage
+	Backend    string       `json:"backend"` // "ollama" or "polza"
+	Ollama     OllamaConfig `json:"ollama"`
+	Answer     AnswerConfig `json:"answer,omitempty"`
+	Polza      PolzaConfig  `json:"polza"`
+	Chunking   ChunkConfig  `json:"chunking"`
+	Ingest     IngestConfig `json:"ingest,omitempty"`
 }
 
 // DefaultConfig возвращает дефолтный конфиг (алиас для DefaultLocalConfig)
@@ -73,26 +84,16 @@ func ConfigPath() string {
 }
 
 // LoadConfig читает config.json с диска. Если файла нет — возвращает ошибку.
-func LoadConfig() (*Config, error) {
-	path := ConfigPath()
-	cfg := DefaultConfig()
+func LoadConfig() (applogResult0 *Config, applogResult1 error) {
+	defer applog.Track("pkg.mem.LoadConfig")(&applogResult1)
 
-	data, err := os.ReadFile(path)
-	if err != nil {
-		if os.IsNotExist(err) {
-			return nil, fmt.Errorf("конфиг не найден: %s", path)
-		}
-		return nil, err
-	}
-
-	if err := json.Unmarshal(data, cfg); err != nil {
-		return nil, fmt.Errorf("ошибка чтения конфига: %w", err)
-	}
-	return cfg, nil
+	return loadConfigFile(ConfigPath())
 }
 
 // SaveConfig сохраняет конфиг в config.json
-func SaveConfig(cfg *Config) error {
+func SaveConfig(cfg *Config) (applogResult0 error) {
+	defer applog.Track("pkg.mem.SaveConfig")(&applogResult0)
+
 	path := ConfigPath()
 	return saveConfigFile(path, cfg)
 }
@@ -100,8 +101,13 @@ func SaveConfig(cfg *Config) error {
 // === Per-directory варианты (для бота / multi-user) ===
 
 // LoadConfigIn читает config.json из указанной директории .mem/.
-func LoadConfigIn(dir string) (*Config, error) {
-	path := ConfigPathIn(dir)
+func LoadConfigIn(dir string) (applogResult0 *Config, applogResult1 error) {
+	defer applog.Track("pkg.mem.LoadConfigIn")(&applogResult1)
+
+	return loadConfigFile(ConfigPathIn(dir))
+}
+
+func loadConfigFile(path string) (*Config, error) {
 	cfg := DefaultLocalConfig()
 
 	data, err := os.ReadFile(path)
@@ -114,11 +120,23 @@ func LoadConfigIn(dir string) (*Config, error) {
 	if err := json.Unmarshal(data, cfg); err != nil {
 		return nil, fmt.Errorf("ошибка чтения конфига: %w", err)
 	}
+	if err := json.Unmarshal(data, &cfg.raw); err != nil || cfg.raw == nil {
+		return nil, fmt.Errorf("конфигурация должна быть JSON-объектом")
+	}
+	cfg.revision = fmt.Sprintf("%x", sha256.Sum256(data))
+	cfg.loadedPath, _ = filepath.Abs(path)
 	return cfg, nil
 }
 
+var ErrConfigConflict = errors.New("настройки изменились; перечитайте их перед сохранением")
+
+// Revision identifies the exact file loaded, including fields hidden from the UI.
+func (c *Config) Revision() string { return c.revision }
+
 // SaveConfigIn сохраняет конфиг в config.json внутри указанной директории.
-func SaveConfigIn(dir string, cfg *Config) error {
+func SaveConfigIn(dir string, cfg *Config) (applogResult0 error) {
+	defer applog.Track("pkg.mem.SaveConfigIn")(&applogResult0)
+
 	path := ConfigPathIn(dir)
 	return saveConfigFile(path, cfg)
 }
@@ -135,9 +153,38 @@ func saveConfigFile(path string, cfg *Config) error {
 	if err := os.MkdirAll(dir, 0700); err != nil {
 		return err
 	}
+	lock, err := filelock.Try(filepath.Join(dir, "config.lock"))
+	if err != nil {
+		return err
+	}
+	defer lock.Close()
+	absPath, err := filepath.Abs(path)
+	if err != nil {
+		return err
+	}
+	if cfg.revision != "" && cfg.loadedPath == absPath {
+		current, err := os.ReadFile(path)
+		if err != nil {
+			return err
+		}
+		if fmt.Sprintf("%x", sha256.Sum256(current)) != cfg.revision {
+			return ErrConfigConflict
+		}
+	}
 	data, err := json.MarshalIndent(cfg, "", "  ")
 	if err != nil {
 		return err
+	}
+	// Preserve extension fields, including nested provider/OCR settings, on edits.
+	if cfg.raw != nil {
+		var updated map[string]json.RawMessage
+		if err := json.Unmarshal(data, &updated); err != nil {
+			return err
+		}
+		data, err = json.MarshalIndent(mergeConfigFields(configExtensions(cfg.raw, reflect.TypeOf(*cfg)), updated), "", "  ")
+		if err != nil {
+			return err
+		}
 	}
 	data = append(data, '\n')
 
@@ -169,5 +216,47 @@ func saveConfigFile(path string, cfg *Config) error {
 		return fmt.Errorf("атомарная замена конфига: %w", err)
 	}
 	keepTemp = false
+	cfg.revision = fmt.Sprintf("%x", sha256.Sum256(data))
+	cfg.loadedPath = absPath
 	return nil
+}
+
+func configExtensions(original map[string]json.RawMessage, typ reflect.Type) map[string]json.RawMessage {
+	result := make(map[string]json.RawMessage, len(original))
+	for key, value := range original {
+		result[key] = value
+	}
+	for i := 0; i < typ.NumField(); i++ {
+		field := typ.Field(i)
+		key := strings.Split(field.Tag.Get("json"), ",")[0]
+		if key == "" || key == "-" {
+			continue
+		}
+		delete(result, key)
+		if field.Type.Kind() == reflect.Struct {
+			var nested map[string]json.RawMessage
+			if json.Unmarshal(original[key], &nested) == nil {
+				extra := configExtensions(nested, field.Type)
+				if len(extra) > 0 {
+					result[key], _ = json.Marshal(extra)
+				}
+			}
+		}
+	}
+	return result
+}
+
+func mergeConfigFields(original, updated map[string]json.RawMessage) map[string]json.RawMessage {
+	merged := make(map[string]json.RawMessage, len(original)+len(updated))
+	for key, value := range original {
+		merged[key] = value
+	}
+	for key, value := range updated {
+		var oldObject, newObject map[string]json.RawMessage
+		if json.Unmarshal(original[key], &oldObject) == nil && oldObject != nil && json.Unmarshal(value, &newObject) == nil && newObject != nil {
+			value, _ = json.Marshal(mergeConfigFields(oldObject, newObject))
+		}
+		merged[key] = value
+	}
+	return merged
 }

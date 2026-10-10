@@ -1,5 +1,7 @@
 package mem
 
+import "github.com/knaprus-14/mem-tool/internal/applog"
+
 import (
 	"bytes"
 	"encoding/csv"
@@ -51,7 +53,9 @@ type knowledgeLearningExportData struct {
 // ExportKnowledgeLearning produces a read-only artifact from one exact,
 // reviewed learning route. It never invokes a model and does not modify the
 // graph or the local scheduler.
-func (s *Store) ExportKnowledgeLearning(request KnowledgeLearningExportRequest) (KnowledgeLearningExport, error) {
+func (s *Store) ExportKnowledgeLearning(request KnowledgeLearningExportRequest) (applogResult0 KnowledgeLearningExport, applogResult1 error) {
+	defer applog.Track("pkg.mem.Store.ExportKnowledgeLearning")(&applogResult1)
+
 	return s.exportKnowledgeLearningAt(request, time.Now().UTC())
 }
 

@@ -10,6 +10,8 @@
 // с суффиксом In(dir) для явной директории. Scan-root — filepath.Dir(.fileindex/).
 package fileindex
 
+import "github.com/knaprus-14/mem-tool/internal/applog"
+
 import (
 	"encoding/json"
 	"fmt"
@@ -82,7 +84,9 @@ func FileIndexMetaPathIn(dir string) string {
 // Конфиг берётся из mem.DefaultLocalConfig() — те же дефолты, что для mem:
 // Ollama http://localhost:11434 (bge-m3) или Polza. Chunking-поля в config
 // присутствуют (безвредны), но игнорируются mem-index.
-func InitFileIndex() error {
+func InitFileIndex() (applogResult0 error) {
+	defer applog.Track("pkg.fileindex.InitFileIndex")(&applogResult0)
+
 	cfg := defaultFileIndexConfig()
 	configData, err := json.MarshalIndent(cfg, "", "  ")
 	if err != nil {
@@ -108,7 +112,9 @@ func InitFileIndex() error {
 
 // InitFileIndexIn создаёт .fileindex/ в указанной директории (с config.json
 // и meta.json). Если уже существует — ошибка. name используется в meta.json.
-func InitFileIndexIn(dir, name string) error {
+func InitFileIndexIn(dir, name string) (applogResult0 error) {
+	defer applog.Track("pkg.fileindex.InitFileIndexIn")(&applogResult0)
+
 	cfg := defaultFileIndexConfig()
 	configData, err := json.MarshalIndent(cfg, "", "  ")
 	if err != nil {

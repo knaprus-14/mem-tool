@@ -1,0 +1,22 @@
+Storage / ingestion review, 2026-10-09
+
+Confirmed findings
+
+1. P1: Physical original fingerprint is mutable for one extracted-content revision.
+Location: pkg/mem/source_fingerprint.go:44-45 (schema key: line 21).
+Supporting code: pkg/ingest/document.go:346-367 computes ContentRevision from extracted text/coordinates/page statuses only. SourceFileHash is assigned after extraction validation (line 188) and does not enter that revision.
+When a PDF is changed only in pictures/formulas/layout that are absent from extracted text, reimport uses the old revision. The UPSERT overwrites the original's path/hash. Existing graph evidence remains Current and verifiedSourceFile accepts the changed PDF for the old citation. This breaks the claim that visual provenance is pinned to an exact edition.
+A second consequence uses normal extracted TXT documents: import a managed document, update the same content using a new retained original path, restore its previous snapshot. Restore succeeds, but verification of the intact restored original fails with ErrSourceFileChanged because the hash row now points at the newer path.
+Both effects reproduced by TestReviewStoragePhysicalSourceRevisionIsImmutable and TestReviewStorageRestoreKeepsSameContentOriginalFingerprint. The first probe uses the existing synthetic PDF Store fixture and validates returned bytes, not a native PDF renderer. The second uses real ingest.Extract on temporary TXT files and the real restore transaction.
+Fix direction: persist immutable physical edition identity and pin anchors/snapshots to it. Different physical paths/hashes must not overwrite the association of an already published edition. Retain historical associations for restore.
+
+2. P2: Legacy mem index changes a managed document's identity.
+Location: pkg/mem/indexer.go:222-234, especially line 223.
+Reproduction: ingest temporary TXT as web:0123456789abcdef0123456789abcdef; indexFileWithEmbedder on the same physical path; stored DocumentID becomes doc-... . ReplaceDocumentChunks silently overwrites the old identity because the guard in document_update.go:80-115 validates matching identity only for an explicit Replacement and checks web: on the incoming ID.
+Effects: stable library links and graph attachments target the old web: identity, while current entries live under doc-...; history is split across identities. Reindexing an existing document should preserve its established identity, or reject legacy index for managed originals and direct the user to mem import.
+Reproduced by TestReviewStorageLegacyIndexPreservesManagedIdentity.
+
+Validation
+All three regression tests intentionally FAIL on the reviewed tree, confirming the expected invariants are violated. Their source is storage_regression_test.go.txt (kept outside normal Go package discovery), injected only through overlay.json. Exact output is test-output.txt. Command is in README.txt.
+All databases/files are isolated t.TempDir values; embeddings are fake deterministic vectors. No actual model calls, actual database writes, production package edits, application binary builds, or deployments.
+Read-only inspection covered importer/store transaction and provenance validation paths, document update/history/restore, query/search scoring, source verification/preview, ingestion document identity/extraction, and fileindex scan/annotation paths. This was focused review, not a proof of absence of other defects.

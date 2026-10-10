@@ -1,0 +1,33 @@
+package fileindex
+
+import (
+    "os"
+    "path/filepath"
+    "testing"
+    "time"
+
+    "github.com/knaprus-14/mem-tool/pkg/mem"
+)
+
+func TestReviewScanInvalidatesChangedContentVector(t *testing.T) {
+    root := t.TempDir()
+    path := filepath.Join(root, "note.txt")
+    if err := os.WriteFile(path, []byte("new contents"), 0600); err != nil { t.Fatal(err) }
+    store, err := NewStore(filepath.Join(root, ".fileindex"))
+    if err != nil { t.Fatal(err) }
+    defer store.Close()
+    info, err := os.Stat(path)
+    if err != nil { t.Fatal(err) }
+    cfg := mem.DefaultLocalConfig()
+    identity, err := mem.EmbeddingIdentityForConfig(cfg)
+    if err != nil { t.Fatal(err) }
+    entry := &FileEntry{Path:"note.txt", Name:"note.txt", Ext:".txt", Size:1, Mtime:info.ModTime().Add(-time.Hour).Unix(), Backend:identity.Backend, EmbeddingModel:identity.Model, EmbeddingSpace:identity.SpaceID, Embedding:[]float32{1, 0}, Annotation:"old contents"}
+    if err := store.Upsert(entry); err != nil { t.Fatal(err) }
+    // A normal metadata scan notices the file change but carries the old annotation/vector forward.
+    if _, err := Scan(ScanOptions{RootDir:root}, store, cfg); err != nil { t.Fatal(err) }
+    current, ok := store.GetByPath("note.txt")
+    if !ok { t.Fatal("entry disappeared") }
+    if current.EmbeddingSpace != "" && current.Annotation == "old contents" && current.Mtime == info.ModTime().Unix() {
+        t.Fatal("changed file now has fresh size/mtime with the old annotation and a vector still marked current; subsequent scan -embed skips it")
+    }
+}

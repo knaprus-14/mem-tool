@@ -1,5 +1,7 @@
 package mem
 
+import "github.com/knaprus-14/mem-tool/internal/applog"
+
 import (
 	"crypto/sha256"
 	"database/sql"
@@ -10,6 +12,8 @@ import (
 	"strings"
 	"time"
 	"unicode"
+
+	"github.com/knaprus-14/mem-tool/internal/sqliteutil"
 )
 
 const (
@@ -34,13 +38,35 @@ type SearchOptions struct {
 	From           string
 	To             string
 	VectorOnly     bool
+	Document       string
+	ImportantOnly  bool
+	PageFrom       int
+	PageTo         int
+	AllBackends    bool
 }
 
 // initLexicalIndex probes the current SQLite build once. FTS5 is preferred,
 // but a missing extension must not make an existing .mem database unusable.
 func initLexicalIndex(db *sql.DB) string {
-	if _, err := db.Exec(`CREATE VIRTUAL TABLE IF NOT EXISTS entries_fts
+	tx, err := db.Begin()
+	if err != nil {
+		return lexicalFallback
+	}
+	defer tx.Rollback()
+	var exists int
+	if err := tx.QueryRow(`SELECT count(*) FROM sqlite_master WHERE name='entries_fts'`).Scan(&exists); err != nil {
+		return lexicalFallback
+	}
+	if _, err := tx.Exec(`CREATE VIRTUAL TABLE IF NOT EXISTS entries_fts
 		USING fts5(entry_id UNINDEXED, title, text, tags)`); err != nil {
+		return lexicalFallback
+	}
+	if exists == 0 {
+		if _, err := tx.Exec(`UPDATE entry_fts_state SET generation=-1 WHERE singleton=1`); err != nil {
+			return lexicalFallback
+		}
+	}
+	if err := tx.Commit(); err != nil {
 		return lexicalFallback
 	}
 	return lexicalFTS5
@@ -57,7 +83,9 @@ func (s *Store) LexicalMode() string {
 // SearchWithOptions returns all filtered vector and lexical candidates. The
 // final limit belongs to the caller so a lexical match cannot disappear
 // behind an earlier vector-only top-K truncation.
-func (s *Store) SearchWithOptions(options SearchOptions) ([]Entry, error) {
+func (s *Store) SearchWithOptions(options SearchOptions) (applogResult0 []Entry, applogResult1 error) {
+	defer applog.Track("pkg.mem.Store.SearchWithOptions")(&applogResult1)
+
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if err := s.refreshEntryCacheIfStaleUnlocked("hybrid search"); err != nil {
@@ -72,18 +100,25 @@ func (s *Store) SearchWithOptions(options SearchOptions) ([]Entry, error) {
 		if err != nil {
 			return nil, err
 		}
+		lexicalScores = filterLexicalScores(s.entries, lexicalScores, options)
 	}
 
+	return scoreSearchSnapshot(s.entries, s.vectors, lexicalScores, options), nil
+}
+
+// scoreSearchSnapshot is shared by CLI stores and bounded read-only web queries.
+func scoreSearchSnapshot(entries []Entry, vectors [][]float32, lexicalScores map[int64]float64, options SearchOptions) []Entry {
+	query := strings.TrimSpace(options.Query)
 	type candidate struct {
 		entry        Entry
 		vectorScore  float64
 		lexicalScore float64
 		lexicalHit   bool
 	}
-	candidates := make([]candidate, 0, len(s.entries))
-	for i := range s.entries {
-		entry := s.entries[i]
-		if entry.Backend != options.Backend || !matchesSearchFilters(entry, options) {
+	candidates := make([]candidate, 0, len(entries))
+	for i := range entries {
+		entry := entries[i]
+		if (!options.AllBackends && entry.Backend != options.Backend) || !matchesSearchFilters(entry, options) {
 			continue
 		}
 
@@ -91,7 +126,7 @@ func (s *Store) SearchWithOptions(options SearchOptions) ([]Entry, error) {
 		vectorAvailable := len(options.QueryVector) > 0 && len(entry.Embedding) == len(options.QueryVector) &&
 			embeddingSpaceCompatible(entry.EmbeddingSpace, options.EmbeddingSpace)
 		if vectorAvailable {
-			vectorScore = normalizeCosine(CosineSimilarity(options.QueryVector, s.vectors[i]))
+			vectorScore = normalizeCosine(CosineSimilarity(options.QueryVector, vectors[i]))
 		}
 		lexicalScore, lexicalHit := lexicalScores[entry.ID]
 		if !vectorAvailable && !lexicalHit {
@@ -104,7 +139,7 @@ func (s *Store) SearchWithOptions(options SearchOptions) ([]Entry, error) {
 	}
 
 	if len(candidates) == 0 {
-		return nil, nil
+		return nil
 	}
 	useFusion := !options.VectorOnly && query != "" && len(lexicalScores) > 0
 	for i := range candidates {
@@ -137,7 +172,7 @@ func (s *Store) SearchWithOptions(options SearchOptions) ([]Entry, error) {
 	for i := range candidates {
 		results[i] = cloneEntry(candidates[i].entry)
 	}
-	return results, nil
+	return results
 }
 
 // embeddingSpaceCompatible preserves the legacy API when the caller has no
@@ -150,7 +185,32 @@ func embeddingSpaceCompatible(entrySpace, querySpace string) bool {
 	return entrySpace != "" && entrySpace == querySpace
 }
 
+// filterLexicalScores нормализует лексические оценки в выбранной области.
+// Исключённые по backend, тегам или дате записи не включают fusion и не
+// задают его диапазон для оставшихся результатов.
+func filterLexicalScores(entries []Entry, scores map[int64]float64, options SearchOptions) map[int64]float64 {
+	ranks := make([]lexicalRank, 0, len(scores))
+	for _, entry := range entries {
+		if score, hit := scores[entry.ID]; hit && (options.AllBackends || entry.Backend == options.Backend) && matchesSearchFilters(entry, options) {
+			ranks = append(ranks, lexicalRank{entryID: entry.ID, raw: -score})
+		}
+	}
+	return normalizeLexicalRanks(ranks)
+}
+
 func matchesSearchFilters(entry Entry, options SearchOptions) bool {
+	if options.Document != "" && LibraryDocumentID(firstNonEmpty(entry.SourcePath, entry.SourceFile), entry.DocumentID) != options.Document {
+		return false
+	}
+	if options.ImportantOnly && !entry.Important {
+		return false
+	}
+	if options.PageFrom > 0 && entry.Page < options.PageFrom {
+		return false
+	}
+	if options.PageTo > 0 && (entry.Page == 0 || entry.Page > options.PageTo) {
+		return false
+	}
 	if len(options.Tags) > 0 && !hasAnySearchTag(entry.Tags, options.Tags) {
 		return false
 	}
@@ -197,7 +257,7 @@ func matchesSearchDate(created, from, to string) bool {
 	}
 	if to != "" {
 		toTime, err := time.Parse("2006-01-02", to)
-		if err == nil && t.After(toTime.Add(24*time.Hour-time.Second)) {
+		if err == nil && !t.Before(toTime.AddDate(0, 0, 1)) {
 			return false
 		}
 	}
@@ -230,7 +290,7 @@ func (s *Store) lexicalScoresLocked(query string) (map[int64]float64, error) {
 			// snapshot. An external entry commit after this transaction starts
 			// can be linearized after the current search; a commit before it is
 			// detected and forces a cache refresh/rebuild retry.
-			tx, err := s.db.Begin()
+			tx, err := sqliteutil.BeginRead(s.db)
 			if err != nil {
 				return fallbackLexicalScores(s.entries, query), nil
 			}
@@ -282,7 +342,7 @@ func (s *Store) lexicalScoresLocked(query string) (map[int64]float64, error) {
 }
 
 func (s *Store) rebuildFTSLocked() error {
-	tx, cacheEntries, err := s.beginEntryMutationTx("FTS rebuild")
+	tx, err := s.beginEntryWriteTx("FTS sync")
 	if err != nil {
 		return err
 	}
@@ -292,7 +352,7 @@ func (s *Store) rebuildFTSLocked() error {
 		}
 		return cause
 	}
-	if err := rebuildFTSTx(tx, cacheEntries); err != nil {
+	if err := syncFTSTx(tx, s.entries); err != nil {
 		return rollback(err)
 	}
 	generation, err := loadEntryCacheGeneration(tx)
@@ -312,10 +372,69 @@ func (s *Store) rebuildFTSLocked() error {
 	return nil
 }
 
+// syncFTSTx applies the persistent row journal under the same writer lock as
+// the FTS generation marker. A new or untracked index still gets a full rebuild.
+func syncFTSTx(tx *sql.Tx, entries []Entry) error {
+	indexed, err := loadEntryFTSGeneration(tx)
+	if err != nil {
+		return err
+	}
+	current, err := loadEntryCacheGeneration(tx)
+	if err != nil {
+		return err
+	}
+	var dirty int
+	if err := tx.QueryRow(`SELECT count(*) FROM entry_fts_dirty`).Scan(&dirty); err != nil {
+		return err
+	}
+	if indexed < 0 || (indexed != current && dirty == 0) {
+		if err := rebuildFTSTx(tx, entries); err != nil {
+			return err
+		}
+	} else if dirty > 0 {
+		rows, err := tx.Query(`SELECT e.id, e.title, e.text, e.tags FROM entry_fts_dirty d JOIN entries e ON e.id=d.entry_id ORDER BY e.id`)
+		if err != nil {
+			return err
+		}
+		var changed []Entry
+		for rows.Next() {
+			var e Entry
+			var tags string
+			if err := rows.Scan(&e.ID, &e.Title, &e.Text, &tags); err != nil {
+				rows.Close()
+				return err
+			}
+			e.Tags, err = tagsFromJSON(tags)
+			if err != nil {
+				rows.Close()
+				return err
+			}
+			changed = append(changed, e)
+		}
+		err = rows.Err()
+		rows.Close()
+		if err != nil {
+			return err
+		}
+		if _, err := tx.Exec(`DELETE FROM entries_fts WHERE rowid IN (SELECT entry_id FROM entry_fts_dirty)`); err != nil {
+			return err
+		}
+		if err := insertFTSEntriesTx(tx, changed); err != nil {
+			return err
+		}
+	}
+	_, err = tx.Exec(`DELETE FROM entry_fts_dirty`)
+	return err
+}
+
 func rebuildFTSTx(tx *sql.Tx, entries []Entry) error {
 	if _, err := tx.Exec(`DELETE FROM entries_fts`); err != nil {
 		return err
 	}
+	return insertFTSEntriesTx(tx, entries)
+}
+
+func insertFTSEntriesTx(tx *sql.Tx, entries []Entry) error {
 	for _, entry := range entries {
 		if _, err := tx.Exec(`INSERT INTO entries_fts(rowid, entry_id, title, text, tags)
 			VALUES (?, ?, ?, ?, ?)`, entry.ID, entry.ID, entry.Title, entry.Text, strings.Join(entry.Tags, " ")); err != nil {

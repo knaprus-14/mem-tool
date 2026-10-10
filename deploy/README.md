@@ -78,9 +78,16 @@ file /opt/mem-bot/mem-bot
 systemctl --no-pager --full status mem-bot
 journalctl -u mem-bot -n 50 --no-pager
 tail -n 50 /var/log/mem-bot/bot.log
+tail -n 50 /opt/mem-bot/data/mem-tool.log
 ```
 
 ## Управление
+
+С alpha.26 единый технический журнал расположен в рабочей папке сервиса.
+Шаблон unit использует `WorkingDirectory=/opt/mem-bot/data` и абсолютный
+`MEM_BOT_DATA_DIR=/opt/mem-bot/data`; запись в каталог бинарника не разрешается.
+В собственном env-файле задавайте пути к данным абсолютно. Старый unit нужно
+обновить отдельно; журналы архивируются по 10 МиБ без автоматического удаления.
 
 ```bash
 systemctl status mem-bot

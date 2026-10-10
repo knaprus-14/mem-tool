@@ -1,5 +1,7 @@
 package main
 
+import "github.com/knaprus-14/mem-tool/internal/applog"
+
 import (
 	"context"
 	"errors"
@@ -20,7 +22,9 @@ func isMindMapWorkbenchCommand(command string) bool {
 	}
 }
 
-func handleMindMapWorkbench(cfg *Config, store *Store, args []string) error {
+func handleMindMapWorkbench(cfg *Config, store *Store, args []string) (applogResult0 error) {
+	defer applog.Track("cmd.mem.handleMindMapWorkbench")(&applogResult0)
+
 	if len(args) == 0 {
 		return errors.New("mindmap workbench command is empty")
 	}

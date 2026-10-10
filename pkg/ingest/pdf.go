@@ -1,5 +1,7 @@
 package ingest
 
+import "github.com/knaprus-14/mem-tool/internal/applog"
+
 import (
 	"context"
 	"fmt"
@@ -16,7 +18,9 @@ type PDFExtractor struct{ options Options }
 
 func NewPDFExtractor() PDFExtractor { return PDFExtractor{options: DefaultOptions()} }
 
-func (p PDFExtractor) Extract(ctx context.Context, path string) (Document, error) {
+func (p PDFExtractor) Extract(ctx context.Context, path string) (applogResult0 Document, applogResult1 error) {
+	defer applog.Track("pkg.ingest.PDFExtractor.Extract")(&applogResult1)
+
 	return newEngine(p.options).extractPDF(ctx, path)
 }
 

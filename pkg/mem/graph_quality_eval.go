@@ -1,5 +1,7 @@
 package mem
 
+import "github.com/knaprus-14/mem-tool/internal/applog"
+
 import (
 	"bytes"
 	"crypto/sha256"
@@ -66,7 +68,9 @@ type KnowledgeQualityReport struct {
 	Passed         bool                     `json:"passed"`
 }
 
-func ParseKnowledgeQualityManifest(data []byte) (KnowledgeQualityManifest, error) {
+func ParseKnowledgeQualityManifest(data []byte) (applogResult0 KnowledgeQualityManifest, applogResult1 error) {
+	defer applog.Track("pkg.mem.ParseKnowledgeQualityManifest")(&applogResult1)
+
 	if len(data) == 0 {
 		return KnowledgeQualityManifest{}, errors.New("knowledge quality manifest is empty")
 	}
@@ -170,7 +174,9 @@ func knowledgeQualityRequirementCount(r KnowledgeQualityRequirements) int {
 // EvaluateKnowledgeQuality measures the selected current corpus and evaluates
 // every declared gate. It does not call an embedding or answer model and does
 // not mutate the store.
-func (s *Store) EvaluateKnowledgeQuality(manifest KnowledgeQualityManifest, defaultLowConfidence float64) (KnowledgeQualityReport, error) {
+func (s *Store) EvaluateKnowledgeQuality(manifest KnowledgeQualityManifest, defaultLowConfidence float64) (applogResult0 KnowledgeQualityReport, applogResult1 error) {
+	defer applog.Track("pkg.mem.Store.EvaluateKnowledgeQuality")(&applogResult1)
+
 	if err := validateKnowledgeQualityManifest(manifest); err != nil {
 		return KnowledgeQualityReport{}, err
 	}

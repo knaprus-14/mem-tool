@@ -1,0 +1,351 @@
+ M .gitignore
+ M AGENTS.md
+ M DOCUMENTATION.md
+ M USAGE_RU.md
+ M cmd/mem-bot/main.go
+ M cmd/mem-index/main.go
+ M cmd/mem/main.go
+ M cmd/mem/map_eval.go
+ M cmd/mem/map_eval_labeled.go
+ M cmd/mem/map_export.go
+ M cmd/mem/map_open.go
+ M cmd/mem/map_profile.go
+ M cmd/mem/mindmap.go
+ M cmd/mem/mindmap_ai.go
+ M cmd/mem/mindmap_export.go
+ M cmd/mem/mindmap_open.go
+ M cmd/mem/mindmap_workbench.go
+ M cmd/mem/repl.go
+ M deploy/README.md
+ M deploy/mem-bot.service
+ M deploy/windows.ps1
+ M internal/buildinfo/version.go
+ M pkg/fileindex/config.go
+ M pkg/fileindex/dbpath.go
+ M pkg/fileindex/filereader.go
+ M pkg/fileindex/scan.go
+ M pkg/fileindex/scan_test.go
+ M pkg/fileindex/store.go
+ M pkg/ingest/djvu.go
+ M pkg/ingest/document.go
+ M pkg/ingest/markdown.go
+ M pkg/ingest/options.go
+ M pkg/ingest/pdf.go
+ M pkg/mem/answer.go
+ M pkg/mem/chunk.go
+ M pkg/mem/config.go
+ M pkg/mem/config_atomic_test.go
+ M pkg/mem/embed.go
+ M pkg/mem/entry_cache.go
+ M pkg/mem/graph.go
+ M pkg/mem/graph_analyze.go
+ M pkg/mem/graph_analyze_plan.go
+ M pkg/mem/graph_analyze_run.go
+ M pkg/mem/graph_coverage.go
+ M pkg/mem/graph_duplicates.go
+ M pkg/mem/graph_edit.go
+ M pkg/mem/graph_export_jobs.go
+ M pkg/mem/graph_export_jobs_test.go
+ M pkg/mem/graph_extract.go
+ M pkg/mem/graph_extract_plan.go
+ M pkg/mem/graph_extract_run.go
+ M pkg/mem/graph_labeled_eval.go
+ M pkg/mem/graph_layout.go
+ M pkg/mem/graph_learning.go
+ M pkg/mem/graph_learning_export.go
+ M pkg/mem/graph_learning_jobs.go
+ M pkg/mem/graph_learning_route.go
+ M pkg/mem/graph_learning_session.go
+ M pkg/mem/graph_live.go
+ M pkg/mem/graph_portable_export.go
+ M pkg/mem/graph_profile.go
+ M pkg/mem/graph_quality_eval.go
+ M pkg/mem/graph_review.go
+ M pkg/mem/graph_revision_diff.go
+ M pkg/mem/graph_selection.go
+ M pkg/mem/graph_selection_analysis.go
+ M pkg/mem/graph_selection_export.go
+ M pkg/mem/graph_source.go
+ M pkg/mem/graph_source_test.go
+ M pkg/mem/graph_view.go
+ M pkg/mem/graph_view_regression_test.go
+ M pkg/mem/graph_view_test.go
+ M pkg/mem/graph_workspace.go
+ M pkg/mem/importer.go
+ M pkg/mem/indexer.go
+ M pkg/mem/mind_map.go
+ M pkg/mem/mind_map_ai.go
+ M pkg/mem/mind_map_ai_live.go
+ M pkg/mem/mind_map_export.go
+ M pkg/mem/mind_map_live.go
+ M pkg/mem/mind_map_sources.go
+ M pkg/mem/mind_map_sources_test.go
+ M pkg/mem/mind_map_view.go
+ M pkg/mem/mind_map_workbench.go
+ M pkg/mem/search.go
+ M pkg/mem/store.go
+?? cmd/mem/commands_config.go
+?? cmd/mem/commands_entries.go
+?? cmd/mem/commands_import.go
+?? cmd/mem/commands_map.go
+?? cmd/mem/commands_map_analysis.go
+?? cmd/mem/commands_map_extract.go
+?? cmd/mem/commands_map_review.go
+?? cmd/mem/commands_recent.go
+?? cmd/mem/commands_search.go
+?? cmd/mem/usage.go
+?? cmd/mem/web.go
+?? cmd/mem/web_test.go
+?? deploy/WEB_SERVER_RU.md
+?? deploy/mem-web-backup.service
+?? deploy/mem-web-backup.timer
+?? deploy/mem-web.nginx.conf
+?? deploy/mem-web.service
+?? deploy/web-backup.sh
+?? deploy/web-server.example.json
+?? deploy/web_backup.py
+?? deploy/web_backup_test.py
+?? deploy/windows_install_test.ps1
+?? deploy/windows_preflight_test.ps1
+?? deploy/windows_test.ps1
+?? docs/GRAPH_QUALITY_RU.md
+?? docs/GRAPH_QUALITY_STAGE2_RU.md
+?? docs/GRAPH_QUALITY_WORK_RU.md
+?? docs/LOGGING_RU.md
+?? docs/WEB_ALPHA10_VERIFICATION_RU.md
+?? docs/WEB_ALPHA11_VERIFICATION_RU.md
+?? docs/WEB_ALPHA12_VERIFICATION_RU.md
+?? docs/WEB_ALPHA13_VERIFICATION_RU.md
+?? docs/WEB_ALPHA14_VERIFICATION_RU.md
+?? docs/WEB_ALPHA15_VERIFICATION_RU.md
+?? docs/WEB_ALPHA16_VERIFICATION_RU.md
+?? docs/WEB_ALPHA17_VERIFICATION_RU.md
+?? docs/WEB_ALPHA18_VERIFICATION_RU.md
+?? docs/WEB_ALPHA19_VERIFICATION_RU.md
+?? docs/WEB_ALPHA1_VERIFICATION_RU.md
+?? docs/WEB_ALPHA20_VERIFICATION_RU.md
+?? docs/WEB_ALPHA21_VERIFICATION_RU.md
+?? docs/WEB_ALPHA22_VERIFICATION_RU.md
+?? docs/WEB_ALPHA23_VERIFICATION_RU.md
+?? docs/WEB_ALPHA24_VERIFICATION_RU.md
+?? docs/WEB_ALPHA25_VERIFICATION_RU.md
+?? docs/WEB_ALPHA26_VERIFICATION_RU.md
+?? docs/WEB_ALPHA27_VERIFICATION_RU.md
+?? docs/WEB_ALPHA28_VERIFICATION_RU.md
+?? docs/WEB_ALPHA2_VERIFICATION_RU.md
+?? docs/WEB_ALPHA30_VERIFICATION_RU.md
+?? docs/WEB_ALPHA31_VERIFICATION_RU.md
+?? docs/WEB_ALPHA32_VERIFICATION_RU.md
+?? docs/WEB_ALPHA33_VERIFICATION_RU.md
+?? docs/WEB_ALPHA34_VERIFICATION_RU.md
+?? docs/WEB_ALPHA35_VERIFICATION_RU.md
+?? docs/WEB_ALPHA36_VERIFICATION_RU.md
+?? docs/WEB_ALPHA3_VERIFICATION_RU.md
+?? docs/WEB_ALPHA4_VERIFICATION_RU.md
+?? docs/WEB_ALPHA5_VERIFICATION_RU.md
+?? docs/WEB_ALPHA6_VERIFICATION_RU.md
+?? docs/WEB_ALPHA7_VERIFICATION_RU.md
+?? docs/WEB_ALPHA8_VERIFICATION_RU.md
+?? docs/WEB_ALPHA9_VERIFICATION_RU.md
+?? docs/WEB_COMPLETION_RU.md
+?? docs/WEB_COMPLETION_WORK_RU.md
+?? docs/WEB_PARITY_RU.md
+?? docs/WEB_ROADMAP_RU.md
+?? internal/applog/http.go
+?? internal/applog/log.go
+?? internal/applog/log_test.go
+?? internal/filelock/lock.go
+?? internal/filelock/lock_unix.go
+?? internal/filelock/lock_windows.go
+?? internal/sourcefile/read.go
+?? internal/sourcefile/read_test.go
+?? internal/sqliteutil/open.go
+?? internal/sqliteutil/open_test.go
+?? internal/sqliteutil/readonly.go
+?? internal/sqliteutil/readonly_test.go
+?? internal/webapp/assets/app.css
+?? internal/webapp/assets/app.js
+?? internal/webapp/assets/graph-documents.js
+?? internal/webapp/assets/index-tools.js
+?? internal/webapp/assets/index.html
+?? internal/webapp/assets/job-history.js
+?? internal/webapp/assets/maintenance.js
+?? internal/webapp/assets/map-actions.js
+?? internal/webapp/assets/map-document.js
+?? internal/webapp/assets/map-from-sources.js
+?? internal/webapp/assets/map-layout.js
+?? internal/webapp/assets/map-library.js
+?? internal/webapp/assets/map-resize.js
+?? internal/webapp/assets/map-workbench.js
+?? internal/webapp/assets/maps-ai.js
+?? internal/webapp/assets/operations.js
+?? internal/webapp/client_events.go
+?? internal/webapp/client_events_test.go
+?? internal/webapp/config.go
+?? internal/webapp/entry_metadata.go
+?? internal/webapp/graph.go
+?? internal/webapp/graph_documents_assets_test.go
+?? internal/webapp/graph_documents_test.cjs
+?? internal/webapp/graph_shared_test.go
+?? internal/webapp/index.go
+?? internal/webapp/index_test.go
+?? internal/webapp/jobs.go
+?? internal/webapp/jobs_test.go
+?? internal/webapp/maintenance.go
+?? internal/webapp/maintenance_access_test.go
+?? internal/webapp/map_attachments.go
+?? internal/webapp/map_delete_test.cjs
+?? internal/webapp/map_document_test.cjs
+?? internal/webapp/map_layout_test.cjs
+?? internal/webapp/map_resize_test.cjs
+?? internal/webapp/map_source_progress_test.cjs
+?? internal/webapp/maps.go
+?? internal/webapp/maps_actions_test.go
+?? internal/webapp/maps_ai.go
+?? internal/webapp/maps_ai_test.go
+?? internal/webapp/maps_delete_test.go
+?? internal/webapp/maps_document_test.go
+?? internal/webapp/maps_from_sources_test.go
+?? internal/webapp/maps_test.go
+?? internal/webapp/notes.go
+?? internal/webapp/notes_test.go
+?? internal/webapp/portable.go
+?? internal/webapp/query.go
+?? internal/webapp/query_test.go
+?? internal/webapp/server.go
+?? internal/webapp/server_test.go
+?? internal/webapp/settings.go
+?? internal/webapp/settings_test.go
+?? internal/webapp/settings_tools.go
+?? internal/webapp/settings_tools_test.go
+?? internal/webapp/storage.go
+?? internal/webjobs/history.go
+?? internal/webjobs/history_test.go
+?? internal/webjobs/queue.go
+?? internal/webjobs/queue_test.go
+?? internal/webjobs/revisions.go
+?? internal/webjobs/revisions_test.go
+?? internal/webjobs/text_document_test.go
+?? internal/webjobs/worker.go
+?? internal/workspace/library.go
+?? internal/workspace/manager.go
+?? internal/workspace/manager_test.go
+?? internal/workspace/portable.go
+?? internal/workspace/storage.go
+?? pkg/fileindex/review_20260905_test.go
+?? pkg/ingest/pdf_preview.go
+?? pkg/ingest/pdf_preview_test.go
+?? pkg/ingest/text_document.go
+?? pkg/ingest/text_document_test.go
+?? pkg/mem/document_update.go
+?? pkg/mem/graph_document.go
+?? pkg/mem/graph_document_test.go
+?? pkg/mem/graph_extract_execution.go
+?? pkg/mem/graph_extract_recovery_test.go
+?? pkg/mem/graph_labeled_qualifiers.go
+?? pkg/mem/graph_labeled_requirements_test.go
+?? pkg/mem/graph_live_benchmark_test.go
+?? pkg/mem/graph_requirement.go
+?? pkg/mem/graph_requirement_real_test.go
+?? pkg/mem/graph_requirement_test.go
+?? pkg/mem/graph_source_context_test.go
+?? pkg/mem/graph_source_preview.go
+?? pkg/mem/graph_source_preview_test.go
+?? pkg/mem/graph_topics_test.go
+?? pkg/mem/import_service.go
+?? pkg/mem/note_history.go
+?? pkg/mem/note_history_test.go
+?? pkg/mem/note_service.go
+?? pkg/mem/note_service_test.go
+?? pkg/mem/portable_database.go
+?? pkg/mem/portable_database_test.go
+?? pkg/mem/query_service.go
+?? pkg/mem/query_service_test.go
+?? pkg/mem/ranking.go
+?? pkg/mem/review_20260905_test.go
+?? pkg/mem/search_delta_test.go
+?? pkg/mem/source_fingerprint.go
+?? pkg/mem/source_fingerprint_test.go
+?? pkg/mem/source_locations.go
+?? pkg/mem/web/classicMindMapWorkspaceHTML.html
+?? pkg/mem/web/knowledgeMapHTMLPrefix.html
+?? pkg/mem/web/knowledgeMapHTMLSuffix.html
+?? pkg/mem/web/knowledgeSourcePreview.js
+?? pkg/mem/web/knowledgeSourcePreview.test.cjs
+?? pkg/mem/web/knowledgeTopics.js
+?? pkg/mem/web/knowledgeTopics.test.cjs
+?? pkg/mem/web/knowledgeTopicsView.js
+?? pkg/mem/web_entry_metadata.go
+?? pkg/mem/web_graph.go
+?? pkg/mem/web_graph_config_test.go
+?? pkg/mem/web_graph_full_document_test.go
+?? pkg/mem/web_graph_operations.go
+?? pkg/mem/web_graph_operations_test.go
+?? pkg/mem/web_import_history.go
+?? pkg/mem/web_import_history_test.go
+?? pkg/mem/web_index.go
+?? pkg/mem/web_index_test.go
+?? pkg/mem/web_map_actions.go
+?? pkg/mem/web_map_actions_test.go
+?? pkg/mem/web_map_add_test.go
+?? pkg/mem/web_map_ai.go
+?? pkg/mem/web_map_ai_test.go
+?? pkg/mem/web_map_ai_timeout_test.go
+?? pkg/mem/web_map_ai_worker.go
+?? pkg/mem/web_map_attachments.go
+?? pkg/mem/web_map_attachments_test.go
+?? pkg/mem/web_map_delete.go
+?? pkg/mem/web_map_delete_test.go
+?? pkg/mem/web_map_document.go
+?? pkg/mem/web_map_document_test.go
+?? pkg/mem/web_map_duplicate.go
+?? pkg/mem/web_map_duplicate_test.go
+?? pkg/mem/web_map_edit.go
+?? pkg/mem/web_map_edit_test.go
+?? pkg/mem/web_map_from_sources.go
+?? pkg/mem/web_map_from_sources_test.go
+?? pkg/mem/web_map_history.go
+?? pkg/mem/web_map_history_nodes_test.go
+?? pkg/mem/web_map_history_test.go
+?? pkg/mem/web_map_logging_test.go
+?? pkg/mem/web_map_manage.go
+?? pkg/mem/web_map_redo_test.go
+?? pkg/mem/web_map_restore_test.go
+?? pkg/mem/web_map_snapshots.go
+?? pkg/mem/web_map_snapshots_test.go
+?? pkg/mem/web_map_sources.go
+?? pkg/mem/web_map_sources_test.go
+?? pkg/mem/web_map_workbench.go
+?? pkg/mem/web_map_workbench_test.go
+?? pkg/mem/web_maps.go
+?? pkg/mem/web_maps_test.go
+?? pkg/mem/web_operations.go
+?? pkg/mem/web_operations_test.go
+?? review/2026-09-05/FIXES_RU.md
+?? review/2026-09-05/INSTALLER_REVIEW_RU.md
+?? review/2026-09-05/REVIEW_RU.md
+?? review/2026-09-05/bin-access-review.txt
+?? review/2026-09-05/bin-unrelated-before.json
+?? review/2026-09-05/deploy-recovery-test.txt
+?? review/2026-09-05/fileindex_probes.go.txt
+?? review/2026-09-05/fix-focused-tests.txt
+?? review/2026-09-05/fix-full-tests.txt
+?? review/2026-09-05/fix-mem-tests.txt
+?? review/2026-09-05/fix-regressions.txt
+?? review/2026-09-05/fix-vet.txt
+?? review/2026-09-05/install-1.70.4-manifest.json
+?? review/2026-09-05/install-1.70.4-retry.txt
+?? review/2026-09-05/install-1.70.4.txt
+?? review/2026-09-05/installer-control-after.txt
+?? review/2026-09-05/installer-control-before.txt
+?? review/2026-09-05/installer-preflight-tests.txt
+?? review/2026-09-05/installer-real-target-preflight.txt
+?? review/2026-09-05/installer-rollback-after.txt
+?? review/2026-09-05/mem_probes.go.txt
+?? review/2026-09-05/overlay.json
+?? review/2026-09-05/probe-results.txt
+?? review/2026-09-05/refactor-tests.txt
+?? review/2026-09-05/release-1.70.4-manifest.json
+?? review/2026-09-05/release-1.70.4.txt
+?? review/2026-09-05/run-probes.ps1
+?? review/install-2026-09-07.txt

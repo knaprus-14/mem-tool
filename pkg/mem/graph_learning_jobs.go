@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"github.com/knaprus-14/mem-tool/internal/applog"
 	"sync"
 	"time"
 )
@@ -81,6 +82,7 @@ type knowledgeLearningJobManager struct {
 	queue     chan string
 	startOnce sync.Once
 	now       func() time.Time
+	expired   knowledgeJobTombstones[KnowledgeLearningJobView]
 }
 
 func newKnowledgeLearningJobManager(ctx context.Context, runner knowledgeLearningRunner) *knowledgeLearningJobManager {
@@ -124,7 +126,8 @@ func (m *knowledgeLearningJobManager) start(request KnowledgeLearningGenerateReq
 			m.mu.Unlock()
 			return KnowledgeLearningJobView{}, idErr
 		}
-		if _, exists := m.jobs[candidate]; !exists {
+		_, expired := m.expired.get(candidate)
+		if _, exists := m.jobs[candidate]; !exists && !expired {
 			id = candidate
 			break
 		}
@@ -197,6 +200,8 @@ func (m *knowledgeLearningJobManager) janitor() {
 }
 
 func (m *knowledgeLearningJobManager) run(id string) {
+	defer applog.Track("graph.learning.run")(nil)
+	applog.Event("INFO", "graph.learning.started", applog.Fields{"job_id": id})
 	now := m.now().UTC()
 	m.mu.Lock()
 	job := m.jobs[id]
@@ -213,6 +218,7 @@ func (m *knowledgeLearningJobManager) run(id string) {
 	result, err := m.runner(ctx, request, func(phase string, percent, completed, total int) {
 		m.updateProgress(id, phase, percent, completed, total)
 	})
+	applog.Error("graph.learning.failed", err)
 	finished := m.now().UTC()
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -242,6 +248,7 @@ func (m *knowledgeLearningJobManager) run(id string) {
 }
 
 func (m *knowledgeLearningJobManager) updateProgress(id, phase string, percent, completed, total int) {
+	applog.Event("INFO", "graph.learning.progress", applog.Fields{"job_id": id, "phase": phase, "percent": percent, "completed": completed, "total": total})
 	if percent < 0 {
 		percent = 0
 	}
@@ -271,6 +278,9 @@ func (m *knowledgeLearningJobManager) status(id string) (KnowledgeLearningJobVie
 	m.cleanupLocked(now)
 	job := m.jobs[id]
 	if job == nil {
+		if view, ok := m.expired.get(id); ok {
+			return view, nil
+		}
 		return KnowledgeLearningJobView{}, ErrKnowledgeLearningJobNotFound
 	}
 	return m.viewLocked(job, now), nil
@@ -283,8 +293,12 @@ func (m *knowledgeLearningJobManager) cancelJob(id string) (KnowledgeLearningJob
 	now := m.now().UTC()
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	m.cleanupLocked(now)
 	job := m.jobs[id]
 	if job == nil {
+		if _, ok := m.expired.get(id); ok {
+			return KnowledgeLearningJobView{}, ErrKnowledgeLearningJobNotCancelable
+		}
 		return KnowledgeLearningJobView{}, ErrKnowledgeLearningJobNotFound
 	}
 	switch job.view.Status {
@@ -309,8 +323,12 @@ func (m *knowledgeLearningJobManager) result(id string) (KnowledgeLearningRun, e
 	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	m.cleanupLocked(m.now().UTC())
 	job := m.jobs[id]
 	if job == nil {
+		if _, ok := m.expired.get(id); ok {
+			return KnowledgeLearningRun{}, ErrKnowledgeLearningJobNotReady
+		}
 		return KnowledgeLearningRun{}, ErrKnowledgeLearningJobNotFound
 	}
 	if job.view.Status != KnowledgeLearningJobCompleted || job.result == nil {
@@ -366,12 +384,13 @@ func (m *knowledgeLearningJobManager) viewLocked(job *knowledgeLearningJob, now 
 }
 
 func (m *knowledgeLearningJobManager) cleanupLocked(now time.Time) {
+	m.expired.cleanup(now)
 	for _, id := range append([]string(nil), m.order...) {
 		job := m.jobs[id]
 		if job == nil || job.completedAt.IsZero() || now.Sub(job.completedAt) <= KnowledgeLearningJobRetention {
 			continue
 		}
-		m.removeLocked(id)
+		m.expireLocked(id, job.completedAt.Add(KnowledgeLearningJobRetention), now)
 	}
 	for len(m.jobs) >= MaxKnowledgeLearningRetainedJobs {
 		removed := false
@@ -380,7 +399,7 @@ func (m *knowledgeLearningJobManager) cleanupLocked(now time.Time) {
 			if job == nil || job.view.Status == KnowledgeLearningJobQueued || job.view.Status == KnowledgeLearningJobRunning {
 				continue
 			}
-			m.removeLocked(id)
+			m.expireLocked(id, now, now)
 			removed = true
 			break
 		}
@@ -388,6 +407,22 @@ func (m *knowledgeLearningJobManager) cleanupLocked(now time.Time) {
 			break
 		}
 	}
+}
+
+func (m *knowledgeLearningJobManager) expireLocked(id string, expiredAt, now time.Time) {
+	job := m.jobs[id]
+	if job == nil || job.view.Status == KnowledgeLearningJobQueued || job.view.Status == KnowledgeLearningJobRunning {
+		return
+	}
+	view := KnowledgeLearningJobView{
+		Version: KnowledgeLearningJobVersion, ID: id, Status: KnowledgeLearningJobFailed,
+		Phase: "expired", ErrorCode: "expired", RequestedCount: job.view.RequestedCount,
+		CreatedAt: job.view.CreatedAt, StartedAt: job.view.StartedAt, CompletedAt: job.view.CompletedAt,
+		ElapsedMS: m.viewLocked(job, now).ElapsedMS,
+		Message:   "Срок хранения задания в памяти истёк или оно вытеснено лимитом. Если запуск был сохранён, он остаётся в истории обучения; для новой генерации запустите задание повторно.",
+	}
+	m.expired.remember(id, view, expiredAt, now)
+	m.removeLocked(id)
 }
 
 func (m *knowledgeLearningJobManager) removeLocked(id string) {

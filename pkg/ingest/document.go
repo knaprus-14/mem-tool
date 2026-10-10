@@ -3,6 +3,8 @@
 // stores or embedding backends.
 package ingest
 
+import "github.com/knaprus-14/mem-tool/internal/applog"
+
 import (
 	"context"
 	"crypto/sha256"
@@ -10,10 +12,13 @@ import (
 	"fmt"
 	"hash"
 	"math"
+	"path"
 	"path/filepath"
 	"runtime"
 	"strconv"
 	"strings"
+
+	"github.com/knaprus-14/mem-tool/internal/sourcefile"
 )
 
 type Format string
@@ -26,8 +31,10 @@ const (
 
 // Document is the staged representation passed to the indexing layer.
 type Document struct {
+	managedIdentity   bool
 	ID                string
 	Revision          string
+	SourceFileHash    string
 	SourcePath        string
 	Format            Format
 	MediaType         string
@@ -93,6 +100,10 @@ func NewRegistry() *Registry {
 	r.Register(".pdf", NewPDFExtractor())
 	r.Register(".djvu", NewDjVuExtractor())
 	r.Register(".djv", NewDjVuExtractor())
+	for _, ext := range []string{".txt", ".csv", ".tsv", ".json", ".xml"} {
+		r.Register(ext, TextExtractor{})
+	}
+	r.Register(".docx", DOCXExtractor{})
 	return r
 }
 
@@ -103,11 +114,13 @@ func (r *Registry) Register(extension string, extractor Extractor) {
 	r.extractors[strings.ToLower(extension)] = extractor
 }
 
-func (r *Registry) Extract(ctx context.Context, path string) (Document, error) {
+func (r *Registry) Extract(ctx context.Context, path string) (applogResult0 Document, applogResult1 error) {
+	defer applog.Track("pkg.ingest.Registry.Extract")(&applogResult1)
+
 	ext := strings.ToLower(filepath.Ext(path))
 	extractor, ok := r.extractors[ext]
 	if !ok {
-		return Document{}, fmt.Errorf("unsupported document format %q: mem import accepts Markdown (.md, .markdown), PDF (.pdf), and DjVu (.djvu, .djv)", ext)
+		return Document{}, fmt.Errorf("unsupported document format %q: mem import accepts Markdown, PDF, DjVu, DOCX and UTF-8 text (TXT, CSV, TSV, JSON, XML)", ext)
 	}
 	doc, err := extractor.Extract(ctx, path)
 	if err != nil {
@@ -119,19 +132,38 @@ func (r *Registry) Extract(ctx context.Context, path string) (Document, error) {
 	return doc, nil
 }
 
-func Extract(ctx context.Context, path string) (Document, error) {
-	return NewRegistry().Extract(ctx, path)
+func Extract(ctx context.Context, path string) (applogResult0 Document, applogResult1 error) {
+	defer applog.Track("pkg.ingest.Extract")(&applogResult1)
+
+	return ExtractWithOptions(ctx, path, DefaultOptions())
 }
 
 // ExtractWithOptions is the configurable entry point used by mem import and
 // bounded extraction-only smoke tests. It never writes to a source document.
-func ExtractWithOptions(ctx context.Context, path string, options Options) (Document, error) {
+func ExtractWithOptions(ctx context.Context, path string, options Options) (applogResult0 Document, applogResult1 error) {
+	defer applog.Track("pkg.ingest.ExtractWithOptions")(&applogResult1)
+
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	ext := strings.ToLower(filepath.Ext(path))
+	switch ext {
+	case ".md", ".markdown", ".pdf", ".djvu", ".djv", ".docx", ".txt", ".csv", ".tsv", ".json", ".xml":
+	default:
+		return Document{}, fmt.Errorf("unsupported document format %q: mem import accepts Markdown, PDF, DjVu, DOCX and UTF-8 text (TXT, CSV, TSV, JSON, XML)", ext)
+	}
+	fileHash, err := sourcefile.Hash(ctx, path)
+	if err != nil {
+		return Document{}, fmt.Errorf("read source fingerprint: %w", err)
+	}
 	var (
 		doc Document
-		err error
 	)
 	switch ext {
+	case ".docx":
+		doc, err = DOCXExtractor{}.Extract(ctx, path)
+	case ".txt", ".csv", ".tsv", ".json", ".xml":
+		doc, err = TextExtractor{}.Extract(ctx, path)
 	case ".md", ".markdown":
 		doc, err = MarkdownExtractor{}.Extract(ctx, path)
 	case ".pdf":
@@ -139,7 +171,7 @@ func ExtractWithOptions(ctx context.Context, path string, options Options) (Docu
 	case ".djvu", ".djv":
 		doc, err = newEngine(options).extractDjVu(ctx, path)
 	default:
-		return Document{}, fmt.Errorf("unsupported document format %q: mem import accepts Markdown, PDF, and DjVu", ext)
+		return Document{}, fmt.Errorf("unsupported document format %q: mem import accepts Markdown, PDF, DjVu, DOCX and UTF-8 text (TXT, CSV, TSV, JSON, XML)", ext)
 	}
 	if err != nil {
 		return doc, err
@@ -147,13 +179,23 @@ func ExtractWithOptions(ctx context.Context, path string, options Options) (Docu
 	if err := ValidateDocument(doc); err != nil {
 		return Document{}, fmt.Errorf("invalid extracted document %s: %w", path, err)
 	}
+	currentHash, err := sourcefile.Hash(ctx, path)
+	if err != nil {
+		return Document{}, err
+	}
+	if currentHash != fileHash {
+		return Document{}, fmt.Errorf("исходный файл изменился во время извлечения; повторите импорт")
+	}
+	doc.SourceFileHash = fileHash
+	doc.Revision = ContentRevision(doc)
 	return doc, nil
 }
 
 // ValidateDocument checks the provenance contract shared by extractors and
 // the indexing layer. It rejects metadata that could create ambiguous source
 // anchors before embeddings or persistent state are changed.
-func ValidateDocument(doc Document) error {
+func ValidateDocument(doc Document) (applogResult0 error) {
+
 	if strings.TrimSpace(doc.ID) == "" {
 		return fmt.Errorf("missing document identity")
 	}
@@ -163,8 +205,11 @@ func ValidateDocument(doc Document) error {
 	if !filepath.IsAbs(doc.SourcePath) || filepath.Clean(doc.SourcePath) != doc.SourcePath {
 		return fmt.Errorf("source path is not canonical and absolute: %q", doc.SourcePath)
 	}
-	if doc.ID != documentID(doc.SourcePath) {
+	if !doc.managedIdentity && doc.ID != documentID(doc.SourcePath) {
 		return fmt.Errorf("document identity does not match canonical source path")
+	}
+	if doc.managedIdentity && !validManagedIdentity(doc.ID) {
+		return fmt.Errorf("invalid managed document identity")
 	}
 	if strings.TrimSpace(string(doc.Format)) == "" || strings.TrimSpace(doc.MediaType) == "" {
 		return fmt.Errorf("missing document format or media type")
@@ -213,6 +258,13 @@ func ValidateDocument(doc Document) error {
 			}
 		}
 	}
+	if doc.SourceFileHash != "" {
+		value := strings.TrimPrefix(doc.SourceFileHash, "sha256:")
+		decoded, err := hex.DecodeString(value)
+		if !strings.HasPrefix(doc.SourceFileHash, "sha256:") || err != nil || len(decoded) != sha256.Size || value != strings.ToLower(value) {
+			return fmt.Errorf("invalid physical source fingerprint")
+		}
+	}
 	if strings.TrimSpace(doc.Revision) == "" {
 		return fmt.Errorf("missing document content revision")
 	}
@@ -220,6 +272,30 @@ func ValidateDocument(doc Document) error {
 		return fmt.Errorf("document content revision does not match extracted blocks")
 	}
 	return nil
+}
+
+// WithManagedIdentity explicitly opts an extracted upload into path-independent
+// identity. Legacy extractor validation continues to require its canonical path.
+func WithManagedIdentity(doc Document, id string) (applogResult0 Document, applogResult1 error) {
+
+	if !validManagedIdentity(id) {
+		return doc, fmt.Errorf("invalid managed document identity")
+	}
+	doc.ID = id
+	doc.managedIdentity = true
+	return doc, nil
+}
+
+func validManagedIdentity(id string) bool {
+	if !strings.HasPrefix(id, "web:") || len(id) != 36 {
+		return false
+	}
+	for _, r := range id[4:] {
+		if !(r >= '0' && r <= '9' || r >= 'a' && r <= 'f') {
+			return false
+		}
+	}
+	return true
 }
 
 func validatePageManifest(doc Document) error {
@@ -272,10 +348,11 @@ func validatePageManifest(doc Document) error {
 	return nil
 }
 
-// ContentRevision returns a deterministic SHA-256 revision for the extracted
-// source content and its source-local coordinates. It deliberately excludes
-// SourcePath: the path identifies the document, while this value identifies
-// the content currently found at that path.
+// ContentRevision keeps the legacy text-only revision for documents without a
+// physical fingerprint. Verified extraction additionally pins the original's
+// bytes and logical locator, so image-only changes and retained uploads at a
+// different path cannot reuse an older physical edition. Stored legacy anchors
+// are never rewritten or assigned a fingerprint by this function.
 func ContentRevision(doc Document) string {
 	h := sha256.New()
 	version := "mem-tool-document-content-v1"
@@ -297,7 +374,32 @@ func ContentRevision(doc Document) string {
 			writeRevisionField(h, string(page.Status))
 		}
 	}
+	return PhysicalSourceRevision("sha256:"+hex.EncodeToString(h.Sum(nil)), doc.SourcePath, doc.SourceFileHash)
+}
+
+// PhysicalSourceRevision binds extracted content to a verified physical source.
+// sourcePath is the original logical locator, not a temporary extraction copy or
+// a portable archive's relocated path. Empty fingerprints retain legacy IDs.
+func PhysicalSourceRevision(contentRevision, sourcePath, fingerprint string) string {
+	if fingerprint == "" {
+		return contentRevision
+	}
+	h := sha256.New()
+	for _, value := range []string{"mem-tool-physical-source-revision-v1", contentRevision, physicalSourceLocator(sourcePath), fingerprint} {
+		writeRevisionField(h, value)
+	}
 	return "sha256:" + hex.EncodeToString(h.Sum(nil))
+}
+
+// The stored locator belongs to its originating filesystem, not this process's
+// host. A Windows original must keep its digest when rechunked on Linux after a
+// portable transfer, including drive case, separators and UNC spelling.
+func physicalSourceLocator(locator string) string {
+	drive := len(locator) >= 3 && ((locator[0] >= 'A' && locator[0] <= 'Z') || (locator[0] >= 'a' && locator[0] <= 'z')) && locator[1] == ':' && (locator[2] == '\\' || locator[2] == '/')
+	if drive || strings.HasPrefix(locator, `\\`) || strings.HasPrefix(locator, "//") {
+		return "windows:" + strings.ToLower(path.Clean(strings.ReplaceAll(locator, `\`, "/")))
+	}
+	return "posix:" + path.Clean(locator)
 }
 
 func writeRevisionField(h hash.Hash, value string) {

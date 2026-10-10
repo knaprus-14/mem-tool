@@ -1,0 +1,11 @@
+error acquiring upload token: creating token file: open C:\Users\ZMII\AppData\Roaming\go\telemetry\local\upload.token: Access is denied.
+--- FAIL: TestReviewStoragePhysicalSourceRevisionIsImmutable (0.62s)
+    review_storage_probe_test.go:40: old citation is still current and verified against NEW physical bytes: "%PDF-1.4\nchanged formula image; identical extracted text\n%%EOF\n"
+  [1/1] Эмбеддинг... вектор 2
+--- FAIL: TestReviewStorageLegacyIndexPreservesManagedIdentity (1.13s)
+    review_storage_probe_test.go:62: legacy mem index replaced managed identity "web:0123456789abcdef0123456789abcdef" with "doc-5de640c5dcb5e991114af2b5"
+--- FAIL: TestReviewStorageRestoreKeepsSameContentOriginalFingerprint (0.35s)
+    review_storage_probe_test.go:103: restored original is unchanged but its fingerprint was overwritten: исходный файл изменён; повторите mem import перед открытием цитаты
+FAIL
+FAIL	github.com/knaprus-14/mem-tool/pkg/mem	9.866s
+FAIL

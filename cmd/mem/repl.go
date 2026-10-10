@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"github.com/knaprus-14/mem-tool/internal/applog"
 	"os"
 	"path/filepath"
 	"strings"
@@ -33,7 +34,8 @@ var replCommands = []string{
 //   - иначе — это сокращение для /search <строка>
 //   - пустая строка — игнорируется
 //   - EOF / Ctrl-D — выход
-func runRepl(cfg *Config, store *Store) {
+func runRepl(cfg *Config, store *Store) (logErr error) {
+	defer applog.Track("cli.repl")(&logErr)
 	printReplHeader(cfg, store)
 	fmt.Println()
 
@@ -59,7 +61,7 @@ func runRepl(cfg *Config, store *Store) {
 	})
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Ошибка запуска REPL: %v\n", err)
-		os.Exit(1)
+		return err
 	}
 	defer rl.Close()
 
@@ -68,7 +70,7 @@ func runRepl(cfg *Config, store *Store) {
 		if err != nil { // EOF (Ctrl-D) или Ctrl-C
 			fmt.Println()
 			fmt.Println(ui.Tag("До встречи!"))
-			return
+			return nil
 		}
 
 		line = strings.TrimSpace(line)
@@ -88,7 +90,7 @@ func runRepl(cfg *Config, store *Store) {
 		}
 
 		if dispatchReplLine(cfg, store, line) {
-			return
+			return nil
 		}
 		fmt.Println()
 	}

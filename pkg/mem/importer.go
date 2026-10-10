@@ -1,19 +1,33 @@
 package mem
 
+import "github.com/knaprus-14/mem-tool/internal/applog"
+
 import (
 	"context"
 	"errors"
 	"fmt"
 	"sort"
 
+	"github.com/knaprus-14/mem-tool/internal/sourcefile"
 	"github.com/knaprus-14/mem-tool/pkg/ingest"
 )
 
 type ImportOptions struct {
+	retained  *retainedDocumentIdentity
 	Title     string
 	Tags      []string
 	Important bool
 	Progress  func(ingest.ProgressEvent)
+	// DocumentID assigns an identity to managed uploads independently of their
+	// physical path. Empty retains the existing CLI extraction contract.
+	DocumentID string
+	// Replacement pins the previous current state when a managed upload changes
+	// physical path. The check and history snapshot run in the document transaction.
+	Replacement *DocumentReplacement
+	// Started persists the run receipt before any extraction or document writes.
+	Started func(int64) error
+	// MaxChunks bounds web jobs. Zero keeps the CLI's existing behavior.
+	MaxChunks int
 }
 
 type ImportResult struct {
@@ -33,7 +47,9 @@ type ImportResult struct {
 }
 
 // ImportDocument runs staged extraction and then indexes the resulting blocks.
-func ImportDocument(ctx context.Context, cfg *Config, store *Store, path string, options ImportOptions) (ImportResult, error) {
+func ImportDocument(ctx context.Context, cfg *Config, store *Store, path string, options ImportOptions) (applogResult0 ImportResult, applogResult1 error) {
+	defer applog.Track("pkg.mem.ImportDocument")(&applogResult1)
+
 	if ctx == nil {
 		return ImportResult{}, fmt.Errorf("import context is nil")
 	}
@@ -47,9 +63,15 @@ func ImportDocument(ctx context.Context, cfg *Config, store *Store, path string,
 	if err != nil {
 		return ImportResult{}, err
 	}
+	if options.Started != nil {
+		if err := options.Started(runID); err != nil {
+			return ImportResult{RunID: runID}, finishFailedImportRun(store, runID, ingest.Document{}, DocumentImportRunFailed, ingest.StageAnalyze, err)
+		}
+	}
 	latestStage := ingest.StageAnalyze
 	progress := options.Progress
 	options.Progress = func(event ingest.ProgressEvent) {
+		applog.Event("INFO", "import.progress", applog.Fields{"import_id": runID, "source_id": applog.Ref(path), "stage": event.Stage, "current": event.Current, "total": event.Total, "page": event.Page})
 		if event.Stage != "" {
 			latestStage = event.Stage
 		}
@@ -79,6 +101,13 @@ func ImportDocument(ctx context.Context, cfg *Config, store *Store, path string,
 		},
 		OCR: ocr, Progress: options.Progress,
 	})
+	if err == nil && options.DocumentID == "" {
+		// CLI reimport of a managed original must preserve its established ID.
+		options.DocumentID, err = managedDocumentIDForSourcePath(ctx, store.db, doc.SourcePath)
+	}
+	if err == nil && options.DocumentID != "" {
+		doc, err = ingest.WithManagedIdentity(doc, options.DocumentID)
+	}
 	if err != nil {
 		result := importResultFromDocument(doc)
 		result.RunID = runID
@@ -147,6 +176,17 @@ func importExtractedDocumentWithContextEmbedderForRun(ctx context.Context, cfg *
 	if err := ingest.ValidateDocument(doc); err != nil {
 		return result, fmt.Errorf("invalid extracted document: %w", err)
 	}
+	physicalPath := doc.SourcePath
+	if saved := options.retained; saved != nil {
+		if doc.SourceFileHash == "" || doc.SourceFileHash != saved.Hash || options.Replacement == nil {
+			return result, ErrSourceFileChanged
+		}
+		doc.ID, doc.SourcePath = saved.ID, saved.Path
+		// Extraction read a verified temporary copy. The physical edition keeps
+		// its original logical locator across rechunking and portable transfer.
+		doc.Revision = ingest.ContentRevision(doc)
+		result.DocumentID, result.SourcePath, result.DocumentRevision = doc.ID, doc.SourcePath, doc.Revision
+	}
 
 	var pieces []importPiece
 	pageSet := make(map[int]bool)
@@ -168,6 +208,9 @@ func importExtractedDocumentWithContextEmbedderForRun(ctx context.Context, cfg *
 	}
 	if len(pieces) == 0 {
 		return result, fmt.Errorf("document produced no chunks after chunking")
+	}
+	if options.MaxChunks > 0 && len(pieces) > options.MaxChunks {
+		return result, fmt.Errorf("документ содержит %d фрагментов, лимит задания — %d", len(pieces), options.MaxChunks)
 	}
 	if options.Progress != nil {
 		options.Progress(ingest.ProgressEvent{
@@ -195,6 +238,15 @@ func importExtractedDocumentWithContextEmbedderForRun(ctx context.Context, cfg *
 		}
 	}
 
+	if doc.SourceFileHash != "" {
+		currentHash, err := sourcefile.Hash(ctx, physicalPath)
+		if err != nil {
+			return result, err
+		}
+		if currentHash != doc.SourceFileHash {
+			return result, fmt.Errorf("исходный файл изменился во время импорта; документ не обновлён")
+		}
+	}
 	title := options.Title
 	if title == "" {
 		title = doc.Title
@@ -208,7 +260,8 @@ func importExtractedDocumentWithContextEmbedderForRun(ctx context.Context, cfg *
 			ChunkIndex: i, TotalChunks: len(pieces), Important: options.Important,
 			Provenance: Provenance{
 				DocumentID: doc.ID, DocumentRevision: doc.Revision,
-				ChunkHash: ChunkContentHash(piece.text), SourcePath: doc.SourcePath, MediaType: doc.MediaType,
+				SourceFileHash: doc.SourceFileHash,
+				ChunkHash:      ChunkContentHash(piece.text), SourcePath: doc.SourcePath, MediaType: doc.MediaType,
 				Page: piece.page, BlockIndex: piece.blockIndex, BlockMarker: piece.marker,
 				BlockChunkIndex: piece.blockChunkIndex, BlockTotalChunks: piece.blockTotalChunks,
 				ExtractionMethod: piece.extraction, OCRConfidence: piece.confidence,
@@ -230,15 +283,14 @@ func importExtractedDocumentWithContextEmbedderForRun(ctx context.Context, cfg *
 		result.Status = DocumentImportRunPartial
 	}
 	completion := successfulImportRunCompletion(runID, doc, result, len(storedChunks), manifest)
+	if err := ctx.Err(); err != nil {
+		return result, err
+	}
 	if runID > 0 {
-		if err := store.replaceDocumentChunksForRun(doc.SourcePath, storedChunks, manifest, &completion); err != nil {
+		if err := store.replaceDocumentChunks(doc.SourcePath, storedChunks, manifest, &completion, options.Replacement); err != nil {
 			return result, fmt.Errorf("document not updated: %w", err)
 		}
-	} else if manifest != nil {
-		if err := store.ReplaceDocumentChunksWithManifest(doc.SourcePath, storedChunks, *manifest); err != nil {
-			return result, fmt.Errorf("document not updated: %w", err)
-		}
-	} else if err := store.ReplaceDocumentChunks(doc.SourcePath, storedChunks); err != nil {
+	} else if err := store.replaceDocumentChunks(doc.SourcePath, storedChunks, manifest, nil, options.Replacement); err != nil {
 		return result, fmt.Errorf("document not updated: %w", err)
 	}
 	result.RunID = runID

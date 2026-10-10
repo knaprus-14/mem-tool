@@ -1,0 +1,742 @@
+[
+  {
+    "path": "cmd/mem\\mindmap_workbench_test.go",
+    "sha256": "D84B73E54C561F1D6E04BF94ABAED1E68C5145FF7F1EA8A9AD20A8A5236973D0"
+  },
+  {
+    "path": "cmd/mem\\mindmap_workbench.go",
+    "sha256": "2235272FFA3C6DC111100FD9C45140B183C338467C8F6B9FC9F51268503A10BA"
+  },
+  {
+    "path": "cmd/mem\\mindmap_test.go",
+    "sha256": "7F3EADC9D62F977EE0C2DC6A468EDB3387A2EF1438A74A4A12C619614445C7F5"
+  },
+  {
+    "path": "cmd/mem\\mindmap_open.go",
+    "sha256": "2F971049F2AFD9A3458F5298D1A12A1B2C29FCF27B2C7477C57ECFBD04B7283B"
+  },
+  {
+    "path": "cmd/mem\\mindmap_export_test.go",
+    "sha256": "82DE86C583DC495A2D4D50CE41E4524EF5903DC1A9EF90E917E3931A5827FE5D"
+  },
+  {
+    "path": "cmd/mem\\mindmap_export_replace_windows.go",
+    "sha256": "AA9B12BB24FFC21F6081A3945B852AAA512BE27A823CD9C46528A181CA734BD2"
+  },
+  {
+    "path": "cmd/mem\\mindmap_export_replace_nonwindows.go",
+    "sha256": "93F80BC5FE16893A27642CB3FA19F24548E0B8164BB95D473E505806175701AC"
+  },
+  {
+    "path": "cmd/mem\\mindmap_export.go",
+    "sha256": "A749525665BA4CA6D2DEFE18251B44D462BAB516B51CF5C231B751E85EDD2440"
+  },
+  {
+    "path": "cmd/mem\\mindmap_ai.go",
+    "sha256": "A9FAF654229D59BDE91346ED0EA3161495F992EFEA8673B85DC5E63D87CEC272"
+  },
+  {
+    "path": "cmd/mem\\mindmap.go",
+    "sha256": "D83B6A6C156F28F2EE72A1ECA4E71431A851822C98ADAF8AFD6351B9B60F12EE"
+  },
+  {
+    "path": "internal/webapp\\assets\\maps-ai.js",
+    "sha256": "11B963A5A6B0B8733EEC50471B8CD3340B5009094EBCD867280DB42031019F53"
+  },
+  {
+    "path": "internal/webapp\\assets\\map-workbench.js",
+    "sha256": "054A8A189136D838126123F8F99EA834126982CC9954CE4EC0D4242564BD1A59"
+  },
+  {
+    "path": "internal/webapp\\assets\\map-resize.js",
+    "sha256": "197FD8F00BD4A16FB57383F12917EAD8437AB27367BE2C6B6A3824987B687028"
+  },
+  {
+    "path": "internal/webapp\\assets\\map-library.js",
+    "sha256": "9A2FE2879FB91A159F251533151BE2FA37EFC52049D116E7F0F0E56287315786"
+  },
+  {
+    "path": "internal/webapp\\assets\\map-layout.js",
+    "sha256": "62A314A42A66BFB45A7B43AB5B55847D3132C0C197B9F5FA61B9382B2C9625EC"
+  },
+  {
+    "path": "internal/webapp\\assets\\map-from-sources.js",
+    "sha256": "19F20881E56E352FBF8B690E8D8177BD297654A199B404EFE10893CE2A627A9A"
+  },
+  {
+    "path": "internal/webapp\\assets\\map-document.js",
+    "sha256": "823484B6370DA67F272A2E68A288EB79F0066744CD07388CF387F85A42A387C4"
+  },
+  {
+    "path": "internal/webapp\\assets\\map-actions.js",
+    "sha256": "27F74A5408296D202835FAC480A76FF543F4B38E5C0B4DD91F8960CBD1171C9D"
+  },
+  {
+    "path": "internal/webapp\\assets\\graph-documents.js",
+    "sha256": "EA064F4D602B609FCE4FFF9078B4B97EC16A438DD4477E41AEC78DAED675C84F"
+  },
+  {
+    "path": "internal/webapp\\map_source_progress_test.cjs",
+    "sha256": "E45880C0002B6C8DD27D80B9620001B64328461D11F6B7802764DC4EAB3F03C7"
+  },
+  {
+    "path": "internal/webapp\\map_document_test.cjs",
+    "sha256": "B018A45D31CACD287B8F13B90571E58566C30D1E1BF029312DC8AE3D9121C236"
+  },
+  {
+    "path": "internal/webapp\\maps_test.go",
+    "sha256": "069621DE872A7630EC4D4EF4D94B5BBC248D481B44772EB5DC92C74DFB8E26E0"
+  },
+  {
+    "path": "internal/webapp\\maps_from_sources_test.go",
+    "sha256": "21D3A5E5C0F8C4743D9CE7ECD9464B25FD3D17F03B83ED8A71CEFCB7C6C8A054"
+  },
+  {
+    "path": "internal/webapp\\maps_document_test.go",
+    "sha256": "8C0EEAD55F9FCDF2104B0CB0B2E51A853DE40598F7E4BFA339463325BD195317"
+  },
+  {
+    "path": "internal/webapp\\maps_delete_test.go",
+    "sha256": "5799DB46FAB075BB2832BD20F39BD909C72D9593C6C9A40AC7D2F192DF422365"
+  },
+  {
+    "path": "internal/webapp\\maps_ai_test.go",
+    "sha256": "64F81CE6C09212531B99210D54DB4A2130DAA6354543E01BFCD901DEC936F8C7"
+  },
+  {
+    "path": "internal/webapp\\maps_ai.go",
+    "sha256": "1C45212BC7C8D23199B1B254454CF574996C26BD9AFF679A0029EA873679EECD"
+  },
+  {
+    "path": "internal/webapp\\maps_actions_test.go",
+    "sha256": "325B4066763ACA62B7B048F263D97A81525FD29BB3F6622534EC8D94FE4ECE87"
+  },
+  {
+    "path": "internal/webapp\\maps.go",
+    "sha256": "7C3A4EE15C236E9BCB7E39C4802768B817FD10A94B40BB0301ABF16A877AA17D"
+  },
+  {
+    "path": "internal/webapp\\graph_shared_test.go",
+    "sha256": "43460939D1E794EFF3E5317F4F300795BC694AFE9E304464378AE01810EAD1F4"
+  },
+  {
+    "path": "pkg/ingest\\document_test.go",
+    "sha256": "EC69D378268F5B1F392C275638D4D5FA6476533CB40413504D757D19D981CC4D"
+  },
+  {
+    "path": "pkg/ingest\\document.go",
+    "sha256": "30EDE579B413A455D2CEE980B3186AE0E697F7BC281326CEDD0D3DEBC4E4C430"
+  },
+  {
+    "path": "internal/webapp\\graph.go",
+    "sha256": "1C2A6316522F32B6209D3C71B8F667EB402D02CC685F5235DF1979562A0E6EBC"
+  },
+  {
+    "path": "internal/webapp\\graph_documents_assets_test.go",
+    "sha256": "784CA03F76F5022564EA8A0430ED09708FCBC119FB26716DA7CC4C3D36B8B58A"
+  },
+  {
+    "path": "internal/webapp\\graph_documents_test.cjs",
+    "sha256": "B0F6ECB9941111DAE0A651A81C9344E21E35DC208E98D215FF8068F257797390"
+  },
+  {
+    "path": "internal/webapp\\graph_lifecycle_test.go",
+    "sha256": "B53FFC2712721A9E10CD10CFBB7F71EB2C126B3E854F9790DA667F02941A907F"
+  },
+  {
+    "path": "pkg/ingest\\text_document.go",
+    "sha256": "24EEE7DEA7B2EFD3F2DF0ADAF76F23AA828DEC52871D806325585C8282E4FD21"
+  },
+  {
+    "path": "pkg/ingest\\text_document_test.go",
+    "sha256": "C2DFD861242D562D3D3A885F5E8D1062E0504E32ABAFD9562A1E581D65EC76C8"
+  },
+  {
+    "path": "pkg/mem\\document_update.go",
+    "sha256": "D27AC24F1DFEBDFECBB2152BAF00D47BE139FB08872F901FB63BCA14F1628477"
+  },
+  {
+    "path": "pkg/mem\\document_restore_test.go",
+    "sha256": "82F2FB4F3B0C84FC7948384D874A01A134512FDEB2EFDE40EB2B0A399F39B5DC"
+  },
+  {
+    "path": "pkg/mem\\document_restore.go",
+    "sha256": "3DC8EEC62AD7E08A4D3647846F1FB64AFEC21DA69DF197F7827C180E787B31FB"
+  },
+  {
+    "path": "pkg/mem\\document_history_test.go",
+    "sha256": "18AA19BE6224CB3733C0C13F42828ADCEEEC4730F98794932F89AB2992761368"
+  },
+  {
+    "path": "pkg/mem\\document_history.go",
+    "sha256": "1CC104622EC2D52200F07D5037D9802DBD4775F1C82185140A9849E1F7D62740"
+  },
+  {
+    "path": "pkg/mem\\graph_document_test.go",
+    "sha256": "BCB2CDDDB68945A3975F276538703692BC50259D74B3330339A8F1593EEF2A2E"
+  },
+  {
+    "path": "pkg/mem\\graph_document.go",
+    "sha256": "28D7D5C4B92E369D0075DB1E36EC3A9CBB4E7CA2FB810D765AE04857E8084442"
+  },
+  {
+    "path": "pkg/mem\\graph_coverage_test.go",
+    "sha256": "88F321B430F7D3E69C172C3F5EBAC0B20B56F8499DB46F6EE18C1D7AC56554E8"
+  },
+  {
+    "path": "pkg/mem\\graph_coverage.go",
+    "sha256": "E378543EE21593DA092F3AE26FE8CA61688FC160A53F10320D5D33EEFFABF6ED"
+  },
+  {
+    "path": "pkg/mem\\graph_analyze_test.go",
+    "sha256": "2BC798E32B47713AFE449D750F0BA2D4BD43FFFF4C436F1C90487079AAEF9287"
+  },
+  {
+    "path": "pkg/mem\\graph_analyze_run_test.go",
+    "sha256": "06793C29BF0AE8C97F1B9CE56B7B6E230BFD8C7CB6FF45C0C83855B5756B2129"
+  },
+  {
+    "path": "pkg/mem\\graph_analyze_run.go",
+    "sha256": "0229C56C3F6232A9BA872B1E6291038029D39B7D1E276DB8E3134AC1807B76B6"
+  },
+  {
+    "path": "pkg/mem\\graph_analyze_plan.go",
+    "sha256": "F218FF82E28A4D6A5D5F7BDE4706E496568F8654F56A2862166E9FBEB28DD4DD"
+  },
+  {
+    "path": "pkg/mem\\graph_analyze.go",
+    "sha256": "1F3673C5475CC85AB54743A9C722D71B9C3453561BDA2AC75D5175F10443F25A"
+  },
+  {
+    "path": "pkg/mem\\graph.go",
+    "sha256": "164C78B2AB24E89114193D0BECEF8907FDD529F6155EC60C766F7A9823D7436C"
+  },
+  {
+    "path": "pkg/mem\\graph_extract.go",
+    "sha256": "C1FB80B6FB1BC3FD779C813A8B3116E54D8F6771904CDE551E21A4FC488C6A22"
+  },
+  {
+    "path": "pkg/mem\\graph_export_jobs_test.go",
+    "sha256": "A928C66DDE1B188F1E50196DBA97FDA07A4C772BBE474711D74D44BDFE791317"
+  },
+  {
+    "path": "pkg/mem\\graph_export_jobs.go",
+    "sha256": "68FBE1C03A50631EE46D2A1F4A76822ACDB379C1A693F9BC839D486AD75DCE72"
+  },
+  {
+    "path": "pkg/mem\\graph_edit_test.go",
+    "sha256": "02EF6FA8590E6BDA9058DF3C264FBD0DBC570D26608D55C516BC54D7559848EC"
+  },
+  {
+    "path": "pkg/mem\\graph_edit.go",
+    "sha256": "B7D46F8045A65DE6BCC3FA8FB2FCE9F3A840206C053F654FC1777FC206D35523"
+  },
+  {
+    "path": "pkg/mem\\graph_duplicates_test.go",
+    "sha256": "2B5802BE59FEFB13781EF8CC90FC54D08D9260A86DDF5AE9555826FAD8F0AD94"
+  },
+  {
+    "path": "pkg/mem\\graph_duplicates.go",
+    "sha256": "EC902E1A26330D6FC18C0AF6A83045A96B0D3D551A201FA19007A754DCCDBCA8"
+  },
+  {
+    "path": "pkg/mem\\graph_extract_plan.go",
+    "sha256": "E6D7901C78FCFD4F115805F18808C0ECAEB68F4AF169EFA0BF1F7D8635C8AF0C"
+  },
+  {
+    "path": "pkg/mem\\graph_extract_job_test.go",
+    "sha256": "1D9524907B6240809BBB8C08EA36720A0904A9FDF51AFF8BB7806C174E69DFFD"
+  },
+  {
+    "path": "pkg/mem\\graph_extract_execution.go",
+    "sha256": "A31B02F218CDBB832E2F7A3CC24326767AEC3390AC26B5BF6B793069A36BF55E"
+  },
+  {
+    "path": "pkg/mem\\graph_extract_run.go",
+    "sha256": "18F0E2A502A8BF804133D21CB73531AA1CED6970A1680AC54F5A7DF1815F003B"
+  },
+  {
+    "path": "pkg/mem\\graph_extract_recovery_test.go",
+    "sha256": "B334224111A20C5F41AD22CC7F1BC9703D6E17E0BD8EE42D657CC2CF6DB5DD6E"
+  },
+  {
+    "path": "pkg/mem\\graph_extract_test.go",
+    "sha256": "49E3ED2E8B17992D31B4CF37387D63CFF298AEC235970647427C60D07444BD27"
+  },
+  {
+    "path": "pkg/mem\\graph_labeled_eval.go",
+    "sha256": "37DCE2FFE893C62765EBCDC62F20CD4D82B5204AFDE31E93B49E26EC87D89CC0"
+  },
+  {
+    "path": "pkg/mem\\graph_labeled_eval_test.go",
+    "sha256": "AD798D92B1AADC7D493A1437A8C07C1994A05DFD31E74971B66ACB155791565F"
+  },
+  {
+    "path": "pkg/mem\\graph_review_test.go",
+    "sha256": "5A0FF4BCE3FF01FF931F123C56B855F1C5E9456087B1229FAD4BC80C7BA669FE"
+  },
+  {
+    "path": "pkg/mem\\graph_review_pin_test.go",
+    "sha256": "4EEA5B775A159E207ECDC708A00600155983EB2D4584B6CFFFEFC0CF3090DBA9"
+  },
+  {
+    "path": "pkg/mem\\graph_review_pin.go",
+    "sha256": "73D6AAC214A69D0842870A6F375C5CDD58412135ACFCDE8BAABA8838E2205CED"
+  },
+  {
+    "path": "pkg/mem\\graph_review.go",
+    "sha256": "9048874DAB60A10AA7D2D118799240C5D6DFF2D54364289DE92EBB6658C4720C"
+  },
+  {
+    "path": "pkg/mem\\graph_requirement_test.go",
+    "sha256": "19873D7CC0C0EAD4B4D5E397337C11F24A02D5F49A2B1EEF2539E734133F4E99"
+  },
+  {
+    "path": "pkg/mem\\graph_requirement_real_test.go",
+    "sha256": "758E9E9CC2B7092667279E9E66649AEB4BC4BA99E278BCAD5B259BD3F5C43EA9"
+  },
+  {
+    "path": "pkg/mem\\graph_requirement.go",
+    "sha256": "4097E45DEA85C67EED654F71D18686B71B3EFD5BACA3489587990F41CF378E61"
+  },
+  {
+    "path": "pkg/mem\\graph_quality_eval_test.go",
+    "sha256": "2937B348D218F2189515FC7D3D1FA6CC6CB7DC6470E4071505944275DEFF6D10"
+  },
+  {
+    "path": "pkg/mem\\graph_quality_eval.go",
+    "sha256": "7789C141C334B4E205964C8A7ACB04ECB29E8913449EDBF353EB4A768EEF26FC"
+  },
+  {
+    "path": "pkg/mem\\graph_profile_test.go",
+    "sha256": "38D0FCDE79D83ABDFB93FBC17966A09F0B09CA0F13211308E5D10198076F6F2F"
+  },
+  {
+    "path": "pkg/mem\\graph_profile.go",
+    "sha256": "D43CBBCEA433A8F93BDF46B39336742FE8720940ED3B013B170DEA26CFBD6DA6"
+  },
+  {
+    "path": "pkg/mem\\graph_portable_export_test.go",
+    "sha256": "44B33D567D9825DA73BF1074F47440325F9EA5374E579E53035B9DE2BE9A0D97"
+  },
+  {
+    "path": "pkg/mem\\graph_portable_export.go",
+    "sha256": "CF2A772965D7E6E9565DE388A69D84A83F497E5A1BE3E6E03AE9901C229B055D"
+  },
+  {
+    "path": "pkg/mem\\graph_performance_test.go",
+    "sha256": "9C0A28B5E37BE24430CB83A2ACDE31BE468A1C877B553A5EF88EFE4065DDE752"
+  },
+  {
+    "path": "pkg/mem\\graph_live_test.go",
+    "sha256": "99FA941C26E36786EDD116093D14E32C15CB75428062C05C109103DCFD640037"
+  },
+  {
+    "path": "pkg/mem\\graph_live_benchmark_test.go",
+    "sha256": "DEDB793D56C3741647F2291CCD254F4372AEC58B3D23AA122CC2866E430C0B62"
+  },
+  {
+    "path": "pkg/mem\\graph_live.go",
+    "sha256": "3589AEB6B9032C7DABD2266BB7D4BE0A9153E1DFAF579A3C11AA92AA85038B42"
+  },
+  {
+    "path": "pkg/mem\\graph_learning_test.go",
+    "sha256": "54886F444F6F0FF33642990CA9E4D808EC5BB67DF588187E9C1C1AB1AE574B78"
+  },
+  {
+    "path": "pkg/mem\\graph_learning_session_test.go",
+    "sha256": "8D7DB661FD7FB7FF751145FAD77531A360EDF9BFEB3C18868122A92F80232E1C"
+  },
+  {
+    "path": "pkg/mem\\graph_learning_session_live_test.go",
+    "sha256": "3E3D0A4FB6BCE69DB4790D348B971C97F817AB607EBB36988C19A5940B3CA005"
+  },
+  {
+    "path": "pkg/mem\\graph_learning_session.go",
+    "sha256": "43ECF737C9A8C65752863E28F6B69F61114C4693B7A619911BC9DC35AC424B35"
+  },
+  {
+    "path": "pkg/mem\\graph_learning_route_test.go",
+    "sha256": "C6F65FA6D6FE708D35AD270A354BC4E4B79467CFA44DEDD966E6FD267ACFB87B"
+  },
+  {
+    "path": "pkg/mem\\graph_learning_route.go",
+    "sha256": "96BE2B85BFCA4C5D47E1732E771E77B70CBB26C3D5BC0B43F6649C8B21D1C675"
+  },
+  {
+    "path": "pkg/mem\\graph_learning_jobs_test.go",
+    "sha256": "6F3AB2DCF79443455BA8E1FB5B4EB0DFA59CB7561BF786400E82D7957DE353FD"
+  },
+  {
+    "path": "pkg/mem\\graph_learning_jobs.go",
+    "sha256": "64B6DDC7E9F04875FA0B9DE57A72ED02DD3821A20FB5CB92899461A749F2C36B"
+  },
+  {
+    "path": "pkg/mem\\graph_learning_export_test.go",
+    "sha256": "F00EFF3CFB727470A85F283B552C676DAC3CBE827848DAF76EB4E905E71BF6FF"
+  },
+  {
+    "path": "pkg/mem\\graph_learning_export.go",
+    "sha256": "69DFA74A3790B91CA45CF964DA3E07AB3B0DE9CECC60294ED3377FB45EF62FB1"
+  },
+  {
+    "path": "pkg/mem\\graph_learning.go",
+    "sha256": "F1C778975A92C17EF3C6A27103E912A148A063429034ABB559A35BE7010B34D5"
+  },
+  {
+    "path": "pkg/mem\\graph_layout_test.go",
+    "sha256": "7EA62AA7671FAEDE618259A57C9B6E0BA35B35199560A9E674FCD60C34819723"
+  },
+  {
+    "path": "pkg/mem\\graph_layout.go",
+    "sha256": "933BB25683D89AB635FE67D214AE082DAE8FD8070B99A4439C5FCB4270A0D908"
+  },
+  {
+    "path": "pkg/mem\\graph_labeled_requirements_test.go",
+    "sha256": "470367AD32949988A99AD3A6DB3EF10403BD968385D8F49AEA9C57C51C5EED98"
+  },
+  {
+    "path": "pkg/mem\\graph_labeled_qualifiers.go",
+    "sha256": "AD1D7B1607BB608FB06D3CC4B05003883AB06FCF2A7787AEE3FE48445383889D"
+  },
+  {
+    "path": "pkg/mem\\mind_map_ai_live.go",
+    "sha256": "0EC99959D36FD97E97F586FE5F231E46359A8BB6BC5E9DF980FBCA18A35F00F9"
+  },
+  {
+    "path": "pkg/mem\\mind_map_ai.go",
+    "sha256": "036182D27588752EC6E7A53CBFBAE29FFBC8450CD2491553E8B27B0678C52992"
+  },
+  {
+    "path": "pkg/mem\\mind_map.go",
+    "sha256": "7D0102AEC363B609589D8DC85837B2194513465DC3B79648921737D7E6556E93"
+  },
+  {
+    "path": "pkg/mem\\graph_workspace_test.go",
+    "sha256": "16A9EC26D90F437A5CB4358209B9C8134A53E3DB8FF200BDF8F37C4E2DD35541"
+  },
+  {
+    "path": "pkg/mem\\graph_workspace.go",
+    "sha256": "45B37F519AA8239F789A20323A95B73FC8C1E0591535E3250F33AE58706AD232"
+  },
+  {
+    "path": "pkg/mem\\graph_view_test.go",
+    "sha256": "5334C915DB5FF32A01BAA8EBC23A228B7D611A860DF6C683CD9A7CDE5251CCF8"
+  },
+  {
+    "path": "pkg/mem\\graph_view_regression_test.go",
+    "sha256": "03C88B363C177B8E9B9EC0F6AC92D37BECAA221F40AD5E142DD0BBD74004A73F"
+  },
+  {
+    "path": "pkg/mem\\graph_view.go",
+    "sha256": "1EAF120DB20505B83F271B916B557DC8E85680024D22A3D00D4A81D2442DA571"
+  },
+  {
+    "path": "pkg/mem\\graph_topics_test.go",
+    "sha256": "04E843D7BD3BE5730D51348B9438F79F77BB10397D1E184BC995A728E2FEBC2E"
+  },
+  {
+    "path": "pkg/mem\\graph_test.go",
+    "sha256": "FC7B0FD3ED327758CA8C1B2E64675212D12FDCBD512A0820134CECDD70BF6197"
+  },
+  {
+    "path": "pkg/mem\\graph_source_test.go",
+    "sha256": "3CA8CEE54E6A9AD14BB888A3084E16558008BB34A26561741EF5E86A791CF3A1"
+  },
+  {
+    "path": "pkg/mem\\graph_source_preview_test.go",
+    "sha256": "1412AB761677388F2745D1E0654B185194EE728C2F1C8D8F12119AE6C5481FB0"
+  },
+  {
+    "path": "pkg/mem\\graph_source_preview.go",
+    "sha256": "FFD484D0B14F4C21D8B81C2238DAAD5D50738858A8F595B0D2B9B7E1BF972857"
+  },
+  {
+    "path": "pkg/mem\\graph_source_context_test.go",
+    "sha256": "2ED14B1BFADB520D060C51A1375F571CC6E0FFB0A31563060A7C8ED032C165DB"
+  },
+  {
+    "path": "pkg/mem\\graph_source.go",
+    "sha256": "0AB81EEB87D63452491B5FCBE43DD91AF78DED28C469F0443F5B78A0E8AFD583"
+  },
+  {
+    "path": "pkg/mem\\graph_selection_test.go",
+    "sha256": "83B4EAA168649C45C6589D9CD02F4842404EE290ED746679A894136066D21353"
+  },
+  {
+    "path": "pkg/mem\\graph_selection_export_test.go",
+    "sha256": "64529CE1B5F4E1B77E3B24EC0F46E2F1387FEC10120DCB8BCB57EF28076FB4B5"
+  },
+  {
+    "path": "pkg/mem\\graph_selection_export.go",
+    "sha256": "E854DA6403DFD631962139F9FE601E71FCAE9EB80B70ED2CB100C183817EC8F8"
+  },
+  {
+    "path": "pkg/mem\\graph_selection_analysis_test.go",
+    "sha256": "CF9D230502E6935C03CE76CCDF2654E67353856AD16B3033FEEBB747CB3AC837"
+  },
+  {
+    "path": "pkg/mem\\graph_selection_analysis.go",
+    "sha256": "C947B61A0F3B741C357A72741EDA0F20CFAB01BAECD29A349038E3479C13F1A2"
+  },
+  {
+    "path": "pkg/mem\\graph_selection.go",
+    "sha256": "FC3AAFF415159487EF91BAA448B896B2A566C3054C4E744C44EAF1CD2B6371C6"
+  },
+  {
+    "path": "pkg/mem\\graph_revision_diff_test.go",
+    "sha256": "B77F0044F8AED8B25693342D494A75512A5DD60392C85CF049EDF4160D1A161D"
+  },
+  {
+    "path": "pkg/mem\\graph_revision_diff.go",
+    "sha256": "FC1EDA425E2075DD647A5DBF0B4EEA282B14A64785E1792D1ECDFF29D6EF02EB"
+  },
+  {
+    "path": "pkg/mem\\mind_map_workbench_test.go",
+    "sha256": "7BDF3E563D598128C1B7A1A4FE3A9BCD465F56B6C9F6BC706B95059D93EB92A0"
+  },
+  {
+    "path": "pkg/mem\\mind_map_workbench.go",
+    "sha256": "527ABC01F3643D0233B3CB1C72A88CF285208DA7017C022445E667F06C96E046"
+  },
+  {
+    "path": "pkg/mem\\mind_map_view_regression_test.go",
+    "sha256": "0B27748E7A46018B299EF5EEC80FD676C507FD6EDD0F7CE8A19F77915D6B61B7"
+  },
+  {
+    "path": "pkg/mem\\mind_map_view.go",
+    "sha256": "BBB49B2FA0661C3B92D6710F5A3A95627490946358B48C2458F90FD7314D9CD8"
+  },
+  {
+    "path": "pkg/mem\\mind_map_test.go",
+    "sha256": "314EDE68F6ED3ABDA7B1AEEB05C4D61689B4268D839025B8D29E77652A6539A4"
+  },
+  {
+    "path": "pkg/mem\\mind_map_sources_test.go",
+    "sha256": "FEDAB66342AE0E7ECDBE7593D34142928B9915C54E96ED5A59156ED462F411C5"
+  },
+  {
+    "path": "pkg/mem\\mind_map_sources.go",
+    "sha256": "AA5E820DC0CD793FF7A5419E4270A8246DC75222C871EE72259987933787FFEC"
+  },
+  {
+    "path": "pkg/mem\\mind_map_live_test.go",
+    "sha256": "9602683DD2223A0B179372BF29B1020252DEECB3988D8F72C646EE151AA42A27"
+  },
+  {
+    "path": "pkg/mem\\mind_map_live.go",
+    "sha256": "CEA3BBBCC061F7DFD57ED27FCE8D1F3F27DAF56079508483481078F8FA41F3CE"
+  },
+  {
+    "path": "pkg/mem\\mind_map_limits_test.go",
+    "sha256": "7CC29295BBD440B218F159788CC826249A203C1403238E94FA1151D18E87577D"
+  },
+  {
+    "path": "pkg/mem\\mind_map_export_test.go",
+    "sha256": "7AC11CD0A72ECEB1BD873302C4BC5C12C79547ED5557347B5EB2B0AB5F2B684B"
+  },
+  {
+    "path": "pkg/mem\\mind_map_export_png.go",
+    "sha256": "BE04366B94B62E1DD4EE5DC516E54585642CFB8ED808E04E89F7ED55C4B189C5"
+  },
+  {
+    "path": "pkg/mem\\mind_map_export.go",
+    "sha256": "547D855DD5F8B9B63F96C8095821A3CDF9C987ECBF676BB3CE20F9099984F4A4"
+  },
+  {
+    "path": "pkg/mem\\mind_map_ai_test.go",
+    "sha256": "8122F52A5EA02DB81F92F1B1266E1F147E03EC5C81AB807589DC9376C7E7F68C"
+  },
+  {
+    "path": "pkg/mem\\mind_map_ai_live_test.go",
+    "sha256": "D96A839F97EBB624A61F8EAD3F64838261BDE974975B31A630B5A3480862A34C"
+  },
+  {
+    "path": "pkg/mem\\physical_source_regression_test.go",
+    "sha256": "B57BEDF09573069C6CA79F9E1F58BDE51F776BBD239D862A8E177CB356CBE4C7"
+  },
+  {
+    "path": "pkg/mem\\source_fingerprint_test.go",
+    "sha256": "24905A9FFC0A15D71DC58DD9B3FC521DF986A635740BC468B0C3986D76ECBF3E"
+  },
+  {
+    "path": "pkg/mem\\source_fingerprint.go",
+    "sha256": "473738194E9132B7668F3DEA156EB3DA222681C05ECAA740D3AB4F966C087303"
+  },
+  {
+    "path": "pkg/mem\\source_locations.go",
+    "sha256": "9F1213FF7DD8E595EAE0D101DD2A5B36A76EE1749DAD7FEFA05AB37EF4D36427"
+  },
+  {
+    "path": "pkg/mem\\web_map_workbench_test.go",
+    "sha256": "858B4ACBEF5DD18EF4B07785A0395CA285FB7A44C9965ED157E9C519338DF5CB"
+  },
+  {
+    "path": "pkg/mem\\web_map_workbench.go",
+    "sha256": "98477584B9D8B5CC9CA58B7EF8CF94EE3CC266A54E4C3DA6DBB9FC07946BDA5C"
+  },
+  {
+    "path": "pkg/mem\\web_map_sources_test.go",
+    "sha256": "B8B78DB8201A6EA6BAE05A8A6091A07A44CBA59D56CECA118D50970226EBB8DF"
+  },
+  {
+    "path": "pkg/mem\\web_map_sources.go",
+    "sha256": "29673E513CB182ABD0DA55E4724BA35F4791CAC4330B0D9B4320CACBFAE17FC0"
+  },
+  {
+    "path": "pkg/mem\\web_map_snapshots_test.go",
+    "sha256": "DF6297E0B3C5F841BC3AC90102D98DE7F2331CF32FEB8ECC79D8DDDA0E54D8D3"
+  },
+  {
+    "path": "pkg/mem\\web_map_snapshots.go",
+    "sha256": "71E9F4D465AC06937BC865DB4A154A95940A5E65C0F7179D1F0FFF5C01A91FFC"
+  },
+  {
+    "path": "pkg/mem\\web_map_restore_test.go",
+    "sha256": "4FC73A45281B22A8946923EC0C439C9AA7E599874324401ED320A94A8F3AD46E"
+  },
+  {
+    "path": "pkg/mem\\web_map_redo_test.go",
+    "sha256": "06BC3C8ED71B0CA0B33823FEAB4752913092D904EB8F9082D3E375435592044C"
+  },
+  {
+    "path": "pkg/mem\\web_map_manage.go",
+    "sha256": "8AFFB99A31ACEB1440FEBCD71E5337A438564FBA007E0C6B00A69C88D64CCA5C"
+  },
+  {
+    "path": "pkg/mem\\web_map_logging_test.go",
+    "sha256": "92B5E695C9EB4C823FD60ED48825EF40D56F6D2846B65FC07CC7AE1DA0E3CF45"
+  },
+  {
+    "path": "pkg/mem\\web_map_history_test.go",
+    "sha256": "952441C6185D240079BA1A021040B73FA1BEE428AFC6E02D4D84EF751239D5B0"
+  },
+  {
+    "path": "pkg/mem\\web_map_history_nodes_test.go",
+    "sha256": "CFC280822B86F010B5F6FBC3022E7E0A4E4A291B19B45A12034F901A54B3CE3B"
+  },
+  {
+    "path": "pkg/mem\\web_map_history.go",
+    "sha256": "7E1C81A9E223BFE00F6E47503FC5A764592D219B99ABF6A2D33F46F06C4D76C0"
+  },
+  {
+    "path": "pkg/mem\\web_map_from_sources_test.go",
+    "sha256": "3FE1A9C11B481C1608FC56BD53B177C02F63EAE06EEA2E900D7B388334D1060E"
+  },
+  {
+    "path": "pkg/mem\\web_map_from_sources.go",
+    "sha256": "B6551BB2C31C02E1DD1DC3AB905673F7F5EBD54501316A262C6C892CC4CCADBA"
+  },
+  {
+    "path": "pkg/mem\\web_map_edit_test.go",
+    "sha256": "9D32EDB40F26298DF4CCADC6826F1E6AB8865058238C05B1163ECC854AD3AD18"
+  },
+  {
+    "path": "pkg/mem\\web_map_edit.go",
+    "sha256": "701DB30A87C87F4645AAE214610E65A3D66E4C813505700291285B2DC143A74A"
+  },
+  {
+    "path": "pkg/mem\\web_map_duplicate_test.go",
+    "sha256": "7EAB27A2C5894B8B56F22536FB4C9078290699EA256588FB9DB6FBDAF8356A36"
+  },
+  {
+    "path": "pkg/mem\\web_map_duplicate.go",
+    "sha256": "BFA1DDE65AE266849E3D3D5E87C3289E71EFA10A8C51039205C27D855FA688A4"
+  },
+  {
+    "path": "pkg/mem\\web_map_document_test.go",
+    "sha256": "9640B2B347ABE3CF648CB003C6318727AD8C1E31BD161132CA550A6FB1CACFEF"
+  },
+  {
+    "path": "pkg/mem\\web_map_document.go",
+    "sha256": "5BE5C835FFD0A5CC90A8772720482CE3EB41EC469319BAE284AC3E252044186A"
+  },
+  {
+    "path": "pkg/mem\\web_map_delete_test.go",
+    "sha256": "CEA81AEB6A4A33BA24BDE35C34CF6F75F3FFAE32B0FA374ACAF9F7CC1300CC76"
+  },
+  {
+    "path": "pkg/mem\\web_map_delete.go",
+    "sha256": "96B10E49B2AEB380CBB7F85C3C50EB5B45A0B0A41F699808B03C4C05A3598717"
+  },
+  {
+    "path": "pkg/mem\\web_map_attachments_test.go",
+    "sha256": "3A8A042BC09A7D166D0898106335B552B3C130AD9FF24CEA2600929296C27F5B"
+  },
+  {
+    "path": "pkg/mem\\web_map_attachments.go",
+    "sha256": "4C183A2EACF10F8CCFEF973F8777C5FA43AC7551A1C2288F11E467BFB2DA2FC9"
+  },
+  {
+    "path": "pkg/mem\\web_map_ai_worker.go",
+    "sha256": "0FAA83260C0523CFA3F4FE89B3E2EC44B9B9CF327CE682BAB332A589BF84F1B9"
+  },
+  {
+    "path": "pkg/mem\\web_map_ai_timeout_test.go",
+    "sha256": "675DCEBB9A0C41EC530942CFC5EE2B28B6702A8DCC0E27EB87D172BC21CEDF78"
+  },
+  {
+    "path": "pkg/mem\\web_map_ai_test.go",
+    "sha256": "1D788D2143672D8AA6F3E043DF4930AEF30BA42642DFFA1A1DA542DDE0253354"
+  },
+  {
+    "path": "pkg/mem\\web_map_ai.go",
+    "sha256": "8D28C162234AD135917335DAD790351481F921063FCCB738B9059EDA0E3CC432"
+  },
+  {
+    "path": "pkg/mem\\web_map_add_test.go",
+    "sha256": "05D46B9A1B3C92FD951A2F2F70684C3637360A5A87FA79B8D14220634476CD24"
+  },
+  {
+    "path": "pkg/mem\\web_map_actions_test.go",
+    "sha256": "984CB7D5AC0FF911E8EE6A5EA3A4509BA45B4BCAB9EB7FEA9BDC42D98D41358A"
+  },
+  {
+    "path": "pkg/mem\\web_map_actions.go",
+    "sha256": "6D5A6B92959163C164ACE5CCDEAB7B250D5031024C53B81DA418D686219DE1F3"
+  },
+  {
+    "path": "pkg/mem\\web_maps_test.go",
+    "sha256": "CBEA168FB62A5FB285BC480D0C261E87E8F9D60738403B402BF44DEA3EB0D30B"
+  },
+  {
+    "path": "pkg/mem\\web_maps.go",
+    "sha256": "2AD602147E84C04A0FD383EF1D54E7988016DB49C5AAC221F1707C23642D0C29"
+  },
+  {
+    "path": "pkg/mem\\web_graph_operations_test.go",
+    "sha256": "0807C8D53994A40ECA54577D55C93CA26BCBFDA0453B1287D2C04E2DCC94752A"
+  },
+  {
+    "path": "pkg/mem\\web_graph_operations.go",
+    "sha256": "FC719A5F4CF99390BAD6EA90308B3977E39433F1C705FE7F1E155B308E3D118B"
+  },
+  {
+    "path": "pkg/mem\\web_graph_lifecycle_test.go",
+    "sha256": "B5F9AF9685C02AF0EBCC13EDD06FF96A001FD89618E9E0428C73B98C5973D5A6"
+  },
+  {
+    "path": "pkg/mem\\web_graph_full_document_test.go",
+    "sha256": "8C90120DCB9A01BAF5E82175B2F9757F6615595DB469E108B83F0C96A74662CA"
+  },
+  {
+    "path": "pkg/mem\\web_graph_config_test.go",
+    "sha256": "CDDADD6C55C33657BBE8F5D1DD8C2C7E62BB8D41E80C0EA1261DD6F8A5AA1037"
+  },
+  {
+    "path": "pkg/mem\\web_graph.go",
+    "sha256": "DDB94EF3AA1935B6541C1B45373C4B7BBDDD6F2DCD19C0F1050F8619A84D20D7"
+  },
+  {
+    "path": "pkg/mem\\web\\knowledgeSourcePreview.test.cjs",
+    "sha256": "AD1707F6B89D106BFA27C593E63F5397AE2EA9B125B844B9181FEDB067F03B33"
+  },
+  {
+    "path": "pkg/mem\\web\\knowledgeSourcePreview.js",
+    "sha256": "FF810A47879F07CBAA4FF8287DE55C122E64873E5237B08A50C4635C0BCED72F"
+  },
+  {
+    "path": "pkg/mem\\web\\classicMindMapWorkspaceHTML.html",
+    "sha256": "9BEDA204B182286EEA9BA37FDE899CBFD790D84D327F74F5A1993646D4DF087D"
+  }
+]

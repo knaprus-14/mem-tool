@@ -67,6 +67,25 @@ func TestScanNoEmbedAddsMetadataOnlyEntry(t *testing.T) {
 	}
 }
 
+func TestScanExcludesOwnLogsAndLock(t *testing.T) {
+	root := t.TempDir()
+	for _, name := range []string{"mem-tool.log", "mem-tool.log.lock", "mem-tool.20260910T120000.123.1.log", "notes.txt", "application.log"} {
+		if err := os.WriteFile(filepath.Join(root, name), []byte("fixture"), 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	store := openTestStore(t)
+	report, err := Scan(ScanOptions{RootDir: root}, store, mem.DefaultLocalConfig())
+	if err != nil || report.Added != 2 || len(report.Errors) != 0 {
+		t.Fatal(report, err)
+	}
+	for _, name := range []string{"mem-tool.log", "mem-tool.log.lock", "mem-tool.20260910T120000.123.1.log"} {
+		if _, ok := store.GetByPath(name); ok {
+			t.Fatal("own log was indexed", name)
+		}
+	}
+}
+
 func TestScanRestoresStaleFileWithUnchangedMetadata(t *testing.T) {
 	root := t.TempDir()
 	path := filepath.Join(root, "restored.txt")

@@ -2,6 +2,7 @@ package mem
 
 import (
 	"bytes"
+	"context"
 	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
@@ -229,6 +230,7 @@ func TestClassicMindMapWorkspaceSourceAPIAndPhysicalPage(t *testing.T) {
 	chunks := validStructuredChunks()
 	for i := range chunks {
 		chunks[i].Provenance.SourcePath = documentPath
+		chunks[i].Provenance.SourceFileHash = ChunkContentHash("%PDF-1.4\nsource")
 	}
 	if err := store.ReplaceDocumentChunks(documentPath, chunks); err != nil {
 		t.Fatal(err)
@@ -282,6 +284,14 @@ func TestClassicMindMapWorkspaceSourceAPIAndPhysicalPage(t *testing.T) {
 	handler.ServeHTTP(forbidden, requestWithoutCookie)
 	if forbidden.Code != http.StatusForbidden {
 		t.Fatalf("source endpoint accepted request without capability: %d", forbidden.Code)
+	}
+	if err := os.WriteFile(documentPath, []byte("%PDF-1.4\nreplacement"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	changedResponse := httptest.NewRecorder()
+	handler.ServeHTTP(changedResponse, openRequest.Clone(context.Background()))
+	if changedResponse.Code != http.StatusConflict || strings.Contains(changedResponse.Body.String(), "replacement") {
+		t.Fatalf("changed source was served: status=%d body=%q", changedResponse.Code, changedResponse.Body.String())
 	}
 }
 

@@ -1,0 +1,29 @@
+# Template only. Create the memtool service user and provision config/data first.
+# server.json contains references to environment secrets, not secret values.
+[Unit]
+Description=mem-tool web library
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=memtool
+Group=memtool
+WorkingDirectory=/var/lib/mem-tool
+ExecStart=/opt/mem-tool/current/mem serve --config /etc/mem-tool/server.json
+EnvironmentFile=/etc/mem-tool/web.env
+Restart=on-failure
+RestartSec=5s
+KillSignal=SIGTERM
+TimeoutStopSec=15s
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/mem-tool
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

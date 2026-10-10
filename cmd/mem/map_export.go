@@ -1,5 +1,7 @@
 package main
 
+import "github.com/knaprus-14/mem-tool/internal/applog"
+
 import (
 	"errors"
 	"fmt"
@@ -18,7 +20,9 @@ type knowledgeGraphExportCLIOptions struct {
 	force      bool
 }
 
-func handleKnowledgeGraphPortableExport(store *Store, args []string) error {
+func handleKnowledgeGraphPortableExport(store *Store, args []string) (applogResult0 error) {
+	defer applog.Track("cmd.mem.handleKnowledgeGraphPortableExport")(&applogResult0)
+
 	if store == nil {
 		return errors.New("активная база карты знаний недоступна")
 	}

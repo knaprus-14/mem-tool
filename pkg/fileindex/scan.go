@@ -1,5 +1,7 @@
 package fileindex
 
+import "github.com/knaprus-14/mem-tool/internal/applog"
+
 import (
 	"fmt"
 	"io/fs"
@@ -67,7 +69,13 @@ func shouldSkipDir(name string) bool {
 //  3. Skip только активной записи с теми же метаданными и актуальным вектором.
 //  4. Иначе: parentDir → annotation (если Enrich) → embedding → Upsert.
 //  5. После полного walk: AllPaths() vs посещённые → MarkStale.
-func Scan(opts ScanOptions, store *Store, cfg *mem.Config) (ScanReport, error) {
+func Scan(opts ScanOptions, store *Store, cfg *mem.Config) (applogResult0 ScanReport, applogResult1 error) {
+	defer applog.Track("pkg.fileindex.Scan")(&applogResult1)
+
+	return scanWithAnnotationExtractor(opts, store, cfg, ExtractAnnotation)
+}
+
+func scanWithAnnotationExtractor(opts ScanOptions, store *Store, cfg *mem.Config, extract func(string, string) (string, error)) (ScanReport, error) {
 	if opts.RootDir == "" {
 		return ScanReport{}, fmt.Errorf("Scan: пустой RootDir")
 	}
@@ -111,6 +119,9 @@ func Scan(opts ScanOptions, store *Store, cfg *mem.Config) (ScanReport, error) {
 		}
 
 		// Только регулярные файлы (не symlinks, не устройства).
+		if applog.IsLogFile(fullPath) {
+			return nil
+		}
 		info, err := d.Info()
 		if err != nil {
 			walkIncomplete = true
@@ -138,7 +149,7 @@ func Scan(opts ScanOptions, store *Store, cfg *mem.Config) (ScanReport, error) {
 		// Только точное известное vector space можно считать актуальным. Старые
 		// строки без provenance и векторы другой модели пересчитываются даже при
 		// неизменном mtime и той же размерности.
-		vectorCurrent := exists && existing.EmbeddingSpace != "" &&
+		vectorCurrent := exists && !existing.AnnotationStale && existing.EmbeddingSpace != "" &&
 			existing.EmbeddingSpace == identity.SpaceID && len(existing.Embedding) > 0
 		sameMetadata := exists && existing.Mtime == info.ModTime().Unix() && existing.Size == info.Size()
 		if exists && !existing.Stale && !opts.Enrich && sameMetadata && (!opts.Embed || vectorCurrent) {
@@ -163,46 +174,53 @@ func Scan(opts ScanOptions, store *Store, cfg *mem.Config) (ScanReport, error) {
 		if exists {
 			entry.Hash = existing.Hash
 			entry.Tags = existing.Tags
-			if !opts.Enrich {
-				entry.Annotation = existing.Annotation
+			entry.Annotation = existing.Annotation
+			entry.AnnotationStale = existing.AnnotationStale || (!sameMetadata && existing.Annotation != "")
+			if !sameMetadata {
+				entry.Hash = ""
 			}
 		}
 
 		// Аннотация (если Enrich).
 		annotationFailed := false
-		if opts.Enrich {
-			ann, annErr := ExtractAnnotation(fullPath, entry.Ext)
+		refreshAnnotation := opts.Enrich || (opts.Embed && entry.AnnotationStale)
+		if refreshAnnotation {
+			ann, annErr := extract(fullPath, entry.Ext)
 			if annErr != nil {
 				report.Errors = append(report.Errors,
 					fmt.Sprintf("annotation %s: %v", fullPath, annErr))
 				annotationFailed = true
+				entry.AnnotationStale = true
 				// Индексируем файл по метаданным, но не затираем прежнюю аннотацию.
 				if exists {
 					entry.Annotation = existing.Annotation
 				}
 			} else {
 				entry.Annotation = ann
+				entry.AnnotationStale = false
 			}
 		}
 
 		// В metadata-only режиме новые/enriched записи сохраняются без вектора.
 		// Для неизменённой существующей записи старый совместимый вектор можно
 		// сохранить, не выдавая его за другой backend.
-		if opts.Embed {
+		if opts.Embed && !annotationFailed {
 			searchText := buildSearchText(entry)
 			vec, embErr := mem.GetEmbedding(cfg, searchText)
 			if embErr != nil {
 				report.Errors = append(report.Errors,
 					fmt.Sprintf("embedding %s: %v", fullPath, embErr))
-				// Сохраняем прежнюю запись: частичное обновление опаснее пропуска.
-				return nil
+				// Новые метаданные/аннотация сохраняются без вектора: прежний
+				// вектор изменённого файла не должен оставаться в поиске.
+				// Повторный scan -embed увидит пустой embedding и повторит запрос.
+			} else {
+				entry.Embedding = vec
+				entry.Dims = len(vec)
+				entry.Backend = identity.Backend
+				entry.EmbeddingModel = identity.Model
+				entry.EmbeddingSpace = identity.SpaceID
 			}
-			entry.Embedding = vec
-			entry.Dims = len(vec)
-			entry.Backend = identity.Backend
-			entry.EmbeddingModel = identity.Model
-			entry.EmbeddingSpace = identity.SpaceID
-		} else if exists && (!opts.Enrich || annotationFailed) {
+		} else if exists && sameMetadata && !entry.AnnotationStale && !refreshAnnotation {
 			entry.Embedding = existing.Embedding
 			entry.Dims = existing.Dims
 			entry.Backend = existing.Backend
@@ -305,7 +323,7 @@ func buildSearchText(e *FileEntry) string {
 		b.WriteString(" ")
 		b.WriteString(e.ParentDir)
 	}
-	if e.Annotation != "" {
+	if e.Annotation != "" && !e.AnnotationStale {
 		b.WriteString(" ")
 		b.WriteString(e.Annotation)
 	}

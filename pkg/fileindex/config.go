@@ -1,5 +1,7 @@
 package fileindex
 
+import "github.com/knaprus-14/mem-tool/internal/applog"
+
 import (
 	"fmt"
 	"os"
@@ -43,7 +45,9 @@ func defaultFileIndexConfig() map[string]any {
 //
 // dir — путь к директории .fileindex/ (НЕ к scan-root). Обычно это
 // fileindex.FileIndexDir() (cwd-relative) или FileIndexConfigPathIn(scanRoot).
-func LoadConfig(dir string) (*mem.Config, error) {
+func LoadConfig(dir string) (applogResult0 *mem.Config, applogResult1 error) {
+	defer applog.Track("pkg.fileindex.LoadConfig")(&applogResult1)
+
 	path := FileIndexConfigPathIn(dir)
 	if _, err := os.Stat(path); err != nil {
 		return nil, fmt.Errorf("config не найден: %s: %w", path, err)
@@ -53,6 +57,8 @@ func LoadConfig(dir string) (*mem.Config, error) {
 
 // SaveConfig сохраняет mem.Config в .fileindex/config.json.
 // Chunking-поля из cfg сохраняются как есть (безвредно).
-func SaveConfig(dir string, cfg *mem.Config) error {
+func SaveConfig(dir string, cfg *mem.Config) (applogResult0 error) {
+	defer applog.Track("pkg.fileindex.SaveConfig")(&applogResult0)
+
 	return mem.SaveConfigIn(dir, cfg)
 }

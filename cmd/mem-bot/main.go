@@ -4,7 +4,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/knaprus-14/mem-tool/internal/applog"
 	"log"
+	"net/http"
 	"os"
 	"os/signal"
 	"path/filepath"
@@ -16,7 +18,6 @@ import (
 
 	"github.com/go-telegram/bot"
 	"github.com/go-telegram/bot/models"
-
 	"github.com/knaprus-14/mem-tool/internal/buildinfo"
 	mem "github.com/knaprus-14/mem-tool/pkg/mem"
 )
@@ -105,20 +106,24 @@ var (
 	errStoreLoadBusy = errors.New("личная база уже открывается; повторите через несколько секунд")
 )
 
-func main() {
+func main() { os.Exit(applog.Run("mem-bot", buildinfo.Version, runBot)) }
+
+func runBot() int {
 	if isVersion, err := parseBotVersionCommand(os.Args[1:]); isVersion {
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "ошибка: %v\n", err)
-			os.Exit(1)
+			return 1
 		}
 		mem.PrintVersion("mem-bot", buildinfo.Version)
-		return
+		return 0
 	}
 
 	// === Конфигурация ===
 	token := os.Getenv("TELEGRAM_BOT_TOKEN")
 	if token == "" {
-		log.Fatal("TELEGRAM_BOT_TOKEN не задан. Получите токен у @BotFather и экспортируйте:\n  $env:TELEGRAM_BOT_TOKEN=\"123456:ABC...\"")
+		log.Print("TELEGRAM_BOT_TOKEN не задан. Получите токен у @BotFather и экспортируйте:\n  $env:TELEGRAM_BOT_TOKEN=\"123456:ABC...\"")
+		applog.Event("ERROR", "bot.startup_failed", nil)
+		return 1
 	}
 
 	dataDir := os.Getenv("MEM_BOT_DATA_DIR")
@@ -127,35 +132,51 @@ func main() {
 	}
 	allowedUsers, err := parseAllowedUserIDs(os.Getenv("MEM_BOT_ALLOWED_USER_IDS"))
 	if err != nil {
-		log.Fatalf("MEM_BOT_ALLOWED_USER_IDS: %v", err)
+		log.Printf("MEM_BOT_ALLOWED_USER_IDS: %v", err)
+		applog.Event("ERROR", "bot.startup_failed", nil)
+		return 1
 	}
 	allowPublic, err := parseBoolEnv("MEM_BOT_ALLOW_PUBLIC", false)
 	if err != nil {
-		log.Fatal(err)
+		log.Print(err)
+		applog.Event("ERROR", "bot.startup_failed", nil)
+		return 1
 	}
 	rateLimit, err := parseNonNegativeLimitEnv("MEM_BOT_RATE_LIMIT_PER_MINUTE", defaultRateLimitPerMinute)
 	if err != nil {
-		log.Fatal(err)
+		log.Print(err)
+		applog.Event("ERROR", "bot.startup_failed", nil)
+		return 1
 	}
 	globalRateLimit, err := parseNonNegativeLimitEnv("MEM_BOT_GLOBAL_RATE_LIMIT_PER_MINUTE", defaultGlobalRateLimit)
 	if err != nil {
-		log.Fatal(err)
+		log.Print(err)
+		applog.Event("ERROR", "bot.startup_failed", nil)
+		return 1
 	}
 	maxEntries, err := parseNonNegativeLimitEnv("MEM_BOT_MAX_ENTRIES_PER_USER", defaultMaxEntriesPerUser)
 	if err != nil {
-		log.Fatal(err)
+		log.Print(err)
+		applog.Event("ERROR", "bot.startup_failed", nil)
+		return 1
 	}
 	maxUsers, err := parseNonNegativeLimitEnv("MEM_BOT_MAX_USERS", defaultMaxUsers)
 	if err != nil {
-		log.Fatal(err)
+		log.Print(err)
+		applog.Event("ERROR", "bot.startup_failed", nil)
+		return 1
 	}
 	if err := validateBotAccessConfig(allowedUsers, allowPublic, rateLimit, globalRateLimit, maxEntries, maxUsers); err != nil {
-		log.Fatal(err)
+		log.Print(err)
+		applog.Event("ERROR", "bot.startup_failed", nil)
+		return 1
 	}
 
 	// Создаём корневую директорию
 	if err := os.MkdirAll(dataDir, 0700); err != nil {
-		log.Fatalf("не удалось создать %s: %v", dataDir, err)
+		log.Printf("не удалось создать %s: %v", dataDir, err)
+		applog.Event("ERROR", "bot.startup_failed", nil)
+		return 1
 	}
 
 	data = &botData{
@@ -180,6 +201,8 @@ func main() {
 	defer cancel()
 
 	opts := []bot.Option{
+		bot.WithHTTPClient(time.Minute, &http.Client{Timeout: time.Minute, Transport: applog.Transport{Component: "telegram.http"}}),
+		bot.WithErrorsHandler(func(err error) { applog.Error("telegram.error", err); log.Printf("telegram: %v", err) }),
 		bot.WithDefaultHandler(guardedHandler(expensiveHandler(defaultHandler))),
 		bot.WithCallbackQueryDataHandler("noop", bot.MatchTypeExact, noopCallback),
 		bot.WithWorkers(botWorkers),
@@ -188,7 +211,9 @@ func main() {
 
 	b, err := bot.New(token, opts...)
 	if err != nil {
-		log.Fatalf("не удалось создать бота: %v", err)
+		log.Printf("не удалось создать бота: %v", err)
+		applog.Event("ERROR", "bot.startup_failed", nil)
+		return 1
 	}
 
 	b.RegisterHandler(bot.HandlerTypeMessageText, "/start", bot.MatchTypeExact, guardedHandler(cmdStart))
@@ -208,6 +233,7 @@ func main() {
 
 	// Запускаем polling в отдельной горутине
 	b.Start(ctx)
+	return 0
 }
 
 func parseBotVersionCommand(args []string) (bool, error) {
@@ -528,6 +554,7 @@ func (d *botData) admitGlobalLocked(now time.Time) bool {
 func guardedHandler(next bot.HandlerFunc) bot.HandlerFunc {
 	return func(ctx context.Context, b *bot.Bot, update *models.Update) {
 		message, decision := data.authorizeUpdate(update, time.Now())
+		applog.Event("INFO", "bot.update", applog.Fields{"decision": int(decision)})
 		if decision == accessRateLimited && message != nil {
 			sendMessage(ctx, b, message.Chat.ID, "Слишком много запросов. Повтори через минуту.")
 			return
@@ -836,7 +863,7 @@ func cmdImport(ctx context.Context, b *bot.Bot, update *models.Update) {
 	if !ok {
 		return
 	}
-	sendMessage(ctx, b, message.Chat.ID, "📎 Пришли мне файл (txt, md, pdf, csv) — я его проиндексирую.\n\n_(пока в разработке)_")
+	sendMessage(ctx, b, message.Chat.ID, "📎 Импорт файлов через Telegram пока недоступен.\n\nДля локальной базы используй mem import для Markdown, PDF и DjVu или mem add-file для UTF-8 текста. В личную базу бота сейчас можно добавлять только текстовые сообщения.")
 }
 
 func defaultHandler(ctx context.Context, b *bot.Bot, update *models.Update) {
@@ -895,6 +922,7 @@ func noopCallback(ctx context.Context, b *bot.Bot, update *models.Update) {
 // === Helpers ===
 
 func sendOperationError(ctx context.Context, b *bot.Bot, chatID int64, operation string, err error, userMessage string) {
+	applog.Error("bot.operation_failed", err)
 	log.Printf("[mem-bot] %s failed for chat %d: %v", operation, chatID, err)
 	sendMessage(ctx, b, chatID, "❌ "+userMessage)
 }

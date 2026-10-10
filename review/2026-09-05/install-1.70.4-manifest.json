@@ -1,0 +1,23 @@
+[
+  {
+    "Name": "mem.exe",
+    "StagedPath": "C:\\Users\\ZMII\\AppData\\Local\\Temp\\mem-tool-windows-build-ec87580eece14355b7c99cccf597e116\\mem.exe",
+    "StagedSHA256": "5A0069388D68451C5B5681B3A20CEE63E6FDF7B542D88C4EBC8517C3BF7D1CCF",
+    "InstalledSHA256": "4FC9C4AC09BEEFBF220FD37447ED0E4D664142B4DAEBA8D9F3D98E4E37C839EF",
+    "InstalledVersion": "mem-tool v1.70.3"
+  },
+  {
+    "Name": "mem-index.exe",
+    "StagedPath": "C:\\Users\\ZMII\\AppData\\Local\\Temp\\mem-tool-windows-build-ec87580eece14355b7c99cccf597e116\\mem-index.exe",
+    "StagedSHA256": "2E5ACE00045C201EEFCB7363EDC3212BDF55F0A6F62E929F31F0DE96B6818482",
+    "InstalledSHA256": "03C7BB149668810CE456F1A9102B0F4367F225942C85E929622A2B075833823A",
+    "InstalledVersion": "mem-index v1.70.3"
+  },
+  {
+    "Name": "mem-bot.exe",
+    "StagedPath": "C:\\Users\\ZMII\\AppData\\Local\\Temp\\mem-tool-windows-build-ec87580eece14355b7c99cccf597e116\\mem-bot.exe",
+    "StagedSHA256": "091D8D4F64CAA9B18BED84D08D89155BEE0961E314A07D28C2FA52E2DF8243D9",
+    "InstalledSHA256": "9FCF3EC1534A4BE6391D0A715BB219250297C6FC4C39A2A8FF95F73D628D48BC",
+    "InstalledVersion": "mem-bot v1.70.3"
+  }
+]

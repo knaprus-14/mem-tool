@@ -1,0 +1,105 @@
+package mem
+
+import (
+    "context"
+    "io"
+    "os"
+    "path/filepath"
+    "testing"
+    "github.com/knaprus-14/mem-tool/internal/sourcefile"
+    "github.com/knaprus-14/mem-tool/pkg/ingest"
+)
+
+// These are intentional failing regression probes; all files and DBs use t.TempDir.
+func TestReviewStoragePhysicalSourceRevisionIsImmutable(t *testing.T) {
+    store, anchor, source := knowledgeMapPDFSourceFixture(t)
+    defer store.Close()
+    before, err := os.ReadFile(source)
+    if err != nil { t.Fatal(err) }
+    after := []byte("%PDF-1.4\nchanged formula image; identical extracted text\n%%EOF\n")
+    if err = os.WriteFile(source, after, 0600); err != nil { t.Fatal(err) }
+    hash, err := sourcefile.Hash(context.Background(), source)
+    if err != nil { t.Fatal(err) }
+    chunks := validStructuredChunks()
+    for i := range chunks {
+        chunks[i].Provenance.SourceFileHash = hash
+        chunks[i].Provenance.SourcePath = source
+        chunks[i].Provenance.Page = 12
+    }
+    if err = store.ReplaceDocumentChunks(source, chunks); err != nil { t.Fatal(err) }
+    if _, err = store.ResolveKnowledgeMapPDFSource(anchor.CitationID); err != nil { return }
+    f, err := os.Open(source)
+    if err != nil { t.Fatal(err) }
+    defer f.Close()
+    snapshot, err := store.verifiedSourceFile(context.Background(), anchor, f)
+    if err != nil { return }
+    defer closeSourceSnapshot(snapshot)
+    got, err := io.ReadAll(snapshot)
+    if err != nil { t.Fatal(err) }
+    if string(got) != string(before) {
+        t.Fatalf("old citation is still current and verified against NEW physical bytes: %q", got)
+    }
+}
+
+func TestReviewStorageLegacyIndexPreservesManagedIdentity(t *testing.T) {
+    dir := t.TempDir()
+    path := filepath.Join(dir, "original.txt")
+    if err := os.WriteFile(path, []byte("Persistent managed document"), 0600); err != nil { t.Fatal(err) }
+    store, err := NewStore(filepath.Join(dir, "db"))
+    if err != nil { t.Fatal(err) }
+    defer store.Close()
+    doc, err := ingest.Extract(context.Background(), path)
+    if err != nil { t.Fatal(err) }
+    const managed = "web:0123456789abcdef0123456789abcdef"
+    doc, err = ingest.WithManagedIdentity(doc, managed)
+    if err != nil { t.Fatal(err) }
+    cfg := testConfig(100, "paragraph")
+    if _, err = importExtractedDocumentWithEmbedder(cfg, store, doc, ImportOptions{}, fakeEmbedding); err != nil { t.Fatal(err) }
+    if _, err = indexFileWithEmbedder(cfg, store, path, fakeEmbedding); err != nil { t.Fatal(err) }
+    entries := store.GetBySourceFile(path)
+    if len(entries) != 1 { t.Fatalf("entries=%d", len(entries)) }
+    if entries[0].DocumentID != managed {
+        t.Fatalf("legacy mem index replaced managed identity %q with %q", managed, entries[0].DocumentID)
+    }
+}
+
+func TestReviewStorageRestoreKeepsSameContentOriginalFingerprint(t *testing.T) {
+    ctx := context.Background()
+    dir := t.TempDir()
+    dbDir := filepath.Join(dir, "db")
+    store, err := NewStore(dbDir)
+    if err != nil { t.Fatal(err) }
+    defer store.Close()
+    oldPath, newPath := filepath.Join(dir, "old.txt"), filepath.Join(dir, "new.txt")
+    for _, path := range []string{oldPath, newPath} {
+        if err = os.WriteFile(path, []byte("Same imported content"), 0600); err != nil { t.Fatal(err) }
+    }
+    const managed = "web:abcdef0123456789abcdef0123456789"
+    cfg := testConfig(100, "paragraph")
+    importDoc := func(path string, replacement *DocumentReplacement) {
+        t.Helper()
+        doc, e := ingest.Extract(ctx, path)
+        if e != nil { t.Fatal(e) }
+        doc, e = ingest.WithManagedIdentity(doc, managed)
+        if e != nil { t.Fatal(e) }
+        if _, e = importExtractedDocumentWithEmbedder(cfg, store, doc, ImportOptions{Replacement: replacement}, fakeEmbedding); e != nil { t.Fatal(e) }
+    }
+    importDoc(oldPath, nil)
+    oldEntries := store.GetBySourceFile(oldPath)
+    anchor, err := EvidenceAnchorForEntry(oldEntries[0], oldEntries[0].Text)
+    if err != nil { t.Fatal(err) }
+    state, err := ReadDocumentUpdateStateIn(ctx, dbDir, managed)
+    if err != nil { t.Fatal(err) }
+    importDoc(newPath, &state.DocumentReplacement)
+    snapshots, err := store.ListDocumentHistorySnapshots(managed)
+    if err != nil || len(snapshots) != 1 { t.Fatalf("history=%+v err=%v", snapshots, err) }
+    plan, err := store.BuildDocumentRestorePlan(managed, snapshots[0].SnapshotID)
+    if err != nil { t.Fatal(err) }
+    if _, err = store.ApplyDocumentRestore(managed, snapshots[0].SnapshotID, plan.PlanDigest); err != nil { t.Fatal(err) }
+    f, err := os.Open(oldPath)
+    if err != nil { t.Fatal(err) }
+    defer f.Close()
+    snapshot, err := store.verifiedSourceFile(ctx, anchor, f)
+    if err != nil { t.Fatalf("restored original is unchanged but its fingerprint was overwritten: %v", err) }
+    closeSourceSnapshot(snapshot)
+}

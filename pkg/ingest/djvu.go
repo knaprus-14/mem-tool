@@ -1,5 +1,7 @@
 package ingest
 
+import "github.com/knaprus-14/mem-tool/internal/applog"
+
 import (
 	"context"
 	"fmt"
@@ -11,7 +13,9 @@ type DjVuExtractor struct{ options Options }
 
 func NewDjVuExtractor() DjVuExtractor { return DjVuExtractor{options: DefaultOptions()} }
 
-func (d DjVuExtractor) Extract(ctx context.Context, path string) (Document, error) {
+func (d DjVuExtractor) Extract(ctx context.Context, path string) (applogResult0 Document, applogResult1 error) {
+	defer applog.Track("pkg.ingest.DjVuExtractor.Extract")(&applogResult1)
+
 	return newEngine(d.options).extractDjVu(ctx, path)
 }
 

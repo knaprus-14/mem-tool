@@ -20,6 +20,8 @@
 // Версия синхронизируется для всего релиза через internal/buildinfo.
 package main
 
+import "github.com/knaprus-14/mem-tool/internal/applog"
+
 import (
 	"fmt"
 	"os"
@@ -37,7 +39,7 @@ import (
 var scanFileIndex = fileindex.Scan
 
 func main() {
-	os.Exit(run())
+	os.Exit(applog.Run("mem-index", buildinfo.Version, run))
 }
 
 func run() int {
@@ -171,7 +173,9 @@ func resolveRootDir(positional []string) (string, error) {
 
 // === handleInit ===
 
-func handleInit(args []string) int {
+func handleInit(args []string) (applogResult0 int) {
+	defer applog.TrackCode("cmd.mem-index.handleInit")(&applogResult0)
+
 	positional, enrich, noEmbed, includeStale, _, err := parseFileIndexFlags(args)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "%v\n", err)
@@ -250,7 +254,9 @@ func handleInit(args []string) int {
 
 // === handleScan ===
 
-func handleScan(args []string) int {
+func handleScan(args []string) (applogResult0 int) {
+	defer applog.TrackCode("cmd.mem-index.handleScan")(&applogResult0)
+
 	positional, enrich, noEmbed, includeStale, _, err := parseFileIndexFlags(args)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "%v\n", err)
@@ -306,7 +312,9 @@ func handleScan(args []string) int {
 
 // === handleEnrich ===
 
-func handleEnrich(args []string) int {
+func handleEnrich(args []string) (applogResult0 int) {
+	defer applog.TrackCode("cmd.mem-index.handleEnrich")(&applogResult0)
+
 	positional, enrich, noEmbed, includeStale, _, err := parseFileIndexFlags(args)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "%v\n", err)
@@ -363,7 +371,9 @@ func handleEnrich(args []string) int {
 
 // === handleFind ===
 
-func handleFind(args []string) int {
+func handleFind(args []string) (applogResult0 int) {
+	defer applog.TrackCode("cmd.mem-index.handleFind")(&applogResult0)
+
 	positional, enrich, noEmbed, includeStale, limit, err := parseFileIndexFlags(args)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "%v\n", err)
@@ -444,7 +454,9 @@ func handleFind(args []string) int {
 
 // === handleList ===
 
-func handleList(args []string) int {
+func handleList(args []string) (applogResult0 int) {
+	defer applog.TrackCode("cmd.mem-index.handleList")(&applogResult0)
+
 	positional, enrich, noEmbed, includeStale, limit, err := parseFileIndexFlags(args)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "%v\n", err)
@@ -503,7 +515,9 @@ func handleList(args []string) int {
 
 // === handleShow ===
 
-func handleShow(args []string) int {
+func handleShow(args []string) (applogResult0 int) {
+	defer applog.TrackCode("cmd.mem-index.handleShow")(&applogResult0)
+
 	if len(args) != 1 {
 		fmt.Fprintln(os.Stderr, "укажи id записи\nПример: mem-index show 42")
 		return 1
@@ -563,7 +577,9 @@ func handleShow(args []string) int {
 
 // === handleStats ===
 
-func handleStats(args []string) int {
+func handleStats(args []string) (applogResult0 int) {
+	defer applog.TrackCode("cmd.mem-index.handleStats")(&applogResult0)
+
 	if len(args) != 0 {
 		fmt.Fprintf(os.Stderr, "лишний аргумент: %s\n", args[0])
 		return 1
@@ -600,7 +616,9 @@ func handleStats(args []string) int {
 
 // === handleRm ===
 
-func handleRm(args []string) int {
+func handleRm(args []string) (applogResult0 int) {
+	defer applog.TrackCode("cmd.mem-index.handleRm")(&applogResult0)
+
 	if len(args) != 1 {
 		fmt.Fprintln(os.Stderr, "укажи id записи\nПример: mem-index rm 42")
 		return 1

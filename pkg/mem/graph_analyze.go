@@ -1,5 +1,7 @@
 package mem
 
+import "github.com/knaprus-14/mem-tool/internal/applog"
+
 import (
 	"crypto/sha256"
 	"encoding/hex"
@@ -97,7 +99,9 @@ type corpusAnalysisCandidate struct {
 // BuildCorpusAnalysisPrompt selects only active claims whose complete evidence
 // is current. Selection is deterministic and prioritizes focus overlap while
 // reserving the second slot for another document whenever possible.
-func (s *Store) BuildCorpusAnalysisPrompt(focus string, contextBudget int) (CorpusAnalysisPrompt, error) {
+func (s *Store) BuildCorpusAnalysisPrompt(focus string, contextBudget int) (applogResult0 CorpusAnalysisPrompt, applogResult1 error) {
+	defer applog.Track("pkg.mem.Store.BuildCorpusAnalysisPrompt")(&applogResult1)
+
 	focus = strings.TrimSpace(focus)
 	if focus == "" {
 		return CorpusAnalysisPrompt{}, errors.New("corpus analysis focus is empty")
@@ -225,7 +229,9 @@ func orderCorpusCandidatesForDocumentDiversity(candidates []corpusAnalysisCandid
 
 // DecodeCorpusAnalysis validates model findings and derives all persistent
 // nodes, edges and anchors from the trusted prompt claims.
-func DecodeCorpusAnalysis(raw string, claims []CorpusAnalysisClaim) (CorpusAnalysisResult, error) {
+func DecodeCorpusAnalysis(raw string, claims []CorpusAnalysisClaim) (applogResult0 CorpusAnalysisResult, applogResult1 error) {
+	defer applog.Track("pkg.mem.DecodeCorpusAnalysis")(&applogResult1)
+
 	raw = strings.TrimSpace(raw)
 	if raw == "" {
 		return CorpusAnalysisResult{}, errors.New("corpus analysis response is empty")

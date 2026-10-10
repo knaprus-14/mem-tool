@@ -1,5 +1,7 @@
 package mem
 
+import "github.com/knaprus-14/mem-tool/internal/applog"
+
 import (
 	"context"
 	"database/sql"
@@ -90,7 +92,9 @@ type knowledgeGraphExportSnapshot struct {
 	Pin            KnowledgeGraphExportPin
 }
 
-func (s *Store) BuildKnowledgeGraphExportPin() (KnowledgeGraphExportPin, error) {
+func (s *Store) BuildKnowledgeGraphExportPin() (applogResult0 KnowledgeGraphExportPin, applogResult1 error) {
+	defer applog.Track("pkg.mem.Store.BuildKnowledgeGraphExportPin")(&applogResult1)
+
 	snapshot, err := s.buildKnowledgeGraphExportSnapshot()
 	return snapshot.Pin, err
 }
@@ -98,7 +102,9 @@ func (s *Store) BuildKnowledgeGraphExportPin() (KnowledgeGraphExportPin, error) 
 // ExportKnowledgeGraph renders the complete current knowledge graph without a
 // model or mutation. Optional digests pin both graph content and the dynamic
 // current/stale/missing state of every evidence anchor.
-func (s *Store) ExportKnowledgeGraph(request KnowledgeGraphExportRequest) (KnowledgeGraphExportArtifact, error) {
+func (s *Store) ExportKnowledgeGraph(request KnowledgeGraphExportRequest) (applogResult0 KnowledgeGraphExportArtifact, applogResult1 error) {
+	defer applog.Track("pkg.mem.Store.ExportKnowledgeGraph")(&applogResult1)
+
 	return s.exportKnowledgeGraph(context.Background(), request, nil)
 }
 

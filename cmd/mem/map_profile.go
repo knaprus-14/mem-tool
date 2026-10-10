@@ -1,5 +1,7 @@
 package main
 
+import "github.com/knaprus-14/mem-tool/internal/applog"
+
 import (
 	"encoding/json"
 	"errors"
@@ -14,7 +16,9 @@ import (
 
 const mapProfileUsage = "использование: mem map profile [-iterations N] [--view <имя>] [--json]"
 
-func handleMapProfile(store *Store, args []string) error {
+func handleMapProfile(store *Store, args []string) (applogResult0 error) {
+	defer applog.Track("cmd.mem.handleMapProfile")(&applogResult0)
+
 	options := mem.KnowledgeMapProfileOptions{}
 	jsonOutput := false
 	iterationsSet, viewSet := false, false

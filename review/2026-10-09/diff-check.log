@@ -1,0 +1,8 @@
+warning: in the working copy of '.gitignore', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'DOCUMENTATION.md', CRLF will be replaced by LF the next time Git touches it
+warning: in the working copy of 'USAGE_RU.md', CRLF will be replaced by LF the next time Git touches it
+warning: in the working copy of 'deploy/mem-bot.service', CRLF will be replaced by LF the next time Git touches it
+warning: in the working copy of 'deploy/windows.ps1', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'internal/buildinfo/version.go', CRLF will be replaced by LF the next time Git touches it
+warning: in the working copy of 'pkg/mem/graph_view_regression_test.go', CRLF will be replaced by LF the next time Git touches it
+warning: in the working copy of 'pkg/mem/graph_view_test.go', CRLF will be replaced by LF the next time Git touches it

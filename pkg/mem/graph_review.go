@@ -1,5 +1,7 @@
 package mem
 
+import "github.com/knaprus-14/mem-tool/internal/applog"
+
 import (
 	"crypto/sha256"
 	"database/sql"
@@ -48,6 +50,7 @@ type KnowledgeReviewItem struct {
 	EvidenceState    EvidenceState        `json:"evidence_state"`
 	EvidenceDigest   string               `json:"evidence_digest"`
 	ContentDigest    string               `json:"content_digest"`
+	ReviewDigest     string               `json:"review_digest"`
 	ReadyForApproval bool                 `json:"ready_for_approval"`
 	Evidence         []EvidenceResolution `json:"evidence"`
 }
@@ -75,6 +78,7 @@ type KnowledgeApprovalRequest struct {
 	Reviewer               string              `json:"reviewer"`
 	Comment                string              `json:"comment,omitempty"`
 	ExpectedEvidenceDigest string              `json:"expected_evidence_digest,omitempty"`
+	ExpectedReviewDigest   string              `json:"expected_review_digest"`
 }
 
 type KnowledgeApprovalTarget struct {
@@ -82,6 +86,7 @@ type KnowledgeApprovalTarget struct {
 	ID                     string              `json:"id"`
 	ExpectedEvidenceDigest string              `json:"expected_evidence_digest"`
 	Comment                string              `json:"comment,omitempty"`
+	ExpectedReviewDigest   string              `json:"expected_review_digest"`
 }
 
 // KnowledgeApprovalManifest is the fail-closed on-disk format accepted by the
@@ -104,6 +109,7 @@ type KnowledgeReviewRecord struct {
 	EvidenceDigest  string              `json:"evidence_digest"`
 	RevertsReviewID int64               `json:"reverts_review_id,omitempty"`
 	Created         string              `json:"created"`
+	ReviewDigest    string              `json:"review_digest,omitempty"`
 }
 
 // KnowledgeReviewMutationRequest is used for single-object reject, reopen and
@@ -116,6 +122,7 @@ type KnowledgeReviewMutationRequest struct {
 	Comment                string              `json:"comment,omitempty"`
 	ExpectedEvidenceDigest string              `json:"expected_evidence_digest"`
 	ExpectedReviewID       int64               `json:"expected_review_id,omitempty"`
+	ExpectedReviewDigest   string              `json:"expected_review_digest"`
 }
 
 type KnowledgeReviewMutationResult struct {
@@ -145,7 +152,8 @@ type KnowledgeBatchApprovalResult struct {
 // KnowledgeEvidenceDigest returns an order-independent digest of the complete
 // trusted anchors. It pins the exact revisions, coordinates and excerpts that
 // a reviewer inspected.
-func KnowledgeEvidenceDigest(anchors []EvidenceAnchor) (string, error) {
+func KnowledgeEvidenceDigest(anchors []EvidenceAnchor) (applogResult0 string, applogResult1 error) {
+
 	encoded := make([]string, 0, len(anchors))
 	for _, anchor := range anchors {
 		if err := validateEvidenceAnchor(anchor); err != nil {
@@ -168,7 +176,9 @@ func KnowledgeEvidenceDigest(anchors []EvidenceAnchor) (string, error) {
 
 // ReviewKnowledgeGraph reports the freshness of every source anchor. It does
 // not mutate graph state; callers can use ReadyForApproval as a review queue.
-func (s *Store) ReviewKnowledgeGraph() (KnowledgeReviewReport, error) {
+func (s *Store) ReviewKnowledgeGraph() (applogResult0 KnowledgeReviewReport, applogResult1 error) {
+	defer applog.Track("pkg.mem.Store.ReviewKnowledgeGraph")(&applogResult1)
+
 	snapshot, err := s.buildKnowledgeGraphSnapshot(false, false)
 	if err != nil {
 		return KnowledgeReviewReport{}, err
@@ -190,6 +200,7 @@ func reviewKnowledgeGraph(graph KnowledgeGraph, resolved []KnowledgeGraphExportE
 		if err != nil {
 			return KnowledgeReviewReport{}, err
 		}
+		item.ReviewDigest = knowledgeReviewDigest(knowledgeReviewContent{Type: KnowledgeObjectNode, ID: node.ID, Kind: string(node.Kind), Label: node.Label, Body: node.Body, Origin: node.Origin})
 		report.Items = append(report.Items, item)
 	}
 	for _, edge := range graph.Edges {
@@ -198,6 +209,7 @@ func reviewKnowledgeGraph(graph KnowledgeGraph, resolved []KnowledgeGraphExportE
 		if err != nil {
 			return KnowledgeReviewReport{}, err
 		}
+		item.ReviewDigest = knowledgeReviewDigest(knowledgeReviewContent{Type: KnowledgeObjectEdge, ID: edge.ID, Kind: string(edge.Kind), Label: edge.Label, From: edge.From, To: edge.To, Origin: edge.Origin})
 		item.ReadyForApproval = item.ReadyForApproval && nodeStatuses[edge.From] == KnowledgeStatusActive && nodeStatuses[edge.To] == KnowledgeStatusActive
 		report.Items = append(report.Items, item)
 	}
@@ -265,13 +277,28 @@ func reviewKnowledgeItem(objectType KnowledgeObjectType, id, kind, label, body s
 
 // ApproveKnowledgeObject preserves the original API while recording its actor.
 // Interactive callers should use ApproveKnowledgeObjectWithReview instead.
-func (s *Store) ApproveKnowledgeObject(objectType KnowledgeObjectType, id string) (KnowledgeApprovalResult, error) {
-	return s.ApproveKnowledgeObjectWithReview(KnowledgeApprovalRequest{
+func (s *Store) ApproveKnowledgeObject(objectType KnowledgeObjectType, id string) (applogResult0 KnowledgeApprovalResult, applogResult1 error) {
+	defer applog.Track("pkg.mem.Store.ApproveKnowledgeObject")(&applogResult1)
+
+	return s.ApproveCurrentKnowledgeObjectWithReview(KnowledgeApprovalRequest{
 		ObjectType: objectType, ID: id, Reviewer: "legacy-api",
 	})
 }
 
-func (s *Store) ApproveKnowledgeObjectWithReview(request KnowledgeApprovalRequest) (KnowledgeApprovalResult, error) {
+func (s *Store) ApproveKnowledgeObjectWithReview(request KnowledgeApprovalRequest) (applogResult0 KnowledgeApprovalResult, applogResult1 error) {
+	defer applog.Track("pkg.mem.Store.ApproveKnowledgeObjectWithReview")(&applogResult1)
+
+	result, err := s.approveKnowledgeObjects([]KnowledgeApprovalRequest{request}, true)
+	if err != nil {
+		return KnowledgeApprovalResult{}, err
+	}
+	return result.Approved[0], nil
+}
+
+// ApproveCurrentKnowledgeObjectWithReview explicitly approves current state by ID.
+// It is intended for the direct CLI command, never a browser or saved manifest.
+// Callers reviewing a snapshot must use ApproveKnowledgeObjectWithReview.
+func (s *Store) ApproveCurrentKnowledgeObjectWithReview(request KnowledgeApprovalRequest) (KnowledgeApprovalResult, error) {
 	result, err := s.approveKnowledgeObjects([]KnowledgeApprovalRequest{request}, false)
 	if err != nil {
 		return KnowledgeApprovalResult{}, err
@@ -281,19 +308,22 @@ func (s *Store) ApproveKnowledgeObjectWithReview(request KnowledgeApprovalReques
 
 // ApproveKnowledgeObjects applies a pinned batch atomically. All objects and
 // audit records commit together; one invalid/stale target rolls everything back.
-func (s *Store) ApproveKnowledgeObjects(requests []KnowledgeApprovalRequest) (KnowledgeBatchApprovalResult, error) {
+func (s *Store) ApproveKnowledgeObjects(requests []KnowledgeApprovalRequest) (applogResult0 KnowledgeBatchApprovalResult, applogResult1 error) {
+	defer applog.Track("pkg.mem.Store.ApproveKnowledgeObjects")(&applogResult1)
+
 	return s.approveKnowledgeObjects(requests, true)
 }
 
 type preparedKnowledgeApproval struct {
-	request     KnowledgeApprovalRequest
-	table       string
-	previous    KnowledgeStatus
-	fromID      string
-	toID        string
-	digest      string
-	resolutions []EvidenceResolution
-	inputIndex  int
+	request      KnowledgeApprovalRequest
+	table        string
+	previous     KnowledgeStatus
+	fromID       string
+	toID         string
+	digest       string
+	reviewDigest string
+	resolutions  []EvidenceResolution
+	inputIndex   int
 }
 
 func (s *Store) approveKnowledgeObjects(requests []KnowledgeApprovalRequest, requireDigest bool) (KnowledgeBatchApprovalResult, error) {
@@ -320,6 +350,9 @@ func (s *Store) approveKnowledgeObjects(requests []KnowledgeApprovalRequest, req
 	plannedNodes := make(map[string]bool)
 	seen := make(map[string]bool, len(requests))
 	for i, raw := range requests {
+		if requireDigest && strings.TrimSpace(raw.ExpectedReviewDigest) == "" {
+			return rollback(ErrKnowledgeReviewPinRequired)
+		}
 		request, err := normalizeKnowledgeApprovalRequest(raw, requireDigest)
 		if err != nil {
 			return rollback(fmt.Errorf("approval request %d: %w", i, err))
@@ -364,6 +397,13 @@ func (s *Store) approveKnowledgeObjects(requests []KnowledgeApprovalRequest, req
 		}
 		if request.ExpectedEvidenceDigest != "" && request.ExpectedEvidenceDigest != item.digest {
 			return rollback(fmt.Errorf("%w: knowledge %s %q expected %s, current %s", ErrKnowledgeEvidenceChanged, request.ObjectType, request.ID, request.ExpectedEvidenceDigest, item.digest))
+		}
+		item.reviewDigest, err = loadKnowledgeReviewDigest(tx, request.ObjectType, request.ID)
+		if err != nil {
+			return rollback(err)
+		}
+		if request.ExpectedReviewDigest != "" && request.ExpectedReviewDigest != item.reviewDigest {
+			return rollback(fmt.Errorf("%w: reviewed content or relation structure changed", ErrKnowledgeContentChanged))
 		}
 		currentEntries, err := loadKnowledgeGraphEntriesForAnchors(tx, anchors)
 		if err != nil {
@@ -435,6 +475,7 @@ func normalizeKnowledgeApprovalRequest(request KnowledgeApprovalRequest, require
 	request.Reviewer = strings.TrimSpace(request.Reviewer)
 	request.Comment = strings.TrimSpace(request.Comment)
 	request.ExpectedEvidenceDigest = strings.TrimSpace(request.ExpectedEvidenceDigest)
+	request.ExpectedReviewDigest = strings.TrimSpace(request.ExpectedReviewDigest)
 	if err := validateKnowledgeID(request.ID); err != nil {
 		return KnowledgeApprovalRequest{}, err
 	}
@@ -449,6 +490,9 @@ func normalizeKnowledgeApprovalRequest(request KnowledgeApprovalRequest, require
 	}
 	if !utf8.ValidString(request.Comment) || utf8.RuneCountInString(request.Comment) > MaxKnowledgeCommentRunes {
 		return KnowledgeApprovalRequest{}, fmt.Errorf("knowledge approval comment exceeds %d runes", MaxKnowledgeCommentRunes)
+	}
+	if request.ExpectedReviewDigest != "" && validateSHA256Digest(request.ExpectedReviewDigest, "expected_review_digest") != nil {
+		return KnowledgeApprovalRequest{}, errors.New("invalid expected_review_digest")
 	}
 	if requireDigest && request.ExpectedEvidenceDigest == "" {
 		return KnowledgeApprovalRequest{}, errors.New("batch approval requires expected_evidence_digest")
@@ -491,16 +535,20 @@ func appendKnowledgeReview(tx *sql.Tx, item preparedKnowledgeApproval, created s
 		ObjectType: item.request.ObjectType, ObjectID: item.request.ID, Action: KnowledgeReviewActionApprove,
 		PreviousStatus: item.previous, NewStatus: KnowledgeStatusActive,
 		Reviewer: item.request.Reviewer, Comment: item.request.Comment,
-		EvidenceDigest: item.digest, Created: created,
+		EvidenceDigest: item.digest, ReviewDigest: item.reviewDigest, Created: created,
 	}
 	return insertKnowledgeReviewRecord(tx, record)
 }
 
-func (s *Store) RejectKnowledgeObject(request KnowledgeReviewMutationRequest) (KnowledgeReviewMutationResult, error) {
+func (s *Store) RejectKnowledgeObject(request KnowledgeReviewMutationRequest) (applogResult0 KnowledgeReviewMutationResult, applogResult1 error) {
+	defer applog.Track("pkg.mem.Store.RejectKnowledgeObject")(&applogResult1)
+
 	return s.transitionKnowledgeObject(request, KnowledgeReviewActionReject, KnowledgeStatusDraft, KnowledgeStatusRejected, true)
 }
 
-func (s *Store) ReopenKnowledgeObject(request KnowledgeReviewMutationRequest) (KnowledgeReviewMutationResult, error) {
+func (s *Store) ReopenKnowledgeObject(request KnowledgeReviewMutationRequest) (applogResult0 KnowledgeReviewMutationResult, applogResult1 error) {
+	defer applog.Track("pkg.mem.Store.ReopenKnowledgeObject")(&applogResult1)
+
 	return s.transitionKnowledgeObject(request, KnowledgeReviewActionReopen, KnowledgeStatusRejected, KnowledgeStatusDraft, false)
 }
 
@@ -537,6 +585,9 @@ func (s *Store) transitionKnowledgeObject(request KnowledgeReviewMutationRequest
 		return rollback(fmt.Errorf("%w: knowledge %s %q has status %q; %s requires %q",
 			ErrKnowledgeReviewChanged, request.ObjectType, request.ID, previous, action, from))
 	}
+	if _, err := requireKnowledgeReviewDigest(tx, request.ObjectType, request.ID, request.ExpectedReviewDigest); err != nil {
+		return rollback(err)
+	}
 	digest, resolutions, err := loadPinnedCurrentKnowledgeEvidence(tx, evidenceTable, ownerColumn, request.ID, request.ExpectedEvidenceDigest)
 	if err != nil {
 		return rollback(err)
@@ -570,7 +621,9 @@ func (s *Store) transitionKnowledgeObject(request KnowledgeReviewMutationRequest
 // UndoKnowledgeReview reverses only the latest reversible decision for one
 // object. The audit row remains immutable; a new row points to the reverted
 // review. Active relations must be undone before an approved endpoint node.
-func (s *Store) UndoKnowledgeReview(request KnowledgeReviewMutationRequest) (KnowledgeReviewMutationResult, error) {
+func (s *Store) UndoKnowledgeReview(request KnowledgeReviewMutationRequest) (applogResult0 KnowledgeReviewMutationResult, applogResult1 error) {
+	defer applog.Track("pkg.mem.Store.UndoKnowledgeReview")(&applogResult1)
+
 	request, err := normalizeKnowledgeReviewMutationRequest(request, false, true)
 	if err != nil {
 		return KnowledgeReviewMutationResult{}, err
@@ -609,9 +662,15 @@ func (s *Store) UndoKnowledgeReview(request KnowledgeReviewMutationRequest) (Kno
 	if latest.Action != KnowledgeReviewActionApprove && latest.Action != KnowledgeReviewActionReject && latest.Action != KnowledgeReviewActionReopen {
 		return rollback(fmt.Errorf("%w: latest action is %q", ErrKnowledgeReviewNotReversible, latest.Action))
 	}
+	if _, err := requireKnowledgeReviewDigest(tx, request.ObjectType, request.ID, request.ExpectedReviewDigest); err != nil {
+		return rollback(err)
+	}
 	digest, resolutions, err := loadPinnedCurrentKnowledgeEvidence(tx, evidenceTable, ownerColumn, request.ID, request.ExpectedEvidenceDigest)
 	if err != nil {
 		return rollback(err)
+	}
+	if latest.ReviewDigest != "" && latest.ReviewDigest != request.ExpectedReviewDigest {
+		return rollback(fmt.Errorf("%w: content changed after the recorded decision", ErrKnowledgeContentChanged))
 	}
 	if latest.EvidenceDigest != digest {
 		return rollback(fmt.Errorf("%w: latest review used %s, current evidence is %s", ErrKnowledgeEvidenceChanged, latest.EvidenceDigest, digest))
@@ -688,6 +747,7 @@ func normalizeKnowledgeReviewMutationRequest(request KnowledgeReviewMutationRequ
 	request.Reviewer = strings.TrimSpace(request.Reviewer)
 	request.Comment = strings.TrimSpace(request.Comment)
 	request.ExpectedEvidenceDigest = strings.TrimSpace(request.ExpectedEvidenceDigest)
+	request.ExpectedReviewDigest = strings.TrimSpace(request.ExpectedReviewDigest)
 	if err := validateKnowledgeID(request.ID); err != nil {
 		return KnowledgeReviewMutationRequest{}, err
 	}
@@ -712,6 +772,12 @@ func normalizeKnowledgeReviewMutationRequest(request KnowledgeReviewMutationRequ
 	if _, err := hex.DecodeString(strings.TrimPrefix(request.ExpectedEvidenceDigest, "sha256:")); err != nil {
 		return KnowledgeReviewMutationRequest{}, errors.New("invalid expected_evidence_digest")
 	}
+	if request.ExpectedReviewDigest == "" {
+		return KnowledgeReviewMutationRequest{}, ErrKnowledgeReviewPinRequired
+	}
+	if validateSHA256Digest(request.ExpectedReviewDigest, "expected_review_digest") != nil {
+		return KnowledgeReviewMutationRequest{}, errors.New("invalid expected_review_digest")
+	}
 	if requireReviewID && request.ExpectedReviewID <= 0 {
 		return KnowledgeReviewMutationRequest{}, errors.New("knowledge review undo requires expected_review_id")
 	}
@@ -723,12 +789,16 @@ func normalizeKnowledgeReviewMutationRequest(request KnowledgeReviewMutationRequ
 
 func latestKnowledgeReview(q *sql.Tx, objectType KnowledgeObjectType, objectID string) (KnowledgeReviewRecord, error) {
 	var record KnowledgeReviewRecord
-	err := q.QueryRow(`SELECT id, object_type, object_id, action, previous_status, new_status,
-reviewer, comment, evidence_digest, reverts_review_id, created
-FROM knowledge_reviews WHERE object_type = ? AND object_id = ? ORDER BY id DESC LIMIT 1`, objectType, objectID).Scan(
+	expression, err := knowledgeReviewPinExpression(q)
+	if err != nil {
+		return record, err
+	}
+	err = q.QueryRow(`SELECT id, object_type, object_id, action, previous_status, new_status,
+reviewer, comment, evidence_digest, reverts_review_id, created, `+expression+`
+FROM knowledge_reviews r WHERE object_type = ? AND object_id = ? ORDER BY id DESC LIMIT 1`, objectType, objectID).Scan(
 		&record.ID, &record.ObjectType, &record.ObjectID, &record.Action,
 		&record.PreviousStatus, &record.NewStatus, &record.Reviewer, &record.Comment,
-		&record.EvidenceDigest, &record.RevertsReviewID, &record.Created)
+		&record.EvidenceDigest, &record.RevertsReviewID, &record.Created, &record.ReviewDigest)
 	if err == sql.ErrNoRows {
 		return KnowledgeReviewRecord{}, fmt.Errorf("%w: knowledge object has no review history", ErrKnowledgeReviewNotReversible)
 	}
@@ -739,6 +809,14 @@ FROM knowledge_reviews WHERE object_type = ? AND object_id = ? ORDER BY id DESC 
 }
 
 func insertKnowledgeReviewRecord(tx *sql.Tx, record KnowledgeReviewRecord) (KnowledgeReviewRecord, error) {
+	digest, err := loadKnowledgeReviewDigest(tx, record.ObjectType, record.ObjectID)
+	if err != nil {
+		return KnowledgeReviewRecord{}, err
+	}
+	record.ReviewDigest = digest
+	if _, err = tx.Exec(knowledgeReviewPinsSchema); err != nil {
+		return KnowledgeReviewRecord{}, err
+	}
 	result, err := tx.Exec(`INSERT INTO knowledge_reviews
 (object_type, object_id, action, previous_status, new_status, reviewer, comment, evidence_digest, reverts_review_id, created)
 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, record.ObjectType, record.ObjectID, record.Action,
@@ -751,16 +829,25 @@ VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, record.ObjectType, record.ObjectID, reco
 	if err != nil {
 		return KnowledgeReviewRecord{}, fmt.Errorf("read knowledge review ID: %w", err)
 	}
+	if _, err = tx.Exec(`INSERT INTO knowledge_review_pins(review_id,review_digest) VALUES(?,?)`, record.ID, record.ReviewDigest); err != nil {
+		return KnowledgeReviewRecord{}, err
+	}
 	return record, nil
 }
 
 // ListLatestKnowledgeReviews returns one newest immutable decision per object.
 // It is embedded into the live map so undo can pin what the reviewer saw.
-func (s *Store) ListLatestKnowledgeReviews() ([]KnowledgeReviewRecord, error) {
+func (s *Store) ListLatestKnowledgeReviews() (applogResult0 []KnowledgeReviewRecord, applogResult1 error) {
+	defer applog.Track("pkg.mem.Store.ListLatestKnowledgeReviews")(&applogResult1)
+
 	s.mu.RLock()
 	defer s.mu.RUnlock()
+	expression, err := knowledgeReviewPinExpression(s.db)
+	if err != nil {
+		return nil, err
+	}
 	rows, err := s.db.Query(`SELECT r.id, r.object_type, r.object_id, r.action, r.previous_status, r.new_status,
-r.reviewer, r.comment, r.evidence_digest, r.reverts_review_id, r.created
+r.reviewer, r.comment, r.evidence_digest, r.reverts_review_id, r.created, ` + expression + `
 FROM knowledge_reviews r
 WHERE r.id = (SELECT MAX(latest.id) FROM knowledge_reviews latest
               WHERE latest.object_type = r.object_type AND latest.object_id = r.object_id)
@@ -774,7 +861,7 @@ ORDER BY r.id DESC`)
 		var record KnowledgeReviewRecord
 		if err := rows.Scan(&record.ID, &record.ObjectType, &record.ObjectID, &record.Action,
 			&record.PreviousStatus, &record.NewStatus, &record.Reviewer, &record.Comment,
-			&record.EvidenceDigest, &record.RevertsReviewID, &record.Created); err != nil {
+			&record.EvidenceDigest, &record.RevertsReviewID, &record.Created, &record.ReviewDigest); err != nil {
 			return nil, fmt.Errorf("read latest knowledge review: %w", err)
 		}
 		records = append(records, record)
@@ -787,14 +874,20 @@ ORDER BY r.id DESC`)
 
 // ListKnowledgeReviews returns newest records first. The table is append-only;
 // re-extraction and later evidence changes do not rewrite earlier decisions.
-func (s *Store) ListKnowledgeReviews(limit int) ([]KnowledgeReviewRecord, error) {
+func (s *Store) ListKnowledgeReviews(limit int) (applogResult0 []KnowledgeReviewRecord, applogResult1 error) {
+	defer applog.Track("pkg.mem.Store.ListKnowledgeReviews")(&applogResult1)
+
 	if limit <= 0 || limit > 1000 {
 		return nil, errors.New("knowledge review limit must be between 1 and 1000")
 	}
 	s.mu.RLock()
 	defer s.mu.RUnlock()
+	expression, err := knowledgeReviewPinExpression(s.db)
+	if err != nil {
+		return nil, err
+	}
 	rows, err := s.db.Query(`SELECT id, object_type, object_id, action, previous_status, new_status,
-reviewer, comment, evidence_digest, reverts_review_id, created FROM knowledge_reviews ORDER BY id DESC LIMIT ?`, limit)
+reviewer, comment, evidence_digest, reverts_review_id, created, `+expression+` FROM knowledge_reviews r ORDER BY id DESC LIMIT ?`, limit)
 	if err != nil {
 		return nil, fmt.Errorf("list knowledge reviews: %w", err)
 	}
@@ -804,7 +897,7 @@ reviewer, comment, evidence_digest, reverts_review_id, created FROM knowledge_re
 		var record KnowledgeReviewRecord
 		if err := rows.Scan(&record.ID, &record.ObjectType, &record.ObjectID, &record.Action,
 			&record.PreviousStatus, &record.NewStatus, &record.Reviewer, &record.Comment,
-			&record.EvidenceDigest, &record.RevertsReviewID, &record.Created); err != nil {
+			&record.EvidenceDigest, &record.RevertsReviewID, &record.Created, &record.ReviewDigest); err != nil {
 			return nil, fmt.Errorf("read knowledge review: %w", err)
 		}
 		records = append(records, record)

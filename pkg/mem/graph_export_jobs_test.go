@@ -17,8 +17,9 @@ func TestKnowledgeMapExportManagerLifecycleProgressAndDownload(t *testing.T) {
 	started := make(chan struct{})
 	release := make(chan struct{})
 	manager := newKnowledgeMapExportManager(ctx, func(ctx context.Context, request KnowledgeGraphExportRequest, progress knowledgeGraphExportProgressFunc) (KnowledgeGraphExportArtifact, error) {
-		close(started)
 		progress("pinning", 40, 2, 5)
+		// Signal only after the progress being asserted is visible to the reader.
+		close(started)
 		select {
 		case <-release:
 		case <-ctx.Done():

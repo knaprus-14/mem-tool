@@ -1,5 +1,7 @@
 package mem
 
+import "github.com/knaprus-14/mem-tool/internal/applog"
+
 import (
 	"context"
 	"crypto/rand"
@@ -98,7 +100,9 @@ type knowledgeLearningEnvelope struct {
 
 type knowledgeLearningProgressFunc func(phase string, percent, completed, total int)
 
-func (s *Store) GenerateKnowledgeLearningCandidates(ctx context.Context, service *KnowledgeSelectionAnswerService, request KnowledgeLearningGenerateRequest) (KnowledgeLearningRun, error) {
+func (s *Store) GenerateKnowledgeLearningCandidates(ctx context.Context, service *KnowledgeSelectionAnswerService, request KnowledgeLearningGenerateRequest) (applogResult0 KnowledgeLearningRun, applogResult1 error) {
+	defer applog.Track("pkg.mem.Store.GenerateKnowledgeLearningCandidates")(&applogResult1)
+
 	return s.generateKnowledgeLearningCandidates(ctx, service, request, nil)
 }
 
@@ -305,16 +309,24 @@ func validateKnowledgeLearningCandidates(raw string, promptEvidence, manifestEvi
 	if len(envelope.Items) == 0 || len(envelope.Items) > limit {
 		return nil, fmt.Errorf("response must contain 1..%d learning items", limit)
 	}
-	originalByCitation := make(map[string]GroundedEvidence, len(manifestEvidence))
+	originalByIdentity := make(map[string]GroundedEvidence, len(manifestEvidence))
 	for _, item := range manifestEvidence {
-		originalByCitation[item.CitationID] = item
+		originalByIdentity[groundedEvidenceIdentity(item)] = item
 	}
-	refToCitation := make(map[string]string, len(promptEvidence))
-	for _, item := range promptEvidence {
-		if item.EvidenceRef == "" || originalByCitation[item.CitationID].CitationID == "" {
+	refToIdentity := make(map[string]string, len(promptEvidence))
+	for index, item := range promptEvidence {
+		// The bounded prompt is an ordered prefix of the manifest; only its
+		// final excerpt may be truncated. Retain that original exact anchor.
+		if index >= len(manifestEvidence) || item.EvidenceRef != fmt.Sprintf("E%d", index+1) {
 			return nil, errors.New("learning prompt evidence cannot be mapped to the pinned manifest")
 		}
-		refToCitation[item.EvidenceRef] = item.CitationID
+		original := manifestEvidence[index]
+		if item.CitationID != original.CitationID || item.DocumentRevision != original.DocumentRevision || item.ChunkHash != original.ChunkHash ||
+			(!item.Truncated && groundedEvidenceIdentity(item) != groundedEvidenceIdentity(original)) ||
+			(item.Truncated && (item.Text == "" || !strings.HasPrefix(original.Text, item.Text) || item.EvidenceHash != ChunkContentHash(item.Text))) {
+			return nil, errors.New("learning prompt excerpt differs from the pinned manifest")
+		}
+		refToIdentity[item.EvidenceRef] = groundedEvidenceIdentity(original)
 	}
 	result := make([]KnowledgeLearningCandidate, 0, len(envelope.Items))
 	seenCandidate := make(map[string]bool, len(envelope.Items))
@@ -342,20 +354,22 @@ func validateKnowledgeLearningCandidates(raw string, promptEvidence, manifestEvi
 			return nil, fmt.Errorf("learning item %d has too many citations: %d (max %d)", index+1, len(item.Citations), MaxKnowledgeLearningCitations)
 		}
 		citationSet := make(map[string]bool, len(item.Citations))
+		evidenceSet := make(map[string]bool, len(item.Citations))
 		for _, ref := range item.Citations {
-			citationID, ok := refToCitation[ref]
+			identity, ok := refToIdentity[ref]
 			if !ok {
 				return nil, fmt.Errorf("learning item %d references unknown evidence %q", index+1, ref)
 			}
-			if citationSet[citationID] {
+			if evidenceSet[identity] {
 				return nil, fmt.Errorf("learning item %d repeats evidence %q", index+1, ref)
 			}
-			citationSet[citationID] = true
+			evidenceSet[identity] = true
+			citationSet[originalByIdentity[identity].CitationID] = true
 		}
 		citations := sortedStringSet(citationSet)
-		anchors := make([]EvidenceAnchor, 0, len(citations))
-		for _, citationID := range citations {
-			anchor, err := evidenceAnchorFromGrounded(originalByCitation[citationID])
+		anchors := make([]EvidenceAnchor, 0, len(evidenceSet))
+		for _, identity := range sortedStringSet(evidenceSet) {
+			anchor, err := evidenceAnchorFromGrounded(originalByIdentity[identity])
 			if err != nil {
 				return nil, fmt.Errorf("learning item %d has invalid source: %w", index+1, err)
 			}
@@ -435,7 +449,9 @@ FROM knowledge_learning_runs WHERE id = ?`, id).Scan(&run.ID, &selectionJSON, &r
 	return run, nil
 }
 
-func (s *Store) SaveKnowledgeLearningCandidates(request KnowledgeLearningSaveRequest) (KnowledgeLearningSaveResult, error) {
+func (s *Store) SaveKnowledgeLearningCandidates(request KnowledgeLearningSaveRequest) (applogResult0 KnowledgeLearningSaveResult, applogResult1 error) {
+	defer applog.Track("pkg.mem.Store.SaveKnowledgeLearningCandidates")(&applogResult1)
+
 	request.RunID = strings.TrimSpace(request.RunID)
 	request.Author = strings.TrimSpace(request.Author)
 	request.Comment = strings.TrimSpace(request.Comment)
@@ -464,15 +480,6 @@ func (s *Store) SaveKnowledgeLearningCandidates(request KnowledgeLearningSaveReq
 	if err != nil || digest != run.GenerationDigest {
 		return KnowledgeLearningSaveResult{}, fmt.Errorf("%w: learning run changed", ErrKnowledgeSelectionChanged)
 	}
-	evidenceByCitation := make(map[string]EvidenceAnchor, len(manifest.Evidence))
-	for _, item := range manifest.Evidence {
-		anchor, convertErr := evidenceAnchorFromGrounded(item)
-		if convertErr != nil {
-			return KnowledgeLearningSaveResult{}, convertErr
-		}
-		evidenceByCitation[item.CitationID] = anchor
-	}
-
 	now := time.Now().UTC().Format(time.RFC3339Nano)
 	result := KnowledgeLearningSaveResult{Nodes: make([]KnowledgeNode, 0, len(indexes))}
 	s.mu.Lock()
@@ -492,13 +499,9 @@ func (s *Store) SaveKnowledgeLearningCandidates(request KnowledgeLearningSaveReq
 	}
 	for _, index := range indexes {
 		candidate := run.Candidates[index]
-		anchors := make([]EvidenceAnchor, 0, len(candidate.Citations))
-		for _, citationID := range candidate.Citations {
-			anchor, ok := evidenceByCitation[citationID]
-			if !ok {
-				return rollback(fmt.Errorf("%w: learning candidate source disappeared", ErrKnowledgeSelectionChanged))
-			}
-			anchors = append(anchors, anchor)
+		anchors, err := knowledgeLearningCandidateAnchors(candidate, manifest.Evidence)
+		if err != nil {
+			return rollback(err)
 		}
 		body := candidate.Answer
 		if candidate.Kind == KnowledgeNodeQuestion {

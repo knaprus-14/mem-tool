@@ -1,5 +1,7 @@
 package mem
 
+import "github.com/knaprus-14/mem-tool/internal/applog"
+
 import (
 	"bytes"
 	"context"
@@ -29,7 +31,7 @@ const (
 )
 
 // Один клиент переиспользует TCP-соединения между последовательными чанками.
-var embeddingHTTPClient = &http.Client{Timeout: embeddingHTTPTimeout}
+var embeddingHTTPClient = &http.Client{Timeout: embeddingHTTPTimeout, Transport: applog.Transport{Component: "embedding.http"}}
 
 // === Ollama ===
 
@@ -195,13 +197,17 @@ func validateEmbeddingText(text string) error {
 
 // === Общий интерфейс ===
 
-func GetEmbedding(cfg *Config, text string) ([]float32, error) {
+func GetEmbedding(cfg *Config, text string) (applogResult0 []float32, applogResult1 error) {
+	defer applog.Track("pkg.mem.GetEmbedding")(&applogResult1)
+
 	return GetEmbeddingContext(context.Background(), cfg, text)
 }
 
 // GetEmbeddingContext builds an embedding while allowing callers such as
 // document import to cancel an in-flight Ollama or Polza HTTP request.
-func GetEmbeddingContext(ctx context.Context, cfg *Config, text string) ([]float32, error) {
+func GetEmbeddingContext(ctx context.Context, cfg *Config, text string) (applogResult0 []float32, applogResult1 error) {
+	defer applog.Track("pkg.mem.GetEmbeddingContext")(&applogResult1)
+
 	if ctx == nil {
 		return nil, fmt.Errorf("embedding: nil context")
 	}

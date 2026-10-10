@@ -1,5 +1,7 @@
 package main
 
+import "github.com/knaprus-14/mem-tool/internal/applog"
+
 import (
 	"encoding/json"
 	"errors"
@@ -13,7 +15,7 @@ import (
 	ui "github.com/knaprus-14/mem-tool/pkg/ui"
 )
 
-const mindMapUsage = `использование: mem mindmap <open|create|list|show|add-node|edit-node|move-node|delete-node|source-add|source-remove|source-move|history|undo|redo|snapshot|snapshots|ai-new|ai-expand|ai-fill|ai-sources|ai-show|ai-apply|templates|template-create|ask-branch|compare|study|export>
+const mindMapUsage = `использование: mem mindmap <open|create|list|show|add-node|edit-node|move-node|delete-node|source-add|source-remove|source-move|history|undo|redo|snapshot|snapshots|ai-new|ai-expand|ai-fill|ai-sources|ai-show|ai-apply|templates|template-create|ask-branch|compare|study|export|import>
   mem mindmap open [--port N] [--no-browser]
   mem mindmap create <название> [--description <текст>] [--json]
   mem mindmap list [--all] [--json]
@@ -42,6 +44,8 @@ const mindMapUsage = `использование: mem mindmap <open|create|list|
   mem mindmap compare <левая-карта> <правая-карта> [--json]
   mem mindmap study <карта> <узел> [--output <путь>] [--force] [--json]
   mem mindmap export <карта> --format html|svg|png|json|opml|markdown|mermaid|obsidian --output <путь> [--force]
+  mem mindmap import --file <путь> --format opml|freemind|xmind|markdown [--json]
+    По умолчанию только предпросмотр. Создание новой карты: --apply --digest sha256:... --request-id <32 hex>.
 
 AI scope flags: --document <путь|document-id> [--page-from N] [--page-to N],
   --query <текст>, повторяемый --entry N, --node-sources, --without-sources,
@@ -84,7 +88,9 @@ type mindMapCLIOptions struct {
 	lock            *bool
 }
 
-func handleMindMap(cfg *Config, store *Store, args []string) error {
+func handleMindMap(cfg *Config, store *Store, args []string) (applogResult0 error) {
+	defer applog.Track("cmd.mem.handleMindMap")(&applogResult0)
+
 	if len(args) == 0 {
 		return errors.New(mindMapUsage)
 	}
@@ -99,6 +105,9 @@ func handleMindMap(cfg *Config, store *Store, args []string) error {
 	}
 	if args[0] == "export" {
 		return handleClassicMindMapExport(store, args[1:])
+	}
+	if args[0] == "import" {
+		return handleClassicMindMapImport(store, args[1:])
 	}
 	options, err := parseMindMapCLIOptions(args[1:])
 	if err != nil {

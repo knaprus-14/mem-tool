@@ -1,5 +1,7 @@
 package mem
 
+import "github.com/knaprus-14/mem-tool/internal/applog"
+
 import (
 	"crypto/sha256"
 	"encoding/hex"
@@ -43,6 +45,17 @@ with compares edges to every compared subject. Cite evidence from each contraste
 comparison node or its incident compares edge. Never infer similarity or difference merely from
 matching labels, shared topics, citation order, or missing evidence.
 Every node and edge must cite at least one exact citation_id from EVIDENCE_JSON.
+For a normative requirement (claim, constraint or procedure), also emit "requirement":
+{"statement":{"citation_id":"cite-id","text":"complete requirement quote"},"conditions":[{"citation_id":"cite-id","text":"condition quote"}],"exceptions":[{"citation_id":"cite-id","text":"exception quote"}],"limits":[{"citation_id":"cite-id","text":"limit quote including unit"}]}.
+Use [] for an unextracted part. NEVER put plain strings in these arrays: every element MUST
+be an object with BOTH citation_id and text. The example placeholders must be replaced.
+Each array contains the same citation_id/text objects. Copy complete verbatim source clauses,
+including negation, obligation/permission, scope, conditions, exceptions, quantities and units.
+Never shorten a conditional permission into unconditional permission. Do not round or convert units.
+Use adjacent supplied evidence for continuations; if a requirement is cut off, omit it rather than guess.
+Every part must be a literal substring of its cited evidence; every node citation must supply a part.
+The host replaces body with these quoted parts. Empty arrays mean not extracted, not proven absent.
+Do not use requirement for non-normative facts. Nodes remain drafts pending semantic review.
 Use refs only to connect nodes inside this response. Do not invent persistent IDs, source paths,
 pages, hashes, revisions, citations, or evidence. Keep the graph concise and focused: prefer no
 more than 3 distinct nodes per evidence item and only directly supported relationships.
@@ -61,12 +74,13 @@ type KnowledgeExtractionResult struct {
 }
 
 type knowledgeNodeProposal struct {
-	Ref        string            `json:"ref"`
-	Kind       KnowledgeNodeKind `json:"kind"`
-	Label      string            `json:"label"`
-	Body       string            `json:"body,omitempty"`
-	Confidence *float64          `json:"confidence"`
-	Citations  []string          `json:"citations"`
+	Ref         string                        `json:"ref"`
+	Kind        KnowledgeNodeKind             `json:"kind"`
+	Label       string                        `json:"label"`
+	Body        string                        `json:"body,omitempty"`
+	Confidence  *float64                      `json:"confidence"`
+	Citations   []string                      `json:"citations"`
+	Requirement *knowledgeRequirementProposal `json:"requirement,omitempty"`
 }
 
 type knowledgeEdgeProposal struct {
@@ -86,7 +100,9 @@ type knowledgeExtractionEnvelope struct {
 
 // BuildKnowledgeExtractionPrompt selects only versioned document chunks and
 // bounds the complete serialized prompt, including metadata and instructions.
-func BuildKnowledgeExtractionPrompt(focus string, entries []Entry, contextBudget int, lowConfidence float64) (KnowledgeExtractionPrompt, error) {
+func BuildKnowledgeExtractionPrompt(focus string, entries []Entry, contextBudget int, lowConfidence float64) (applogResult0 KnowledgeExtractionPrompt, applogResult1 error) {
+	defer applog.Track("pkg.mem.BuildKnowledgeExtractionPrompt")(&applogResult1)
+
 	focus = strings.TrimSpace(focus)
 	if focus == "" {
 		return KnowledgeExtractionPrompt{}, errors.New("knowledge extraction focus is empty")
@@ -184,7 +200,9 @@ func BuildKnowledgeExtractionPrompt(focus string, entries []Entry, contextBudget
 // satisfy the strict graph schema for a larger batch and the host needs to
 // retry smaller, independently validated pieces without changing the focus or
 // allowing the model to alter provenance.
-func SubsetKnowledgeExtractionPrompt(prompt KnowledgeExtractionPrompt, evidence []GroundedEvidence) (KnowledgeExtractionPrompt, error) {
+func SubsetKnowledgeExtractionPrompt(prompt KnowledgeExtractionPrompt, evidence []GroundedEvidence) (applogResult0 KnowledgeExtractionPrompt, applogResult1 error) {
+	defer applog.Track("pkg.mem.SubsetKnowledgeExtractionPrompt")(&applogResult1)
+
 	if len(evidence) == 0 {
 		return KnowledgeExtractionPrompt{}, errors.New("knowledge extraction prompt subset is empty")
 	}
@@ -223,7 +241,9 @@ func SubsetKnowledgeExtractionPrompt(prompt KnowledgeExtractionPrompt, evidence 
 
 // DecodeKnowledgeExtraction validates untrusted model JSON and derives every
 // persistent ID and EvidenceAnchor from trusted evidence supplied by the host.
-func DecodeKnowledgeExtraction(raw string, evidence []GroundedEvidence) (KnowledgeExtractionResult, error) {
+func DecodeKnowledgeExtraction(raw string, evidence []GroundedEvidence) (applogResult0 KnowledgeExtractionResult, applogResult1 error) {
+	defer applog.Track("pkg.mem.DecodeKnowledgeExtraction")(&applogResult1)
+
 	raw = strings.TrimSpace(raw)
 	if raw == "" {
 		return KnowledgeExtractionResult{}, errors.New("knowledge extraction response is empty")
@@ -285,6 +305,12 @@ func DecodeKnowledgeExtraction(raw string, evidence []GroundedEvidence) (Knowled
 		anchors, err := anchorsForCitations(proposal.Citations, allowed)
 		if err != nil {
 			return KnowledgeExtractionResult{}, fmt.Errorf("knowledge node proposal %q: %w", proposal.Ref, err)
+		}
+		if proposal.Requirement != nil {
+			proposal.Body, anchors, err = materializeKnowledgeRequirement(proposal, allowed)
+			if err != nil {
+				return KnowledgeExtractionResult{}, fmt.Errorf("knowledge node proposal %q: %w", proposal.Ref, err)
+			}
 		}
 		id := stableKnowledgeNodeID(proposal, proposal.Citations)
 		if stableIDs[id] {

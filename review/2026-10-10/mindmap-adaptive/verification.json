@@ -1,0 +1,47 @@
+{
+  "version": "1.72.0-alpha.13",
+  "checked_at": "2026-10-10T16:58:41.7134404+03:00",
+  "branch": "codex/stabilization-stage-0",
+  "previous_commit": "4acc2782b7eaa30d7d71a5a05920451de59a6fea",
+  "focused_tests": {
+    "passed": true,
+    "package_seconds": 21.474,
+    "command": "go test ./pkg/mem -run 'Test.*(Adaptive|OversizedEvidence|Transient|RetryAfter|SourceMap|Resume|ContextLimit|Synthesis)' -count=1 -timeout=180s"
+  },
+  "full_tests": {
+    "passed": true,
+    "command": "go test ./... -count=1 -timeout=300s",
+    "goflags": "-p=1",
+    "mem_seconds": 141.245,
+    "webapp_seconds": 16.632,
+    "semver_test_passed": true
+  },
+  "vet": {
+    "passed": true,
+    "command": "go vet ./..."
+  },
+  "deployment": {
+    "passed": true,
+    "command": "deploy/windows.ps1",
+    "target": "C:\\Users\\ZMII\\bin",
+    "platform": "windows/amd64",
+    "staged_and_installed_hashes_match": true,
+    "version_smoke_tests_passed": true,
+    "files": [
+      {
+        "file": "mem.exe",
+        "sha256": "C4C41CEAA10A4BACE29AC40AD49B3253D30A7407596E2109B1D9C9F2359D7A57"
+      },
+      {
+        "file": "mem-index.exe",
+        "sha256": "15A485EE7D113E438C4DBB120907D8F53AEA7EDB8A671429FBB7E43458B64040"
+      },
+      {
+        "file": "mem-bot.exe",
+        "sha256": "E47FA79600D33A2CCA06C10923745C974740893485854C70C89EEB0DD4A5862B"
+      }
+    ]
+  },
+  "real_model_acceptance": false,
+  "test_data": "Temporary SQLite fixtures and artificial provider responses; no user databases."
+}

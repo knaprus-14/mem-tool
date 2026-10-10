@@ -61,13 +61,19 @@ is an organizational category, not a factual claim. Do not infer causal or prere
 relations. Prefer a small number of useful themes in the language of the input.
 Do not return citations, persistent IDs, new nodes, nested groups, or any other fields.`
 
-// Only multi-batch tree generation incurs a synthesis call. Other actions and
-// single populated batches keep the existing provider contract and reducer.
+// Multi-batch tree generation includes adaptive parts inside a stored batch.
+// Unsplit single batches keep the existing provider contract and reducer.
 func combineClassicMindMapAIProposals(ctx context.Context, provider AnswerProvider, cfg AnswerConfig, request ClassicMindMapAIPreviewRequest, batches [][]ClassicMindMapAIProposal, started func()) ([]ClassicMindMapAIProposal, error) {
 	populated := 0
 	for _, batch := range batches {
 		if len(batch) > 0 {
-			populated++
+			parts := make(map[string]bool)
+			for _, proposal := range batch {
+				if proposal.GenerationPartID != "" {
+					parts[proposal.GenerationPartID] = true
+				}
+			}
+			populated += max(1, len(parts))
 		}
 	}
 	if populated < 2 || (request.Action != ClassicMindMapAINewMap && request.Action != ClassicMindMapAIExpand) {

@@ -18,38 +18,11 @@ func fitClassicMindMapAIEvidence(request ClassicMindMapAIPreviewRequest, base Cl
 			result = append(result, item)
 			return nil
 		}
-		runes := []rune(item.Text)
-		if len(runes) < 256 {
+		parts, ok := splitClassicMindMapAIEvidence(item)
+		if !ok {
 			return fmt.Errorf("%w: инструкции и минимальный фрагмент не помещаются в контекст %d символов", ErrClassicMindMapAIResourceLimit, budget)
 		}
-		mid := len(runes) / 2
-		// Prefer a sentence/paragraph boundary near the middle; preserve bytes of
-		// both sides, including delimiters. Fall back to a Unicode rune boundary.
-		for i := mid; i < len(runes)*3/4; i++ {
-			if runes[i] == '\n' || runes[i] == '.' || runes[i] == ';' {
-				mid = i + 1
-				break
-			}
-		}
-		if strings.TrimSpace(string(runes[:mid])) == "" || strings.TrimSpace(string(runes[mid:])) == "" {
-			// Move the boundary into non-space content when whitespace dominates.
-			start, end := 0, len(runes)
-			for start < end && unicode.IsSpace(runes[start]) {
-				start++
-			}
-			for end > start && unicode.IsSpace(runes[end-1]) {
-				end--
-			}
-			if end-start < 2 {
-				return fmt.Errorf("%w: oversized indivisible evidence", ErrClassicMindMapAIResourceLimit)
-			}
-			mid = (start + end) / 2
-		}
-		for _, text := range []string{string(runes[:mid]), string(runes[mid:])} {
-			part := item
-			part.Text = text
-			part.EvidenceHash = ChunkContentHash(text)
-			part.Truncated = true
+		for _, part := range parts {
 			if err := add(part); err != nil {
 				return err
 			}
@@ -62,4 +35,42 @@ func fitClassicMindMapAIEvidence(request ClassicMindMapAIPreviewRequest, base Cl
 		}
 	}
 	return result, nil
+}
+
+// This is the v1 split rule used by durable split_text_v1 checkpoints. Keep it
+// deterministic across restarts and retain every byte, including whitespace.
+func splitClassicMindMapAIEvidence(item GroundedEvidence) ([]GroundedEvidence, bool) {
+	runes := []rune(item.Text)
+	if len(runes) < 256 {
+		return nil, false
+	}
+	mid := len(runes) / 2
+	for i := mid; i < len(runes)*3/4; i++ {
+		if runes[i] == '\n' || runes[i] == '.' || runes[i] == ';' {
+			mid = i + 1
+			break
+		}
+	}
+	if strings.TrimSpace(string(runes[:mid])) == "" || strings.TrimSpace(string(runes[mid:])) == "" {
+		start, end := 0, len(runes)
+		for start < end && unicode.IsSpace(runes[start]) {
+			start++
+		}
+		for end > start && unicode.IsSpace(runes[end-1]) {
+			end--
+		}
+		if end-start < 2 {
+			return nil, false
+		}
+		mid = (start + end) / 2
+	}
+	parts := make([]GroundedEvidence, 0, 2)
+	for _, text := range []string{string(runes[:mid]), string(runes[mid:])} {
+		part := item
+		part.Text = text
+		part.EvidenceHash = ChunkContentHash(text)
+		part.Truncated = true
+		parts = append(parts, part)
+	}
+	return parts, true
 }

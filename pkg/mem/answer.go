@@ -288,6 +288,7 @@ func (p *OllamaAnswerProvider) Generate(ctx context.Context, request AnswerReque
 	if limit <= 0 {
 		limit = 256 * 1024
 	}
+	var responseRetryAfter time.Duration
 	call := func(format any) (int, []byte, error) {
 		body, marshalErr := json.Marshal(ollamaChatRequest{
 			Model: model,
@@ -316,6 +317,7 @@ func (p *OllamaAnswerProvider) Generate(ctx context.Context, request AnswerReque
 			return 0, nil, requestErr
 		}
 		defer resp.Body.Close()
+		responseRetryAfter = parseAnswerRetryAfter(resp.Header.Get("Retry-After"), time.Now())
 		responseBody, readErr := io.ReadAll(io.LimitReader(resp.Body, int64(limit)+1))
 		if readErr != nil {
 			return 0, nil, fmt.Errorf("ollama answer: read response: %w", readErr)
@@ -330,7 +332,7 @@ func (p *OllamaAnswerProvider) Generate(ctx context.Context, request AnswerReque
 		if ctx.Err() != nil {
 			return "", fmt.Errorf("ollama answer cancelled or timed out: %w", ctx.Err())
 		}
-		return "", fmt.Errorf("ollama answer: request failed: %w", err)
+		return "", fmt.Errorf("ollama answer: request failed: %w", answerTransportFailure(err))
 	}
 	if (statusCode < 200 || statusCode >= 300) && len(request.ResponseSchema) > 0 && !isOllamaCloudModel(model) && isOllamaGrammarFormatError(responseBody) {
 		statusCode, responseBody, err = call("json")
@@ -338,10 +340,13 @@ func (p *OllamaAnswerProvider) Generate(ctx context.Context, request AnswerReque
 			if ctx.Err() != nil {
 				return "", fmt.Errorf("ollama answer cancelled or timed out: %w", ctx.Err())
 			}
-			return "", fmt.Errorf("ollama answer compatibility request failed: %w", err)
+			return "", fmt.Errorf("ollama answer compatibility request failed: %w", answerTransportFailure(err))
 		}
 	}
 	if statusCode < 200 || statusCode >= 300 {
+		if retryableAnswerStatus(statusCode) {
+			return "", &AnswerTransientError{StatusCode: statusCode, RetryAfter: responseRetryAfter}
+		}
 		if (statusCode == 400 || statusCode == 413) && isAnswerContextLimit(responseBody) {
 			return "", ErrAnswerContextLimit
 		}

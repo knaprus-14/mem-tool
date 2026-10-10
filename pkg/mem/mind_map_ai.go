@@ -165,6 +165,8 @@ type ClassicMindMapAIProposal struct {
 	Evidence         []EvidenceAnchor       `json:"evidence,omitempty"`
 	Reason           string                 `json:"reason,omitempty"`
 	SynthesisRole    string                 `json:"synthesis_role,omitempty"`
+	// Host-owned extraction part, retained in checkpoints after adaptive splits.
+	GenerationPartID string `json:"generation_part_id,omitempty"`
 }
 
 type ClassicMindMapAIPreview struct {
@@ -976,7 +978,11 @@ func generateClassicMindMapAIStrictJSON(ctx context.Context, provider AnswerProv
 		}
 	}
 	request.MaxTokens = min(request.MaxTokens, ceiling)
+	transientRetries := 0
 	for {
+		if err := ctx.Err(); err != nil {
+			return "", err
+		}
 		generationCtx, cancel := AnswerContext(ctx, cfg)
 		applog.Event("INFO", "ai.model.attempt", applog.Fields{"max_tokens": request.MaxTokens, "token_ceiling": ceiling, "timeout_seconds": cfg.TimeoutSeconds})
 		raw, err := provider.Generate(generationCtx, request)
@@ -984,6 +990,18 @@ func generateClassicMindMapAIStrictJSON(ctx context.Context, provider AnswerProv
 		cancel()
 		if err == nil {
 			return raw, nil
+		}
+		if delay, retry := classicMindMapAIRetryDelay(err, transientRetries); retry {
+			transientRetries++
+			applog.Event("WARN", "ai.model.retry_wait", applog.Fields{"attempt": transientRetries + 1, "delay_seconds": delay.Seconds()})
+			timer := time.NewTimer(delay)
+			select {
+			case <-ctx.Done():
+				timer.Stop()
+				return "", ctx.Err()
+			case <-timer.C:
+			}
+			continue
 		}
 		_, limited := AnswerTokenLimit(err)
 		if !limited || request.MaxTokens >= ceiling {
@@ -1604,7 +1622,7 @@ FROM mind_map_generation_previews p JOIN mind_map_generation_runs r ON r.id=p.ru
 
 func validateStoredClassicMindMapAIPreview(preview ClassicMindMapAIPreview) error {
 	refs := make(map[string]bool, len(preview.Evidence))
-	anchors := make(map[string]bool)
+	anchors := make(map[string][]GroundedEvidence)
 	for _, item := range preview.Evidence {
 		if !evidenceRefPattern.MatchString(item.EvidenceRef) || refs[item.EvidenceRef] {
 			return fmt.Errorf("%w: invalid evidence ref", ErrClassicMindMapAIChanged)
@@ -1613,7 +1631,7 @@ func validateStoredClassicMindMapAIPreview(preview ClassicMindMapAIPreview) erro
 			return fmt.Errorf("%w: invalid evidence anchor", ErrClassicMindMapAIChanged)
 		}
 		refs[item.EvidenceRef] = true
-		anchors[item.CitationID+"\x00"+item.EvidenceHash] = true
+		anchors[item.CitationID] = append(anchors[item.CitationID], item)
 	}
 	ids := make(map[string]bool, len(preview.Proposals))
 	for _, proposal := range preview.Proposals {
@@ -1625,7 +1643,7 @@ func validateStoredClassicMindMapAIPreview(preview ClassicMindMapAIPreview) erro
 		}
 		ids[proposal.ID] = true
 		for _, anchor := range proposal.Evidence {
-			if validateEvidenceAnchor(anchor) != nil || !anchors[anchor.CitationID+"\x00"+anchor.EvidenceHash] {
+			if validateEvidenceAnchor(anchor) != nil || !classicMindMapAIAnchorInManifest(anchor, anchors[anchor.CitationID]) {
 				return fmt.Errorf("%w: proposal evidence is outside the manifest", ErrClassicMindMapAIChanged)
 			}
 		}
@@ -1636,6 +1654,20 @@ func validateStoredClassicMindMapAIPreview(preview ClassicMindMapAIPreview) erro
 		}
 	}
 	return nil
+}
+
+// Adaptive leaves can cite exact sub-excerpts of an immutable manifest item.
+// All source/version coordinates must match; text and hash remain host-owned.
+func classicMindMapAIAnchorInManifest(anchor EvidenceAnchor, candidates []GroundedEvidence) bool {
+	for _, item := range candidates {
+		if anchor.DocumentID == item.DocumentID && anchor.DocumentRevision == item.DocumentRevision &&
+			anchor.ChunkHash == item.ChunkHash && anchor.SourcePath == item.SourcePath &&
+			anchor.Page == item.Page && anchor.BlockIndex == item.BlockIndex && anchor.BlockChunkIndex == item.BlockChunkIndex &&
+			strings.Contains(item.Text, anchor.Excerpt) {
+			return true
+		}
+	}
+	return false
 }
 
 func (s *Store) ApplyClassicMindMapAIPreview(request ClassicMindMapAIApplyRequest) (applogResult0 ClassicMindMapAIApplyResult, applogResult1 error) {
